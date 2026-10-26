@@ -12,8 +12,9 @@ Madeira's Direct3D 12 runtime) and adds its own interface, stores and quality-of
 > RIG is an experimental, personal project. Many games start and some play
 > well, but performance and compatibility vary from game to game.
 
-> **Tested on an iPhone 16 Pro Max** (8 GB) running iOS 27. Other recent Pro
-> iPhones should work; phones with less memory will run fewer games.
+> **Tested on an iPhone 16 Pro Max** (8 GB, iOS 27) and an **iPad Air 4**
+> (4 GB, iPadOS 27). Other recent iPhones and iPads should work; devices with
+> 4 GB of memory get a low-memory profile and run lighter games.
 
 ## Screenshots
 
@@ -95,9 +96,9 @@ emulation are labelled as such.
 
 ## Requirements
 
-- An iPhone or iPad on **iOS 26 or later**. RIG is developed and tested on an
-  **iPhone 16 Pro Max** on iOS 27; 4 GB devices like the iPad Air 4 get a
-  low-memory profile and run lighter games.
+- An iPhone or iPad on **iOS 26 or later**. RIG is tested on an
+  **iPhone 16 Pro Max** (iOS 27) and an **iPad Air 4** (iPadOS 27); 4 GB devices
+  like the iPad Air 4 get a low-memory profile and run lighter games.
 - **JIT**, which iOS only allows while a debugger is attached, through
   [StikDebug](https://github.com/StikDebug/StikDebug) or the built-in StikJIT
   helper. See [`docs/JIT.md`](docs/JIT.md).
@@ -114,7 +115,7 @@ DXMT and the Steam launcher (no submodules to fetch). Open
 `app/Madeira.xcodeproj` and build the **Madeira** scheme; the project and
 internal names still say Madeira, and the app shows as RIG. The native parts
 (Wine unix libraries, ARM64EC modules, FEX, DXMT) are built with the scripts in
-[`build/`](build); [`docs/BUILDING.md`](docs/BUILDING.md) walks through all of it.
+[`build/`](build), one folder per component.
 
 | Path | Contents |
 |---|---|

@@ -81,7 +81,7 @@ plugins):
   anyone; see `docs/STEAM_SIGNIN.md`.
 - Clean-machine rebuild/relink/install test (see obligation 2): a fresh
   recursive clone was tried 2026-09-16 and does NOT build unaided; the
-  missing inputs and the reconstructed recipes are in `docs/BUILDING.md`.
+  missing inputs and the recipes are the scripts in `build/`.
   Still open: re-executing every UNVERIFIED step there from scratch, then
   signing and installing.
 - DONE 2026-09-16: the bundle carries `licenses/` (GPL-3.0, the

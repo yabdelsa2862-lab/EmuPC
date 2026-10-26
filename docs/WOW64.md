@@ -84,7 +84,7 @@ unix side. The page past `B + 4 GB` is an overrun guard.
 ### .NET Framework programs (Wine Mono)
 
 A 32-bit .NET Framework program (verified: Terraria) runs on Wine Mono, which
-the app bundles when it is built with `build/wine-mono` (docs/BUILDING.md)
+the app bundles when it is built with `build/wine-mono` 
 and links as `C:\windows\mono\mono-2.0` every session. Three settings turn on
 by themselves when that runtime loads, and only then:
 
