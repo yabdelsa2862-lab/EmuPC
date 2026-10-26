@@ -697,6 +697,8 @@ final class GameCompatibility: ObservableObject {
            let saved = try? JSONDecoder().decode([Int: Report].self, from: data) {
             // A week old is old enough to look again (requirements and anti-cheat change).
             reports = saved.filter { $0.value.checked > Date().addingTimeInterval(-7 * 86_400) }
+                // Reports saved before the app became Rig name it Madeira.
+                .mapValues { var r = $0; r.reasons = r.reasons.map { $0.replacingOccurrences(of: "Madeira", with: "Rig") }; return r }
         }
     }
 

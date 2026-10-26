@@ -1,0 +1,16 @@
+.build/
+*.exe
+*.dll
+*.pdb
+*.log
+*.dmp
+*.bin
+.DS_Store
+.env
+.env.*
+*.auth
+loginusers.vdf
+localconfig.vdf
+ssfn*
+/config/
+/userdata/

@@ -1,0 +1,1804 @@
+#include "dxmt_context.hpp"
+#if defined(__i386__)  /* madeira-bcd: 32-bit (i386) builds only, as the fork shipped it */
+#include <cstring>
+#endif
+#include "Metal.hpp"
+#include "dxmt_command_queue.hpp"
+#include "dxmt_format.hpp"
+#include "dxmt_occlusion_query.hpp"
+#include "dxmt_presenter.hpp"
+#include "wsi_platform.hpp"
+#include <cstdint>
+#include <cfloat>
+#include "dxmt_mem_census.hpp"
+#include "config/config.hpp"   /* ml754 */
+#include "util_madeira_switch.hpp"
+#include <algorithm>
+#include <atomic>
+
+namespace dxmt {
+
+ArgumentEncodingContext::ArgumentEncodingContext(CommandQueue &queue, WMT::Device device, InternalCommandLibrary &lib) :
+    emulated_cmd(device, lib, *this),
+    clear_rt_cmd(device, lib, *this),
+    blit_depth_stencil_cmd(device, lib, *this),
+    clear_res_cmd(device, lib, *this),
+    mv_scale_cmd(device, lib, *this),
+    resolve_texture_cmd(device, lib, *this),
+    stretch_blit_cmd(device, lib, *this),
+    device_(device),
+    queue_(queue) {
+  dummy_sampler_info_.support_argument_buffers = true;
+  dummy_sampler_info_.border_color = WMTSamplerBorderColorTransparentBlack;
+  dummy_sampler_info_.compare_function = WMTCompareFunctionNever;
+  dummy_sampler_info_.normalized_coords = true;
+  dummy_sampler_info_.r_address_mode = WMTSamplerAddressModeClampToEdge;
+  dummy_sampler_info_.s_address_mode = WMTSamplerAddressModeClampToEdge;
+  dummy_sampler_info_.t_address_mode = WMTSamplerAddressModeClampToEdge;
+  dummy_sampler_info_.min_filter = WMTSamplerMinMagFilterNearest;
+  dummy_sampler_info_.mag_filter = WMTSamplerMinMagFilterNearest;
+  dummy_sampler_info_.mip_filter = WMTSamplerMipFilterNotMipmapped;
+  dummy_sampler_info_.lod_min_clamp = 0.0f;
+  dummy_sampler_info_.lod_max_clamp = FLT_MAX;
+  dummy_sampler_info_.max_anisotroy = 1;
+  dummy_sampler_info_.lod_average = false;
+  dummy_sampler_ = device.newSamplerState(dummy_sampler_info_);
+  dummy_cbuffer_host_ = wsi::aligned_malloc(65536, DXMT_PAGE_SIZE);
+  dummy_cbuffer_info_.length = 65536;
+  dummy_cbuffer_info_.memory.set(dummy_cbuffer_host_);
+  dummy_cbuffer_info_.options = WMTResourceOptionCPUCacheModeWriteCombined | WMTResourceStorageModeShared |
+                                WMTResourceHazardTrackingModeUntracked;
+  dummy_cbuffer_ = device.newBuffer(dummy_cbuffer_info_);
+  mem_census_add(MEMOWN_CONTEXT, dummy_cbuffer_info_.length);  /* ml677 */
+  std::memset(dummy_cbuffer_info_.memory.get(), 0, 65536);
+  cpu_buffer_chunks_.emplace_back();
+};
+
+ArgumentEncodingContext::~ArgumentEncodingContext() {
+  wsi::aligned_free(dummy_cbuffer_host_);
+};
+
+template void ArgumentEncodingContext::encodeVertexBuffers<PipelineKind::Ordinary>(uint32_t slot_mask, uint64_t argument_buffer_offset);
+template void ArgumentEncodingContext::encodeVertexBuffers<PipelineKind::Tessellation>(uint32_t slot_mask, uint64_t argument_buffer_offset);
+template void ArgumentEncodingContext::encodeVertexBuffers<PipelineKind::Geometry>(uint32_t slot_mask, uint64_t argument_buffer_offset);
+
+template <PipelineKind kind>
+void
+ArgumentEncodingContext::encodeVertexBuffers(uint32_t slot_mask, uint64_t offset) {
+  struct VERTEX_BUFFER_ENTRY {
+    uint64_t buffer_handle;
+    uint32_t stride;
+    uint32_t length;
+  };
+  uint32_t max_slot = 32 - __builtin_clz(slot_mask);
+
+  VERTEX_BUFFER_ENTRY *entries = getMappedArgumentBuffer<VERTEX_BUFFER_ENTRY>(offset);
+
+  for (unsigned slot = 0, index = 0; slot < max_slot; slot++) {
+    if (!(slot_mask & (1 << slot)))
+      continue;
+    auto &state = vbuf_[slot];
+    auto &buffer = state.buffer;
+    if (!buffer.ptr()) {
+      entries[index].buffer_handle = 0;
+      entries[index].stride = 0;
+      entries[index++].length = 0;
+      continue;
+    }
+    auto valid_length = buffer->length() > state.offset ? buffer->length() - state.offset : 0;
+    auto [buffer_alloc, buffer_offset] = access<true>(buffer, state.offset, valid_length, DXMT_ENCODER_RESOURCE_ACESS_READ);
+    entries[index].buffer_handle = buffer_alloc->gpuAddress() + buffer_offset + state.offset;
+    entries[index].stride = state.stride;
+    entries[index++].length = valid_length;
+    // FIXME: did we intended to use the whole buffer?
+    makeResident<PipelineStage::Vertex, kind>(buffer.ptr());
+  };
+  {
+    auto &cmd = encodeRenderCommand<wmtcmd_render_setbufferoffset>();
+    cmd.offset = getFinalArgumentBufferOffset(offset);
+    cmd.index = 16;
+    if constexpr (kind == PipelineKind::Geometry || kind == PipelineKind::Tessellation)
+      cmd.type = WMTRenderCommandSetObjectBufferOffset;
+    else
+      cmd.type = WMTRenderCommandSetVertexBufferOffset;
+  }
+}
+
+#if defined(__i386__)  /* madeira-bcd: 32-bit (i386) builds only, as the fork shipped it */
+template void ArgumentEncodingContext::encodeConstantBuffers<PipelineStage::Vertex, PipelineKind::Ordinary>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *constant_buffers,
+    uint64_t argument_buffer_offset, const uint32_t *short_cb
+);
+template void ArgumentEncodingContext::encodeConstantBuffers<PipelineStage::Pixel, PipelineKind::Ordinary>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *constant_buffers,
+    uint64_t argument_buffer_offset, const uint32_t *short_cb
+);
+template void ArgumentEncodingContext::encodeConstantBuffers<PipelineStage::Vertex, PipelineKind::Tessellation>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *constant_buffers,
+    uint64_t argument_buffer_offset, const uint32_t *short_cb
+);
+template void ArgumentEncodingContext::encodeConstantBuffers<PipelineStage::Pixel, PipelineKind::Tessellation>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *constant_buffers,
+    uint64_t argument_buffer_offset, const uint32_t *short_cb
+);
+template void ArgumentEncodingContext::encodeConstantBuffers<PipelineStage::Hull, PipelineKind::Tessellation>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *constant_buffers,
+    uint64_t argument_buffer_offset, const uint32_t *short_cb
+);
+template void ArgumentEncodingContext::encodeConstantBuffers<PipelineStage::Domain, PipelineKind::Tessellation>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *constant_buffers,
+    uint64_t argument_buffer_offset, const uint32_t *short_cb
+);
+template void ArgumentEncodingContext::encodeConstantBuffers<PipelineStage::Compute, PipelineKind::Ordinary>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *constant_buffers,
+    uint64_t argument_buffer_offset, const uint32_t *short_cb
+);
+template void ArgumentEncodingContext::encodeConstantBuffers<PipelineStage::Vertex, PipelineKind::Geometry>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *constant_buffers,
+    uint64_t argument_buffer_offset, const uint32_t *short_cb
+);
+template void ArgumentEncodingContext::encodeConstantBuffers<PipelineStage::Geometry, PipelineKind::Geometry>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *constant_buffers,
+    uint64_t argument_buffer_offset, const uint32_t *short_cb
+);
+template void ArgumentEncodingContext::encodeConstantBuffers<PipelineStage::Pixel, PipelineKind::Geometry>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *constant_buffers,
+    uint64_t argument_buffer_offset, const uint32_t *short_cb
+);
+#else
+template void ArgumentEncodingContext::encodeConstantBuffers<PipelineStage::Vertex, PipelineKind::Ordinary>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *constant_buffers,
+    uint64_t argument_buffer_offset
+);
+template void ArgumentEncodingContext::encodeConstantBuffers<PipelineStage::Pixel, PipelineKind::Ordinary>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *constant_buffers,
+    uint64_t argument_buffer_offset
+);
+template void ArgumentEncodingContext::encodeConstantBuffers<PipelineStage::Vertex, PipelineKind::Tessellation>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *constant_buffers,
+    uint64_t argument_buffer_offset
+);
+template void ArgumentEncodingContext::encodeConstantBuffers<PipelineStage::Pixel, PipelineKind::Tessellation>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *constant_buffers,
+    uint64_t argument_buffer_offset
+);
+template void ArgumentEncodingContext::encodeConstantBuffers<PipelineStage::Hull, PipelineKind::Tessellation>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *constant_buffers,
+    uint64_t argument_buffer_offset
+);
+template void ArgumentEncodingContext::encodeConstantBuffers<PipelineStage::Domain, PipelineKind::Tessellation>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *constant_buffers,
+    uint64_t argument_buffer_offset
+);
+template void ArgumentEncodingContext::encodeConstantBuffers<PipelineStage::Compute, PipelineKind::Ordinary>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *constant_buffers,
+    uint64_t argument_buffer_offset
+);
+template void ArgumentEncodingContext::encodeConstantBuffers<PipelineStage::Vertex, PipelineKind::Geometry>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *constant_buffers,
+    uint64_t argument_buffer_offset
+);
+template void ArgumentEncodingContext::encodeConstantBuffers<PipelineStage::Geometry, PipelineKind::Geometry>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *constant_buffers,
+    uint64_t argument_buffer_offset
+);
+template void ArgumentEncodingContext::encodeConstantBuffers<PipelineStage::Pixel, PipelineKind::Geometry>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *constant_buffers,
+    uint64_t argument_buffer_offset
+);
+#endif
+
+template <PipelineStage stage, PipelineKind kind>
+void
+#if defined(__i386__)  /* madeira-bcd: 32-bit (i386) builds only, as the fork shipped it */
+ArgumentEncodingContext::encodeConstantBuffers(const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT * constant_buffers, uint64_t offset, const uint32_t *short_cb) {
+#else
+ArgumentEncodingContext::encodeConstantBuffers(const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT * constant_buffers, uint64_t offset) {
+#endif
+  uint64_t *encoded_buffer = getMappedArgumentBuffer<uint64_t, stage == PipelineStage::Compute>(offset);
+
+  constexpr bool PreRasterStage = stage == PipelineStage::Vertex || stage == PipelineStage::Domain ||
+                                 stage == PipelineStage::Hull || stage == PipelineStage::Geometry;
+
+  for (unsigned i = 0; i < reflection->NumConstantBuffers; i++) {
+    auto &arg = constant_buffers[i];
+    auto slot = 14 * unsigned(stage) + arg.SM50BindingSlot;
+    switch (arg.Type) {
+    case SM50BindingType::ConstantBuffer: {
+      auto &cbuf = cbuf_[slot];
+      if (!cbuf.buffer.ptr()) {
+        encoded_buffer[arg.StructurePtrOffset] = dummy_cbuffer_info_.gpu_address;
+        makeResident<stage, kind>(dummy_cbuffer_, GetResidencyMask<kind>(stage, true, false));
+        continue;
+      }
+      auto argbuf = cbuf.buffer;
+      auto valid_length = argbuf->length() > cbuf.offset ? argbuf->length() - cbuf.offset : 0;
+      auto [argbuf_alloc, argbuf_offset] = access<PreRasterStage>(argbuf, cbuf.offset, valid_length, DXMT_ENCODER_RESOURCE_ACESS_READ);
+      encoded_buffer[arg.StructurePtrOffset] = argbuf_alloc->gpuAddress() + argbuf_offset + cbuf.offset;
+      makeResident<stage, kind>(argbuf.ptr());
+#if defined(__i386__)  /* madeira-bcd: 32-bit (i386) builds only, as the fork shipped it */
+      /* madeira-bcd: short constant buffers -- bind a zero-padded copy. D3D reads
+       * past the end of a constant buffer as 0; Metal would read the next bytes. */
+      if (short_cb && arg.SM50BindingSlot < 14 && short_cb[2 * arg.SM50BindingSlot]) {
+        uint32_t pad_off = short_cb[2 * arg.SM50BindingSlot] - 1, pad_bytes = short_cb[2 * arg.SM50BindingSlot + 1];
+        /* The CPU mapping is the buffer's storage on iOS (unified memory; a
+         * GpuManaged buffer is CpuPlaced and Managed does not exist there). */
+        auto src = (const char *)argbuf_alloc->mappedMemory(0);
+        static unsigned madeira_cb_copied, madeira_cb_nomap;
+        if (!src) {
+          if (++madeira_cb_nomap <= 4 || (madeira_cb_nomap & 0xffff) == 0)
+            WARN("[cb-short] madeira-bcd encode: no CPU mapping, copy skipped (#", madeira_cb_nomap, ")");
+        } else if (++madeira_cb_copied <= 4 || (madeira_cb_copied & 0xfffff) == 0) {
+          WARN("[cb-short] madeira-bcd encode: zero-padded copy bound (#", madeira_cb_copied, ", ", pad_bytes, " bytes)");
+        }
+        if (src) {
+          char *dst = getMappedArgumentBuffer<char, stage == PipelineStage::Compute>(pad_off);
+          size_t have = valid_length < pad_bytes ? valid_length : pad_bytes;
+          memcpy(dst, src + argbuf_offset + cbuf.offset, have);
+          memset(dst + have, 0, pad_bytes - have);
+          encoded_buffer[arg.StructurePtrOffset] = getArgumentBufferGpuAddress<stage == PipelineStage::Compute>(
+              getFinalArgumentBufferOffset<stage == PipelineStage::Compute>(pad_off));
+        }
+      }
+#endif
+      break;
+    }
+    default:
+      DXMT_UNREACHABLE
+    }
+  }
+
+  /* kConstantBufferTableBinding = 29 */
+  if constexpr (stage == PipelineStage::Compute) {
+    auto &cmd = encodeComputeCommand<wmtcmd_compute_setbufferoffset>();
+    cmd.type = WMTComputeCommandSetBufferOffset;
+    cmd.offset = getFinalArgumentBufferOffset<true>(offset);
+    cmd.index = 29;
+  } else {
+    auto &cmd = encodeRenderCommand<wmtcmd_render_setbufferoffset>();
+    cmd.offset = getFinalArgumentBufferOffset(offset);
+    cmd.index = 29;
+    if constexpr (stage == PipelineStage::Vertex) {
+      if constexpr (kind == PipelineKind::Geometry)
+        cmd.type = WMTRenderCommandSetObjectBufferOffset;
+      else if constexpr (kind == PipelineKind::Tessellation) {
+        cmd.type = WMTRenderCommandSetObjectBufferOffset;
+        cmd.index = 27;
+      } else
+        cmd.type = WMTRenderCommandSetVertexBufferOffset;
+    } else if constexpr (stage == PipelineStage::Pixel) {
+      cmd.type = WMTRenderCommandSetFragmentBufferOffset;
+    } else if constexpr (stage == PipelineStage::Hull) {
+      cmd.type = WMTRenderCommandSetObjectBufferOffset;
+    } else if constexpr (stage == PipelineStage::Domain) {
+      cmd.type = WMTRenderCommandSetMeshBufferOffset;
+    } else if constexpr (stage == PipelineStage::Geometry) {
+      cmd.type = WMTRenderCommandSetMeshBufferOffset;
+    } else {
+      assert(0 && "Not implemented or unreachable");
+    }
+  }
+};
+
+template void ArgumentEncodingContext::encodeShaderResources<PipelineStage::Vertex, PipelineKind::Ordinary>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *arguments, uint64_t argument_buffer_offset
+);
+template void ArgumentEncodingContext::encodeShaderResources<PipelineStage::Pixel, PipelineKind::Ordinary>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *arguments, uint64_t argument_buffer_offset
+);
+template void ArgumentEncodingContext::encodeShaderResources<PipelineStage::Vertex, PipelineKind::Tessellation>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *arguments, uint64_t argument_buffer_offset
+);
+template void ArgumentEncodingContext::encodeShaderResources<PipelineStage::Pixel, PipelineKind::Tessellation>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *arguments, uint64_t argument_buffer_offset
+);
+template void ArgumentEncodingContext::encodeShaderResources<PipelineStage::Hull, PipelineKind::Tessellation>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *arguments, uint64_t argument_buffer_offset
+);
+template void ArgumentEncodingContext::encodeShaderResources<PipelineStage::Domain, PipelineKind::Tessellation>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *arguments, uint64_t argument_buffer_offset
+);
+template void ArgumentEncodingContext::encodeShaderResources<PipelineStage::Compute, PipelineKind::Ordinary>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *arguments, uint64_t argument_buffer_offset
+);
+template void ArgumentEncodingContext::encodeShaderResources<PipelineStage::Vertex, PipelineKind::Geometry>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *arguments, uint64_t argument_buffer_offset
+);
+template void ArgumentEncodingContext::encodeShaderResources<PipelineStage::Geometry, PipelineKind::Geometry>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *arguments, uint64_t argument_buffer_offset
+);
+template void ArgumentEncodingContext::encodeShaderResources<PipelineStage::Pixel, PipelineKind::Geometry>(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *arguments, uint64_t argument_buffer_offset
+);
+
+inline uint64_t
+TextureMetadata(uint32_t array_length, float min_lod) {
+  return ((uint64_t)array_length << 32) | (uint64_t)std::bit_cast<uint32_t>(min_lod);
+}
+
+template <PipelineStage stage, PipelineKind kind>
+void
+ArgumentEncodingContext::encodeShaderResources(
+    const MTL_SHADER_REFLECTION *reflection, const MTL_SM50_SHADER_ARGUMENT *arguments, uint64_t offset
+) {
+  auto BindingCount = reflection->NumArguments;
+  uint64_t *encoded_buffer = getMappedArgumentBuffer<uint64_t, stage == PipelineStage::Compute>(offset);
+
+  auto &UAVBindingSet = stage == PipelineStage::Compute ? cs_uav_ : om_uav_;
+
+  constexpr bool PreRasterStage = stage == PipelineStage::Vertex || stage == PipelineStage::Domain ||
+                                 stage == PipelineStage::Hull || stage == PipelineStage::Geometry;
+
+  for (unsigned i = 0; i < BindingCount; i++) {
+    auto &arg = arguments[i];
+    switch (arg.Type) {
+    case SM50BindingType::ConstantBuffer: {
+      DXMT_UNREACHABLE
+    }
+    case SM50BindingType::Sampler: {
+      auto slot = 16 * unsigned(stage) + arg.SM50BindingSlot;
+      auto &sampler = sampler_[slot].sampler;
+      if (!sampler) {
+        encoded_buffer[arg.StructurePtrOffset] = dummy_sampler_info_.gpu_resource_id;
+        encoded_buffer[arg.StructurePtrOffset + 1] = dummy_sampler_info_.gpu_resource_id;
+        encoded_buffer[arg.StructurePtrOffset + 2] = (uint64_t)std::bit_cast<uint32_t>(0.0f);
+        break;
+      }
+      encoded_buffer[arg.StructurePtrOffset] = sampler->sampler_state_handle;
+      encoded_buffer[arg.StructurePtrOffset + 1] = sampler->sampler_state_cube_handle;
+      encoded_buffer[arg.StructurePtrOffset + 2] = (uint64_t)std::bit_cast<uint32_t>(sampler->lod_bias);
+      break;
+    }
+    case SM50BindingType::SRV: {
+      auto slot = 128 * unsigned(stage) + arg.SM50BindingSlot;
+      auto &srv = resview_[slot];
+
+      if (arg.Flags & MTL_SM50_SHADER_ARGUMENT_BUFFER) {
+        if (srv.buffer.ptr()) {
+          auto [srv_alloc, offset] = access<PreRasterStage>(srv.buffer, srv.slice.byteOffset, srv.slice.byteLength, DXMT_ENCODER_RESOURCE_ACESS_READ);
+          encoded_buffer[arg.StructurePtrOffset] = srv_alloc->gpuAddress() + offset + srv.slice.byteOffset;
+          encoded_buffer[arg.StructurePtrOffset + 1] = srv.slice.byteLength;
+          makeResident<stage, kind>(srv.buffer.ptr());
+        } else {
+          encoded_buffer[arg.StructurePtrOffset] = 0;
+          encoded_buffer[arg.StructurePtrOffset + 1] = 0;
+        }
+      } else if (arg.Flags & MTL_SM50_SHADER_ARGUMENT_TEXTURE) {
+        if (srv.buffer.ptr()) {
+          assert(arg.Flags & MTL_SM50_SHADER_ARGUMENT_TBUFFER_OFFSET);
+          auto [view, offset] = access<PreRasterStage>(srv.buffer, srv.viewId, DXMT_ENCODER_RESOURCE_ACESS_READ);
+          encoded_buffer[arg.StructurePtrOffset] = view.gpu_resource_id;
+          encoded_buffer[arg.StructurePtrOffset + 1] =
+              ((uint64_t)srv.slice.elementCount << 32) | (uint64_t)(srv.slice.firstElement + offset);
+          makeResident<stage, kind>(srv.buffer.ptr(), srv.viewId);
+        } else if (srv.texture.ptr()) {
+          assert(arg.Flags & MTL_SM50_SHADER_ARGUMENT_TEXTURE_MINLOD_CLAMP);
+          auto viewIdChecked = srv.texture->checkViewUseArray(srv.viewId, arg.Flags & MTL_SM50_SHADER_ARGUMENT_TEXTURE_ARRAY);
+          encoded_buffer[arg.StructurePtrOffset] =
+              access<PreRasterStage>(srv.texture, viewIdChecked, DXMT_ENCODER_RESOURCE_ACESS_READ).gpuResourceID;
+          /* ml1252: never let the top sampled level be one a clamped copy left
+           * empty -- step past it to the next populated level (one mip blurrier,
+           * instead of black). The shader clamps in VIEW space, whose LOD 0 is
+           * physical mip firstMiplevel. */
+          float min_lod = 0.0f;
+          if (uint32_t lost = srv.texture->lostLevels()) {   /* else it is always 0 */
+            const uint32_t view_base = srv.texture->firstMiplevel(viewIdChecked);   /* physical */
+            uint32_t lvl = view_base;
+            while (lvl < 31 && ((lost >> lvl) & 1u) && (lvl + 1) < srv.texture->mipLevelCount())
+              lvl++;
+            min_lod = float(lvl - view_base);
+          }
+          encoded_buffer[arg.StructurePtrOffset + 1] = TextureMetadata(srv.texture->arrayLength(viewIdChecked), min_lod);
+          makeResident<stage, kind>(srv.texture.ptr(), viewIdChecked);
+        } else {
+          encoded_buffer[arg.StructurePtrOffset] = 0;
+          encoded_buffer[arg.StructurePtrOffset + 1] = 0;
+        }
+      }
+      if (arg.Flags & MTL_SM50_SHADER_ARGUMENT_UAV_COUNTER) {
+        assert(0 && "srv can not have counter associated");
+      }
+      break;
+    }
+    case SM50BindingType::UAV: {
+      auto &uav = UAVBindingSet[arg.SM50BindingSlot];
+      bool read = (arg.Flags >> 10) & 1, write = (arg.Flags >> 10) & 2;
+      auto access_flags =  (DXMT_ENCODER_RESOURCE_ACESS)((arg.Flags >> 10) & 3);
+
+      if (arg.Flags & MTL_SM50_SHADER_ARGUMENT_BUFFER) {
+        if (uav.buffer.ptr()) {
+          auto [uav_alloc, offset] = access<PreRasterStage>(uav.buffer, uav.slice.byteOffset, uav.slice.byteLength, access_flags);
+          encoded_buffer[arg.StructurePtrOffset] = uav_alloc->gpuAddress() + offset + uav.slice.byteOffset;
+          encoded_buffer[arg.StructurePtrOffset + 1] = uav.slice.byteLength;
+          makeResident<stage, kind>(uav.buffer.ptr(), read, write);
+        } else {
+          encoded_buffer[arg.StructurePtrOffset] = 0;
+          encoded_buffer[arg.StructurePtrOffset + 1] = 0;
+        }
+      } else if (arg.Flags & MTL_SM50_SHADER_ARGUMENT_TEXTURE) {
+        if (uav.buffer.ptr()) {
+          assert(arg.Flags & MTL_SM50_SHADER_ARGUMENT_TBUFFER_OFFSET);
+          auto [view, offset] = access<PreRasterStage>(uav.buffer, uav.viewId, access_flags);
+          encoded_buffer[arg.StructurePtrOffset] = view.gpu_resource_id;
+          encoded_buffer[arg.StructurePtrOffset + 1] =
+              ((uint64_t)uav.slice.elementCount << 32) | (uint64_t)(uav.slice.firstElement + offset);
+          makeResident<stage, kind>(uav.buffer.ptr(), uav.viewId, read, write);
+        } else if (uav.texture.ptr()) {
+          assert(arg.Flags & MTL_SM50_SHADER_ARGUMENT_TEXTURE_MINLOD_CLAMP);
+          auto viewIdChecked = uav.texture->checkViewUseArray(uav.viewId, arg.Flags & MTL_SM50_SHADER_ARGUMENT_TEXTURE_ARRAY);
+          encoded_buffer[arg.StructurePtrOffset] = access<PreRasterStage>(uav.texture, viewIdChecked, access_flags).gpuResourceID;
+          encoded_buffer[arg.StructurePtrOffset + 1] = TextureMetadata(uav.texture->arrayLength(viewIdChecked), 0);
+          makeResident<stage, kind>(uav.texture.ptr(), viewIdChecked, read, write);
+        } else {
+          encoded_buffer[arg.StructurePtrOffset] = 0;
+          encoded_buffer[arg.StructurePtrOffset + 1] = 0;
+        }
+      }
+      if (arg.Flags & MTL_SM50_SHADER_ARGUMENT_UAV_COUNTER) {
+        if (uav.counter) {
+          auto [counter_alloc, offset] = access<PreRasterStage>(uav.counter, 0, 4, DXMT_ENCODER_RESOURCE_ACESS_READ | DXMT_ENCODER_RESOURCE_ACESS_WRITE);
+          encoded_buffer[arg.StructurePtrOffset + 2] = counter_alloc->gpuAddress() + offset;
+          makeResident<stage, kind>(uav.counter.ptr(), true, true);
+        } else {
+          /*
+           * potentially cause gpu pagefault, even providing a dummy buffer doesn't improve since the returned
+           * counter value is likely to be used as an index to another read/write operation.
+           */
+          encoded_buffer[arg.StructurePtrOffset + 2] = 0;
+        }
+      }
+      break;
+    }
+    }
+  }
+
+  if constexpr (stage == PipelineStage::Compute) {
+    auto &cmd = encodeComputeCommand<wmtcmd_compute_setbufferoffset>();
+    cmd.type = WMTComputeCommandSetBufferOffset;
+    cmd.offset = getFinalArgumentBufferOffset<true>(offset);
+    cmd.index = 30;
+  } else {
+    auto &cmd = encodeRenderCommand<wmtcmd_render_setbufferoffset>();
+    cmd.offset = getFinalArgumentBufferOffset(offset);
+    cmd.index = 30;
+    if constexpr (stage == PipelineStage::Vertex) {
+      if constexpr (kind == PipelineKind::Geometry)
+        cmd.type = WMTRenderCommandSetObjectBufferOffset;
+      else if constexpr (kind == PipelineKind::Tessellation) {
+        cmd.type = WMTRenderCommandSetObjectBufferOffset;
+        cmd.index = 28;
+      } else
+        cmd.type = WMTRenderCommandSetVertexBufferOffset;
+    } else if constexpr (stage == PipelineStage::Pixel) {
+      cmd.type = WMTRenderCommandSetFragmentBufferOffset;
+    } else if constexpr (stage == PipelineStage::Hull) {
+      cmd.type = WMTRenderCommandSetObjectBufferOffset;
+    } else if constexpr (stage == PipelineStage::Domain) {
+      cmd.type = WMTRenderCommandSetMeshBufferOffset;
+    } else if constexpr (stage == PipelineStage::Geometry) {
+      cmd.type = WMTRenderCommandSetMeshBufferOffset;
+    } else {
+      assert(0 && "Not implemented or unreachable");
+    }
+  }
+}
+
+void
+ArgumentEncodingContext::retainAllocation(Allocation* allocation) {
+  if (allocation->checkRetained(seq_id_))
+    return;
+  queue_.Retain(seq_id_, allocation);
+}
+
+void
+ArgumentEncodingContext::clearColor(Rc<Texture> &&texture, unsigned viewId, unsigned arrayLength, WMTClearColor color) {
+  assert(!encoder_current);
+  auto encoder_info = allocate<ClearEncoderData>();
+  encoder_info->type = EncoderType::Clear;
+  encoder_info->id = nextEncoderId();
+  encoder_info->clear_dsv = 0;
+  encoder_info->color = color;
+  encoder_info->array_length = arrayLength;
+  encoder_info->width = texture->width();
+  encoder_info->height = texture->height();
+  encoder_current = encoder_info;
+
+  encoder_info->attachment = access(texture, viewId, DXMT_ENCODER_RESOURCE_ACESS_WRITE);
+
+  currentFrameStatistics().clear_pass_count++;
+
+  endPass();
+}
+
+void
+ArgumentEncodingContext::clearDepthStencil(
+    Rc<Texture> &&texture, unsigned viewId, unsigned arrayLength, unsigned flag, float depth, uint8_t stencil
+) {
+  assert(!encoder_current);
+  auto encoder_info = allocate<ClearEncoderData>();
+  encoder_info->type = EncoderType::Clear;
+  encoder_info->id = nextEncoderId();
+  encoder_info->clear_dsv = flag & DepthStencilPlanarFlags(texture->pixelFormat());
+  encoder_info->depth_stencil = {depth, stencil};
+  encoder_info->array_length = arrayLength;
+  encoder_info->width = texture->width();
+  encoder_info->height = texture->height();
+  encoder_current = encoder_info;
+
+  encoder_info->attachment = access(texture, viewId, DXMT_ENCODER_RESOURCE_ACESS_WRITE);
+
+  currentFrameStatistics().clear_pass_count++;
+  
+  endPass();
+}
+
+void
+ArgumentEncodingContext::resolveTexture(
+    Rc<Texture> &&src, TextureViewKey src_view, Rc<Texture> &&dst, TextureViewKey dst_view,
+    WMT::RenderPipelineState pso, std::optional<WMTScissorRect> src_rect, WMTOrigin dst_origin,
+    WMTSize resolve_size
+) {
+  assert(!encoder_current);
+  auto encoder_info = allocate<ResolveEncoderData>();
+  encoder_info->type = EncoderType::Resolve;
+  encoder_current = encoder_info;
+
+  encoder_info->src = access(src, src_view, DXMT_ENCODER_RESOURCE_ACESS_READ);
+  encoder_info->dst = access(dst, dst_view, DXMT_ENCODER_RESOURCE_ACESS_WRITE);
+  encoder_info->pso = pso;
+  encoder_info->src_rect = src_rect;
+  encoder_info->dst_origin = dst_origin;
+  encoder_info->resolve_size = resolve_size;
+
+  endPass();
+};
+
+/* MADEIRA (WOW64_DESIGN.md section 7.11): the three encoder entry points the
+ * Direct3D 9 frontend needs, imported from the upstream v0.4-d3d9 tag (see
+ * LICENSE-MADEIRA.md). d3d11 calls none of them. */
+
+void
+ArgumentEncodingContext::resolveDepthTexture(
+    Rc<Texture> &&src, TextureViewKey src_view, Rc<Texture> &&dst, TextureViewKey dst_view,
+    WMT::RenderPipelineState pso, std::optional<WMTScissorRect> src_rect, WMTOrigin dst_origin, WMTSize resolve_size
+) {
+  assert(!encoder_current);
+  auto encoder_info = allocate<ResolveEncoderData>();
+  encoder_info->type = EncoderType::Resolve;
+  encoder_info->id = nextEncoderId();
+  encoder_current = encoder_info;
+
+  encoder_info->src = access(src, src_view, DXMT_ENCODER_RESOURCE_ACESS_READ);
+  encoder_info->dst = access(dst, dst_view, DXMT_ENCODER_RESOURCE_ACESS_WRITE);
+  encoder_info->pso = pso;
+  encoder_info->src_rect = src_rect;
+  encoder_info->dst_origin = dst_origin;
+  encoder_info->resolve_size = resolve_size;
+  encoder_info->is_depth = true;
+
+  endPass();
+};
+
+void
+ArgumentEncodingContext::stretchBlit(
+    Rc<Texture> &&src, TextureViewKey src_view, Rc<Texture> &&dst, TextureViewKey dst_view,
+    WMT::RenderPipelineState pso, WMT::SamplerState sampler, WMTOrigin src_origin, WMTSize src_size,
+    WMTOrigin dst_origin, WMTSize dst_size
+) {
+  assert(!encoder_current);
+  // The src texture-view's level dimensions normalize the sample sub-rect into
+  // uv-space. Texture::width/height(view) returns max(info_.width >>
+  // firstMiplevel, 1), so a divide-by-zero is impossible.
+  uint32_t src_view_w = src.ptr() ? src->width(src_view) : 1;
+  uint32_t src_view_h = src.ptr() ? src->height(src_view) : 1;
+
+  auto encoder_info = allocate<StretchBlitEncoderData>();
+  encoder_info->type = EncoderType::StretchBlit;
+  encoder_info->id = nextEncoderId();
+  encoder_current = encoder_info;
+
+  encoder_info->src = access(src, src_view, DXMT_ENCODER_RESOURCE_ACESS_READ);
+  encoder_info->dst = access(dst, dst_view, DXMT_ENCODER_RESOURCE_ACESS_WRITE);
+  encoder_info->pso = pso;
+  encoder_info->sampler = sampler;
+  encoder_info->src_uv_origin[0] = float(src_origin.x) / float(src_view_w);
+  encoder_info->src_uv_origin[1] = float(src_origin.y) / float(src_view_h);
+  encoder_info->src_uv_size[0] = float(src_size.width) / float(src_view_w);
+  encoder_info->src_uv_size[1] = float(src_size.height) / float(src_view_h);
+  encoder_info->dst_origin = dst_origin;
+  encoder_info->dst_size = dst_size;
+
+  endPass();
+}
+
+void
+ArgumentEncodingContext::copyTexture(
+    const Rc<Texture> &src, unsigned src_level, unsigned src_slice, WMTOrigin src_origin, const Rc<Texture> &dst,
+    unsigned dst_level, unsigned dst_slice, WMTOrigin dst_origin, WMTSize size
+) {
+  assert(!encoder_current);
+  startBlitPass();
+  auto src_tex = access(src, src_level, src_slice, DXMT_ENCODER_RESOURCE_ACESS_READ);
+  auto dst_tex = access(dst, dst_level, dst_slice, DXMT_ENCODER_RESOURCE_ACESS_WRITE);
+  auto &cmd = encodeBlitCommand<wmtcmd_blit_copy_from_texture_to_texture>();
+  cmd.type = WMTBlitCommandCopyFromTextureToTexture;
+  cmd.src = src_tex.handle;
+  cmd.src_slice = src_slice;
+  cmd.src_level = src_level;
+  cmd.src_origin = src_origin;
+  cmd.src_size = size;
+  cmd.dst = dst_tex.handle;
+  cmd.dst_slice = dst_slice;
+  cmd.dst_level = dst_level;
+  cmd.dst_origin = dst_origin;
+  endPass();
+}
+
+void
+ArgumentEncodingContext::optimizeTextureForGPUAccess(const Rc<Texture> &texture, unsigned level, unsigned slice) {
+  assert(!encoder_current);
+  // Write access: the re-tile mutates the texture's layout, so it must register
+  // as the subresource's last writer for the following sample to wait on it.
+  startBlitPass();
+  auto tex = access(texture, level, slice, DXMT_ENCODER_RESOURCE_ACESS_WRITE);
+  auto &cmd = encodeBlitCommand<wmtcmd_blit_optimize_contents>();
+  cmd.type = WMTBlitCommandOptimizeContentsForGPUAccess;
+  cmd.texture = tex.handle;
+  cmd.slice = slice;
+  cmd.level = level;
+  endPass();
+}
+
+void
+ArgumentEncodingContext::present(Rc<Texture> &texture, Rc<Presenter> &presenter, double after, DXMTPresentMetadata metadata) {
+  assert(!encoder_current);
+  auto encoder_info = allocate<PresentData>();
+  encoder_info->type = EncoderType::Present;
+  encoder_info->id = nextEncoderId();
+  encoder_info->backbuffer = texture->current()->texture();
+  encoder_info->presenter = presenter;
+  encoder_info->after = after;
+  encoder_info->metadata = metadata;
+
+  encoder_info->tex_read.add(texture->current()->depkey);
+
+  encoder_current = encoder_info;
+  endPass();
+}
+
+void
+ArgumentEncodingContext::upscale(Rc<Texture> &texture, Rc<Texture> &upscaled, WMT::Reference<WMT::FXSpatialScaler> &scaler) {
+  assert(!encoder_current);
+  auto encoder_info = allocate<SpatialUpscaleData>();
+  encoder_info->type = EncoderType::SpatialUpscale;
+  encoder_info->id = nextEncoderId();
+  encoder_info->backbuffer = texture->current()->texture();
+  encoder_info->upscaled = upscaled->current()->texture();
+  encoder_info->scaler = scaler;
+
+  encoder_info->tex_read.add(texture->current()->depkey);
+  encoder_info->tex_write.add(upscaled->current()->depkey);
+
+  encoder_current = encoder_info;
+  endPass();
+}
+
+void
+ArgumentEncodingContext::upscaleTemporal(
+    Rc<Texture> &input, Rc<Texture> &output, Rc<Texture> &depth, Rc<Texture> &motion_vector, TextureViewKey mvViewId,
+    Rc<Texture> &exposure, WMT::Reference<WMT::FXTemporalScaler> &scaler, const WMTFXTemporalScalerProps &props
+) {
+  assert(!encoder_current);
+  auto encoder_info = allocate<TemporalUpscaleData>();
+  encoder_info->type = EncoderType::TemporalUpscale;
+  encoder_info->id = nextEncoderId();
+  encoder_info->input = input->current()->texture();
+  encoder_info->output = output->current()->texture();
+  encoder_info->depth = depth->current()->texture();
+  encoder_info->motion_vector = motion_vector->view(mvViewId).texture;
+  encoder_info->scaler = scaler;
+  encoder_info->props = props;
+
+  encoder_info->tex_read.add(input->current()->depkey);
+  encoder_info->tex_read.add(depth->current()->depkey);
+  encoder_info->tex_read.add(motion_vector->current()->depkey);
+  encoder_info->tex_write.add(output->current()->depkey);
+  if(exposure) {
+    encoder_info->exposure = exposure->current()->texture();
+    encoder_info->tex_read.add(exposure->current()->depkey);
+  } else {
+    encoder_info->exposure = nullptr;
+  }
+
+  encoder_current = encoder_info;
+  endPass();
+}
+
+void
+ArgumentEncodingContext::signalEvent(uint64_t value) {
+  assert(!encoder_current);
+  auto encoder_info = allocate<SignalEventData>();
+  encoder_info->type = EncoderType::SignalEvent;
+  encoder_info->id = nextEncoderId();
+  encoder_info->event = queue_.event;
+  encoder_info->value = value;
+
+  encoder_current = encoder_info;
+  endPass();
+}
+
+void
+ArgumentEncodingContext::signalEvent(WMT::Reference<WMT::Event> &&event, uint64_t value) {
+  assert(!encoder_current);
+  auto encoder_info = allocate<SignalEventData>();
+  encoder_info->type = EncoderType::SignalEvent;
+  encoder_info->id = nextEncoderId();
+  encoder_info->event = std::move(event);
+  encoder_info->value = value;
+
+  encoder_current = encoder_info;
+  endPass();
+}
+
+void
+ArgumentEncodingContext::signalEventByHandle(obj_handle_t event_handle, uint64_t value) {
+  assert(!encoder_current);
+  auto encoder_info = allocate<SignalEventData>();
+  encoder_info->type = EncoderType::SignalEvent;
+  encoder_info->id = nextEncoderId();
+  // Reference operator=(Class non_retained); retains, paired with the
+  // SignalEventData destructor's release. The retain runs on the encode
+  // thread so the calling-thread emit site dodges a wine_unix_call.
+  encoder_info->event = WMT::Event{event_handle};
+  encoder_info->value = value;
+
+  encoder_current = encoder_info;
+  endPass();
+}
+
+void
+ArgumentEncodingContext::waitEvent(WMT::Reference<WMT::Event> &&event, uint64_t value) {
+  assert(!encoder_current);
+  auto encoder_info = allocate<WaitForEventData>();
+  encoder_info->type = EncoderType::WaitForEvent;
+  encoder_info->id = nextEncoderId();
+  encoder_info->event = std::move(event);
+  encoder_info->value = value;
+
+  encoder_current = encoder_info;
+  endPass();
+}
+
+RenderEncoderData *
+ArgumentEncodingContext::startRenderPass(
+    uint8_t dsv_planar_flags, uint8_t dsv_readonly_flags, uint8_t render_target_count, uint64_t encoder_argbuf_size
+) {
+  assert(!encoder_current);
+  auto encoder_info = allocate<RenderEncoderData>();
+  encoder_info->type = EncoderType::Render;
+  encoder_info->id = nextEncoderId();
+  encoder_info->cmd_head.type = WMTRenderCommandNop;
+  encoder_info->cmd_head.next.set(0);
+  encoder_info->cmd_tail = (wmtcmd_base *)&encoder_info->cmd_head;
+  encoder_info->dsv_planar_flags = dsv_planar_flags;
+  encoder_info->dsv_readonly_flags = dsv_readonly_flags;
+  encoder_info->render_target_count = render_target_count;
+#if defined(__i386__)  /* madeira-bcd: 32-bit (i386) builds only, as the fork shipped it */
+  auto [gpu_buffer_contents, gpu_buffer_, offset, gpu_address_] = queue_.AllocateArgumentBufferGpu(seq_id_, encoder_argbuf_size);
+  encoder_info->allocated_argbuf_gpu_address = gpu_address_;
+#else
+  auto [gpu_buffer_contents, gpu_buffer_, offset] = queue_.AllocateArgumentBuffer(seq_id_, encoder_argbuf_size);
+#endif
+  encoder_info->allocated_argbuf = gpu_buffer_;
+  encoder_info->allocated_argbuf_offset = offset;
+  encoder_info->allocated_argbuf_mapping = gpu_buffer_contents;
+  encoder_current = encoder_info;
+
+  currentFrameStatistics().render_pass_count++;
+
+  vro_state_.beginEncoder();
+
+  return encoder_info;
+}
+
+EncoderData *
+ArgumentEncodingContext::startComputePass(uint64_t encoder_argbuf_size) {
+  assert(!encoder_current);
+  auto encoder_info = allocate<ComputeEncoderData>();
+  encoder_info->type = EncoderType::Compute;
+  encoder_info->id = nextEncoderId();
+  encoder_info->cmd_head.type = WMTComputeCommandNop;
+  encoder_info->cmd_head.next.set(0);
+  encoder_info->cmd_tail = (wmtcmd_base *)&encoder_info->cmd_head;
+#if defined(__i386__)  /* madeira-bcd: 32-bit (i386) builds only, as the fork shipped it */
+  auto [gpu_buffer_contents, gpu_buffer_, offset, gpu_address_] = queue_.AllocateArgumentBufferGpu(seq_id_, encoder_argbuf_size);
+  encoder_info->allocated_argbuf_gpu_address = gpu_address_;
+#else
+  auto [gpu_buffer_contents, gpu_buffer_, offset] = queue_.AllocateArgumentBuffer(seq_id_, encoder_argbuf_size);
+#endif
+  encoder_info->allocated_argbuf = gpu_buffer_;
+  encoder_info->allocated_argbuf_offset = offset;
+  encoder_info->allocated_argbuf_mapping = gpu_buffer_contents;
+  encoder_current = encoder_info;
+
+  currentFrameStatistics().compute_pass_count++;
+
+  return encoder_info;
+}
+
+EncoderData *
+ArgumentEncodingContext::startBlitPass() {
+  assert(!encoder_current);
+  auto encoder_info = allocate<BlitEncoderData>();
+  encoder_info->type = EncoderType::Blit;
+  encoder_info->id = nextEncoderId();
+  encoder_info->cmd_head.type = WMTBlitCommandNop;
+  encoder_info->cmd_head.next.set(0);
+  encoder_info->cmd_tail = (wmtcmd_base *)&encoder_info->cmd_head;
+  encoder_current = encoder_info;
+
+  currentFrameStatistics().blit_pass_count++;
+
+  return encoder_info;
+}
+
+void
+ArgumentEncodingContext::endPass() {
+  assert(encoder_current);
+  encoder_last->next = encoder_current;
+  encoder_last = encoder_current;
+
+  if (encoder_current->type == EncoderType::Render)
+    vro_state_.endEncoder();
+
+  encoder_current = nullptr;
+  encoder_count_++;
+}
+
+std::pair<WMT::Buffer, size_t>
+ArgumentEncodingContext::allocateTempBuffer(size_t size, size_t alignment) {
+  return queue_.AllocateTempBuffer(seq_id_, size, alignment);
+};
+
+AllocatedTempBufferSlice
+ArgumentEncodingContext::allocateTempBuffer1(size_t size, size_t alignment) {
+  return queue_.AllocateTempBuffer1(seq_id_, size, alignment);
+};
+
+void
+ArgumentEncodingContext::beginVisibilityResultQuery(Rc<VisibilityResultQuery> &&query) {
+  query->begin(seq_id_, vro_state_.getNextReadOffset());
+  active_visibility_query_count_++;
+  pending_queries_.push_back(std::move(query));
+}
+void
+ArgumentEncodingContext::endVisibilityResultQuery(Rc<VisibilityResultQuery> &&query) {
+  query->end(seq_id_, vro_state_.getNextReadOffset());
+  assert(active_visibility_query_count_);
+  active_visibility_query_count_--;
+}
+void
+ArgumentEncodingContext::bumpVisibilityResultOffset() {
+  auto render_encoder = currentRenderEncoder();
+  render_encoder->use_visibility_result = render_encoder->use_visibility_result || bool(active_visibility_query_count_);
+
+  uint64_t offset;
+  if (vro_state_.tryGetNextWriteOffset(active_visibility_query_count_, offset)) {
+    auto &cmd = encodeRenderCommand<wmtcmd_render_setvisibilitymode>();
+    cmd.type = WMTRenderCommandSetVisibilityMode;
+    if (~offset == 0) {
+      cmd.mode = WMTVisibilityResultModeDisabled;
+      cmd.offset = 0;
+    } else {
+      cmd.mode = WMTVisibilityResultModeCounting;
+      cmd.offset = offset << 3;
+    }
+  }
+}
+
+FrameStatistics&
+ArgumentEncodingContext::currentFrameStatistics() {
+  return queue_.statistics.at(frame_id_);
+}
+
+void
+ArgumentEncodingContext::$$setEncodingContext(uint64_t seq_id, uint64_t frame_id) {
+  current_buffer_chunk_ = 0;
+  cpu_buffer_ = cpu_buffer_chunks_[current_buffer_chunk_].ptr;
+  cpu_buffer_offset_ = 0;
+  seq_id_ = seq_id;
+  frame_id_ = frame_id;
+}
+
+constexpr unsigned kEncoderOptimizerThreshold = 64;
+
+static bool
+settleEmptyQueries() {
+  static const bool enabled = madeiraSwitch("DXMT_QUERY_SETTLE_EMPTY");
+  return enabled;
+}
+
+std::unique_ptr<VisibilityResultReadback>
+ArgumentEncodingContext::flushCommands(WMT::CommandBuffer cmdbuf, uint64_t seqId, uint64_t event_seq_id) {
+  assert(!encoder_current);
+
+  /* iOS-Madeira 2026-07-03: drain autoreleased thunk objects once per flush.
+   * Everything created through the winemetal unix thunks in this function —
+   * render/compute/blit encoders, and critically the CAMetalDrawable from
+   * Presenter::encodeCommands — is returned autoreleased onto a Wine pthread
+   * that never drains a pool, so on iOS the drawables accumulated forever.
+   * After maximumDrawableCount (3) leaked drawables, every nextDrawable
+   * blocks its full 1s timeout: the intermittent "present counter climbs at
+   * ~1 FPS but the screen stays black" failure. The command buffer retains
+   * the drawable through presentation, so draining here is safe. */
+  auto pool = WMT::MakeAutoreleasePool();
+
+  unsigned encoder_count = encoder_count_;
+  unsigned encoder_index = 0;
+  EncoderData **encoders =
+      reinterpret_cast<EncoderData **>(allocate_cpu_heap(sizeof(EncoderData *) * encoder_count, alignof(EncoderData *))
+      );
+
+  {
+    EncoderData *current = encoder_head.next;
+    while (current) {
+      encoders[encoder_index++] = current;
+      current = current->next;
+    }
+    assert(encoder_index == encoder_count);
+  }
+
+  if (encoder_count > 1) {
+    unsigned j, i;
+    for (j = encoder_count - 2; j != ~0u; j--) {
+      if (encoders[j]->type == EncoderType::Null)
+        continue;
+      for (i = j + 1; i < std::min(encoder_count, j + kEncoderOptimizerThreshold); i++) {
+        if (encoders[i]->type == EncoderType::Null)
+          continue;
+        if (checkEncoderRelation(encoders[j], encoders[i]) == DXMT_ENCODER_LIST_OP_SYNCHRONIZE)
+          break;
+      }
+    }
+  }
+
+  std::unique_ptr<VisibilityResultReadback> visibility_readback {};
+
+  if (auto count = vro_state_.reset()) {
+    visibility_readback = std::make_unique<VisibilityResultReadback>(
+        device_, seqId, count, pending_queries_
+    );
+  } else if (settleEmptyQueries() &&
+             std::any_of(pending_queries_.begin(), pending_queries_.end(),
+                         [=](auto &query) { return query->queryEndAt() == seqId; })) {
+    /* MADEIRA (ml998): A QUERY THAT ENDS IN AN EMPTY SUBMISSION WAS LOST.
+     *
+     * VisibilityResultQuery only reports a value once seq_id_issued reaches
+     * seq_id_end, and the only thing that advances seq_id_issued is
+     * ~VisibilityResultReadback. When vro_state_.reset() returns 0 -- this
+     * submission counted no visibility samples, e.g. a flush with no render
+     * encoder -- no readback object was built, so nothing would ever issue
+     * for seqId. The erase_if below then dropped every query whose END landed
+     * here out of pending_queries_, and a query that BEGAN in an earlier
+     * submission and ended in this empty one could never complete: a caller
+     * polling GetData waited forever.
+     *
+     * The fix is an empty readback: no buffer, and a destructor that calls
+     * issueEmpty() for the captured queries. It lives on this submission's
+     * chunk exactly like a real one, so the finish thread destroys it in
+     * submission order -- after the readback of every earlier submission,
+     * whose samples the query still has to add. Settling the query here, on
+     * the encode thread, would publish it as complete while those earlier
+     * readbacks were still outstanding (an early, wrong result) and would race
+     * the finish thread's issue() on the same query.
+     *
+     * DXMT_QUERY_SETTLE_EMPTY is a Madeira switch (util_madeira_switch.hpp):
+     * on by default only in the i386 build. */
+    visibility_readback = std::make_unique<VisibilityResultReadback>(device_, seqId, 0, pending_queries_);
+  }
+  std::erase_if(pending_queries_, [=](auto &query) -> bool { return query->queryEndAt() == seqId; });
+
+  while (encoder_index) {
+    auto current = encoders[encoder_count - encoder_index];
+    switch (current->type) {
+    case EncoderType::Render: {
+      auto data = static_cast<RenderEncoderData *>(current);
+      WMTRenderPassInfo render_pass_info;
+      WMT::InitializeRenderPassInfo(render_pass_info);
+      {
+        for (unsigned i = 0; i < std::size(render_pass_info.colors); i++) {
+          auto &color_data = data->colors[i];
+          if (!color_data.attachment)
+            continue;
+          auto &color_info = render_pass_info.colors[i];
+          color_info.texture = color_data.attachment.texture();
+          color_info.load_action = color_data.load_action;
+          color_info.store_action = color_data.store_action;
+          color_info.level = color_data.level;
+          color_info.slice = color_data.slice;
+          color_info.depth_plane = color_data.depth_plane;
+          color_info.clear_color = color_data.clear_color;
+          color_info.resolve_texture = color_data.resolve_attachment.texture();
+          color_info.resolve_level = color_data.resolve_level;
+          color_info.resolve_slice = color_data.resolve_slice;
+          color_info.resolve_depth_plane = color_data.resolve_depth_plane;
+        }
+        if (data->depth.attachment) {
+          auto &depth_info = render_pass_info.depth;
+          auto &depth_data = data->depth;
+          depth_info.texture = depth_data.attachment.texture();
+          depth_info.load_action = depth_data.load_action;
+          depth_info.store_action = depth_data.store_action;
+          depth_info.level = depth_data.level;
+          depth_info.slice = depth_data.slice;
+          depth_info.depth_plane = depth_data.depth_plane;
+          depth_info.clear_depth = depth_data.clear_depth;
+        }
+        if (data->stencil.attachment) {
+          auto &stencil_info = render_pass_info.stencil;
+          auto &stencil_data = data->stencil;
+          stencil_info.texture = stencil_data.attachment.texture();
+          stencil_info.load_action = stencil_data.load_action;
+          stencil_info.store_action = stencil_data.store_action;
+          stencil_info.level = stencil_data.level;
+          stencil_info.slice = stencil_data.slice;
+          stencil_info.depth_plane = stencil_data.depth_plane;
+          stencil_info.clear_stencil = stencil_data.clear_stencil;
+        }
+        render_pass_info.default_raster_sample_count = data->default_raster_sample_count;
+        render_pass_info.render_target_array_length = data->render_target_array_length;
+        render_pass_info.render_target_width = data->render_target_width;
+        render_pass_info.render_target_height = data->render_target_height;
+      }
+      if (data->use_visibility_result) {
+        assert(visibility_readback);
+        render_pass_info.visibility_buffer = visibility_readback->visibility_result_heap;
+      }
+      auto gpu_buffer_ = data->allocated_argbuf;
+      auto encoder = cmdbuf.renderCommandEncoder(render_pass_info);
+      encoder.setVertexBuffer(gpu_buffer_, 0, 16);
+      encoder.setVertexBuffer(gpu_buffer_, 0, 29);
+      encoder.setVertexBuffer(gpu_buffer_, 0, 30);
+      encoder.setFragmentBuffer(gpu_buffer_, 0, 29);
+      encoder.setFragmentBuffer(gpu_buffer_, 0, 30);
+      /* ml754: SKIP MESH BINDINGS WHEN THE DEVICE HAS NO MESH TRANSPORT.
+       *
+       * setObjectBuffer/setMeshBuffer are how DXMT feeds its object/mesh
+       * lowering of D3D11 geometry shaders and tessellation. Apple's
+       * PARAVIRTUAL Metal device implements none of it -- no mesh PSO creation,
+       * no mesh encoder methods, no APV command packets -- so this line reaches
+       * Metal's abstract selector and raises NSInvalidArgumentException, which
+       * nobody catches and libc++abi turns into a process abort. That is what
+       * killed a UE4 title on the research VM after it had already loaded
+       * assets and gone to a black screen.
+       *
+       * ⚠️ respondsToSelector: answers YES here -- Metal DECLARES the selector
+       * even though the paravirtual class does not implement it -- so runtime
+       * probing cannot gate this. Opt in explicitly with
+       * d3d11.noMeshShaders=1 instead, which leaves every real device
+       * untouched.
+       *
+       * Skipping the BINDINGS stops the abort; the draw itself will render
+       * nothing useful, which is the point -- it tells us whether the affected
+       * draws even matter for reaching a menu before anyone invests in the
+       * compute fallback. */
+      static const int no_mesh =
+          Config::getInstance().getOption<int>("d3d11.noMeshShaders", 0);
+      if (no_mesh && (data->use_geometry || data->use_tessellation)) {
+        static std::atomic<uint32_t> skipped{0};
+        uint32_t n = skipped.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n == 1 || (n & 0x3FF) == 0)
+          ERR("[mesh-skip] ml754 suppressed ", n, " mesh-bound draw setups (",
+              data->use_tessellation ? "tessellation" : "geometry", ")");
+      } else if (data->use_geometry || data->use_tessellation) {
+        encoder.setObjectBuffer(gpu_buffer_, 0, 16);
+        encoder.setObjectBuffer(gpu_buffer_, 0, 21); // draw arguments
+        if (data->use_tessellation) {
+          encoder.setObjectBuffer(gpu_buffer_, 0, 27);
+          encoder.setObjectBuffer(gpu_buffer_, 0, 28);
+        }
+        encoder.setObjectBuffer(gpu_buffer_, 0, 29);
+        encoder.setObjectBuffer(gpu_buffer_, 0, 30);
+        encoder.setMeshBuffer(gpu_buffer_, 0, 29);
+        encoder.setMeshBuffer(gpu_buffer_, 0, 30);
+      }
+      if (data->gs_arg_marshal_tasks.size()) {
+        auto task_count = data->gs_arg_marshal_tasks.size();
+        struct GS_MARSHAL_TASK {
+          uint64_t draw_args;
+          uint64_t dispatch_args_out;
+          uint64_t max_object_threadgroups;
+          uint32_t vertex_count_per_warp;
+          uint32_t end_of_command;
+        };
+        auto [mapped_task_data, task_data_buffer, task_data_buffer_offset] =
+            queue_.AllocateArgumentBuffer(seq_id_, sizeof(GS_MARSHAL_TASK) * task_count);
+        auto tasks_data = (GS_MARSHAL_TASK *)mapped_task_data;
+        for (unsigned i = 0; i<task_count; i++) {
+          auto & task = data->gs_arg_marshal_tasks[i];
+          tasks_data[i].draw_args = task.draw_arguments_va;
+          tasks_data[i].dispatch_args_out = task.dispatch_arguments_va;
+          tasks_data[i].max_object_threadgroups = task.max_object_threadgroups;
+          tasks_data[i].vertex_count_per_warp = task.vertex_count_per_warp;
+          tasks_data[i].end_of_command = 0;
+          encoder.useResource(task.draw_arguments, WMTResourceUsageRead, WMTRenderStageVertex);
+          encoder.useResource(task.dispatch_arguments_buffer, WMTResourceUsageWrite, WMTRenderStageVertex);
+        }
+        tasks_data[task_count - 1].end_of_command = 1;
+        emulated_cmd.MarshalGSDispatchArguments(encoder, task_data_buffer, task_data_buffer_offset);
+      }
+      if (data->ts_arg_marshal_tasks.size()) {
+        auto task_count = data->ts_arg_marshal_tasks.size();
+        struct TS_MARSHAL_TASK {
+          uint64_t draw_args;
+          uint64_t dispatch_args_out;
+          uint64_t max_object_threadgroups;
+          uint16_t control_point_count;
+          uint16_t patch_per_group;
+          uint32_t end_of_command;
+        };
+        auto [mapped_task_data, task_data_buffer, task_data_buffer_offset] =
+            queue_.AllocateArgumentBuffer(seq_id_, sizeof(TS_MARSHAL_TASK) * task_count);
+        auto tasks_data = (TS_MARSHAL_TASK *)mapped_task_data;
+        for (unsigned i = 0; i<task_count; i++) {
+          auto & task = data->ts_arg_marshal_tasks[i];
+          tasks_data[i].draw_args = task.draw_arguments_va;
+          tasks_data[i].dispatch_args_out = task.dispatch_arguments_va;
+          tasks_data[i].max_object_threadgroups = task.max_object_threadgroups;
+          tasks_data[i].control_point_count = task.control_point_count;
+          tasks_data[i].patch_per_group = task.patch_per_group;
+          tasks_data[i].end_of_command = 0;
+          encoder.useResource(task.draw_arguments, WMTResourceUsageRead, WMTRenderStageVertex);
+          encoder.useResource(task.dispatch_arguments_buffer, WMTResourceUsageWrite, WMTRenderStageVertex);
+        }
+        tasks_data[task_count - 1].end_of_command = 1;
+        emulated_cmd.MarshalTSDispatchArguments(encoder, task_data_buffer, task_data_buffer_offset);
+      }
+      if (data->gs_arg_marshal_tasks.size() > 0 || data->ts_arg_marshal_tasks.size() > 0) {
+        encoder.memoryBarrier(
+            WMTBarrierScopeBuffers, WMTRenderStageVertex,
+            WMTRenderStageVertex | WMTRenderStageMesh | WMTRenderStageObject
+        );
+      }
+      encoder.encodeCommands(&data->cmd_head);
+      encoder.endEncoding();
+      data->~RenderEncoderData();
+      break;
+    }
+    case EncoderType::Compute: {
+      auto data = static_cast<ComputeEncoderData *>(current);
+      auto encoder = cmdbuf.computeCommandEncoder(false);
+      struct wmtcmd_compute_setbuffer setcmd;
+      setcmd.type = WMTComputeCommandSetBuffer;
+      setcmd.next.set(nullptr);
+      setcmd.buffer = data->allocated_argbuf;
+      setcmd.offset = 0;
+      setcmd.index = 29;
+      encoder.encodeCommands((const wmtcmd_compute_nop *)&setcmd);
+      setcmd.index = 30;
+      encoder.encodeCommands((const wmtcmd_compute_nop *)&setcmd);
+      encoder.encodeCommands(&data->cmd_head);
+      encoder.endEncoding();
+      data->~ComputeEncoderData();
+      break;
+    }
+    case EncoderType::Blit: {
+      auto data = static_cast<BlitEncoderData *>(current);
+      auto encoder = cmdbuf.blitCommandEncoder();
+      encoder.encodeCommands(&data->cmd_head);
+      encoder.endEncoding();
+      data->~BlitEncoderData();
+      break;
+    }
+    case EncoderType::Present: {
+      auto data = static_cast<PresentData *>(current);
+      auto t0 = clock::now();
+      auto drawable = data->presenter->encodeCommands(cmdbuf, {}, data->backbuffer, data->metadata);
+      auto t1 = clock::now();
+      currentFrameStatistics().drawable_blocking_interval += (t1 - t0);
+      /* iOS-Madeira 2026-07-03 EXPERIMENT: always plain presentDrawable.
+       * presentDrawableAfterMinimumDuration schedules each frame relative
+       * to the PREVIOUS frame's completed on-glass presentation. On iOS 27
+       * our layer's presentations only complete when the render server is
+       * forced to re-composite (screenshots advance exactly one frame;
+       * touches/normal transactions do nothing), so the min-duration chain
+       * stalls at ~1 present/s with frames invisibly queued. Plain
+       * presentDrawable requests immediate presentation, bypassing the
+       * stalled timeline. Revert to the conditional below if this doesn't
+       * discriminate. */
+      (void)data->after;
+      /* nil drawable = RAW-mode frame skip (mailbox) — nothing to present */
+      if (drawable)
+        cmdbuf.presentDrawable(drawable);
+      data->~PresentData();
+      break;
+    }
+    case EncoderType::Clear: {
+      auto data = static_cast<ClearEncoderData *>(current);
+      {
+        WMTRenderPassInfo info;
+        WMT::InitializeRenderPassInfo(info);
+        if (data->clear_dsv) {
+          if (data->clear_dsv & 1) {
+            info.depth.clear_depth = data->depth_stencil.first;
+            info.depth.texture = data->attachment.texture();
+            info.depth.load_action = WMTLoadActionClear;
+            info.depth.store_action = WMTStoreActionStore;
+          }
+          if (data->clear_dsv & 2) {
+            info.stencil.clear_stencil = data->depth_stencil.second;
+            info.stencil.texture = data->attachment.texture();
+            info.stencil.load_action = WMTLoadActionClear;
+            info.stencil.store_action = WMTStoreActionStore;
+          }
+          info.render_target_width = data->width;
+          info.render_target_height = data->height;
+        } else {
+          info.colors[0].clear_color = data->color;
+          info.colors[0].texture = data->attachment.texture();
+          info.colors[0].load_action = WMTLoadActionClear;
+          info.colors[0].store_action = WMTStoreActionStore;
+        }
+        info.render_target_array_length = data->array_length;
+        auto encoder = cmdbuf.renderCommandEncoder(info);
+        encoder.setLabel(WMT::String::string("ClearPass", WMTUTF8StringEncoding));
+        encoder.endEncoding();
+      }
+      data->~ClearEncoderData();
+      break;
+    }
+    case EncoderType::Resolve: {
+      auto data = static_cast<ResolveEncoderData *>(current);
+      /* MADEIRA (WOW64_DESIGN.md section 7.11): the Direct3D 9 depth resolve.
+       * Point resolve of a multisampled depth surface: a depth-only render pass
+       * whose fragment shader reads sample 0 of the source (bound as a fragment
+       * depth texture) and writes the destination depth attachment. Only the
+       * depth aspect is resolved; a depth-stencil source's stencil is not
+       * carried, matching wined3d and DXVK. */
+      if (data->is_depth) {
+        auto src_texture = data->src.texture();
+        auto dst_texture = data->dst.texture();
+        if (!src_texture || !dst_texture) {
+          WARN("skipped a depth resolve with a missing attachment, encoder=", data->id);
+          data->~ResolveEncoderData();
+          break;
+        }
+        auto *dst_allocation = data->dst.ptr() ? data->dst->allocation : nullptr;
+        auto *dst_descriptor = dst_allocation ? dst_allocation->descriptor : nullptr;
+
+        WMTRenderPassInfo info;
+        WMT::InitializeRenderPassInfo(info);
+        info.depth.texture = dst_texture;
+        info.depth.load_action = WMTLoadActionDontCare;
+        info.depth.store_action = WMTStoreActionStore;
+        if (dst_descriptor) {
+          info.render_target_width = dst_descriptor->width(data->dst->key);
+          info.render_target_height = dst_descriptor->height(data->dst->key);
+        }
+        info.render_target_array_length = 1;
+        info.default_raster_sample_count = 1;
+
+        if (!depth_resolve_dss_) {
+          WMTDepthStencilInfo ds_info = {};
+          ds_info.depth_compare_function = WMTCompareFunctionAlways;
+          ds_info.depth_write_enabled = true;
+          depth_resolve_dss_ = device_.newDepthStencilState(ds_info);
+        }
+
+        auto encoder = cmdbuf.renderCommandEncoder(info);
+        encoder.setLabel(WMT::String::string("DepthResolvePass", WMTUTF8StringEncoding));
+        struct ResolveMetadata {
+          uint32_t src_origin[2];
+          uint32_t dst_origin[2];
+          uint32_t size[2];
+        } metadata = {};
+        metadata.src_origin[0] = data->src_rect ? data->src_rect->x : 0;
+        metadata.src_origin[1] = data->src_rect ? data->src_rect->y : 0;
+        metadata.dst_origin[0] = data->dst_origin.x;
+        metadata.dst_origin[1] = data->dst_origin.y;
+        metadata.size[0] = data->resolve_size.width ? data->resolve_size.width : info.render_target_width;
+        metadata.size[1] = data->resolve_size.height ? data->resolve_size.height : info.render_target_height;
+        encoder.setRenderPipelineState(data->pso);
+        encoder.setDepthStencilState(depth_resolve_dss_);
+        encoder.setFragmentTexture(src_texture, 0);
+        encoder.setFragmentBytes(&metadata, sizeof(metadata), 0);
+        encoder.setViewport(
+            {double(metadata.dst_origin[0]), double(metadata.dst_origin[1]), double(metadata.size[0]),
+             double(metadata.size[1]), 0.0, 1.0}
+        );
+        encoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0, 3);
+        encoder.endEncoding();
+        data->~ResolveEncoderData();
+        break;
+      }
+      /* MADEIRA: the shader colour resolve, for a sub-rect, an offset
+       * destination or a format-converting resolve, none of which Metal's own
+       * multisample-resolve store action can express. */
+      if (data->pso) {
+        auto src_texture = data->src.texture();
+        auto dst_texture = data->dst.texture();
+        if (!src_texture || !dst_texture) {
+          WARN("skipped a shader resolve with a missing attachment, encoder=", data->id);
+          data->~ResolveEncoderData();
+          break;
+        }
+        auto *dst_allocation = data->dst.ptr() ? data->dst->allocation : nullptr;
+        auto *dst_descriptor = dst_allocation ? dst_allocation->descriptor : nullptr;
+
+        WMTRenderPassInfo info;
+        WMT::InitializeRenderPassInfo(info);
+        info.colors[0].texture = dst_texture;
+        info.colors[0].load_action = WMTLoadActionLoad;
+        info.colors[0].store_action = WMTStoreActionStore;
+        if (dst_descriptor) {
+          info.render_target_width = dst_descriptor->width(data->dst->key);
+          info.render_target_height = dst_descriptor->height(data->dst->key);
+        }
+        info.render_target_array_length = 1;
+        info.default_raster_sample_count = 1;
+
+        auto encoder = cmdbuf.renderCommandEncoder(info);
+        encoder.setLabel(WMT::String::string("ShaderResolvePass", WMTUTF8StringEncoding));
+        struct ResolveMetadata {
+          uint32_t src_origin[2];
+          uint32_t dst_origin[2];
+          uint32_t size[2];
+        } metadata = {};
+        metadata.src_origin[0] = data->src_rect ? data->src_rect->x : 0;
+        metadata.src_origin[1] = data->src_rect ? data->src_rect->y : 0;
+        metadata.dst_origin[0] = data->dst_origin.x;
+        metadata.dst_origin[1] = data->dst_origin.y;
+        metadata.size[0] = data->resolve_size.width ? data->resolve_size.width : info.render_target_width;
+        metadata.size[1] = data->resolve_size.height ? data->resolve_size.height : info.render_target_height;
+        encoder.setRenderPipelineState(data->pso);
+        encoder.setFragmentTexture(src_texture, 0);
+        encoder.setFragmentBytes(&metadata, sizeof(metadata), 0);
+        encoder.setViewport(
+            {double(metadata.dst_origin[0]), double(metadata.dst_origin[1]), double(metadata.size[0]),
+             double(metadata.size[1]), 0.0, 1.0}
+        );
+        encoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0, 3);
+        encoder.endEncoding();
+        data->~ResolveEncoderData();
+        break;
+      }
+      {
+        WMTRenderPassInfo info;
+        WMT::InitializeRenderPassInfo(info);
+        info.colors[0].texture = data->src.texture();
+        info.colors[0].load_action = WMTLoadActionLoad;
+        info.colors[0].store_action = WMTStoreActionStoreAndMultisampleResolve;
+        info.colors[0].resolve_texture = data->dst.texture();
+
+        auto encoder = cmdbuf.renderCommandEncoder(info);
+        encoder.setLabel(WMT::String::string("ResolvePass", WMTUTF8StringEncoding));
+        encoder.endEncoding();
+      }
+      data->~ResolveEncoderData();
+      break;
+    }
+    /* MADEIRA (WOW64_DESIGN.md section 7.11): the Direct3D 9 StretchRect
+     * render-pass scale. Samples the source through a cached PSO + sampler and
+     * stores into a viewport-restricted region of the destination. */
+    case EncoderType::StretchBlit: {
+      auto data = static_cast<StretchBlitEncoderData *>(current);
+      {
+        auto *dst_allocation = data->dst.ptr() ? data->dst->allocation : nullptr;
+        auto *dst_descriptor = dst_allocation ? dst_allocation->descriptor : nullptr;
+
+        WMTRenderPassInfo info;
+        WMT::InitializeRenderPassInfo(info);
+        info.colors[0].texture = data->dst.texture();
+        info.colors[0].load_action = WMTLoadActionLoad;
+        info.colors[0].store_action = WMTStoreActionStore;
+        if (dst_descriptor) {
+          info.render_target_width = dst_descriptor->width(data->dst->key);
+          info.render_target_height = dst_descriptor->height(data->dst->key);
+          info.render_target_array_length = 1;
+          // A single-sample -> multisample StretchRect broadcasts the sampled
+          // source into every sample, so the pass raster count follows the
+          // destination (1 for the common single-sample dst, unchanged).
+          info.default_raster_sample_count = dst_descriptor->sampleCount();
+        } else {
+          info.default_raster_sample_count = 1;
+        }
+
+        auto encoder = cmdbuf.renderCommandEncoder(info);
+        encoder.setLabel(WMT::String::string("StretchBlitPass", WMTUTF8StringEncoding));
+        if (data->pso && data->sampler) {
+          struct {
+            float src_uv_origin[2];
+            float src_uv_size[2];
+          } metadata{};
+          metadata.src_uv_origin[0] = data->src_uv_origin[0];
+          metadata.src_uv_origin[1] = data->src_uv_origin[1];
+          metadata.src_uv_size[0] = data->src_uv_size[0];
+          metadata.src_uv_size[1] = data->src_uv_size[1];
+          encoder.setRenderPipelineState(data->pso);
+          encoder.setFragmentTexture(data->src.texture(), 0);
+          encoder.setFragmentSamplerState(data->sampler, 0);
+          encoder.setFragmentBytes(&metadata, sizeof(metadata), 0);
+          encoder.setViewport(
+              {double(data->dst_origin.x), double(data->dst_origin.y), double(data->dst_size.width),
+               double(data->dst_size.height), 0.0, 1.0}
+          );
+          encoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0, 3);
+        }
+        encoder.endEncoding();
+      }
+      data->~StretchBlitEncoderData();
+      break;
+    }
+    case EncoderType::SpatialUpscale: {
+      auto data = static_cast<SpatialUpscaleData *>(current);
+      cmdbuf.encodeSpatialScale(data->scaler, data->backbuffer, data->upscaled, {});
+      data->~SpatialUpscaleData();
+      break;
+    }
+    case EncoderType::SignalEvent: {
+      auto data = static_cast<SignalEventData *>(current);
+      cmdbuf.encodeSignalEvent(data->event, data->value);
+      data->~SignalEventData();
+      break;
+    }
+    case EncoderType::WaitForEvent: {
+      auto data = static_cast<WaitForEventData *>(current);
+      cmdbuf.encodeWaitForEvent(data->event, data->value);
+      data->~WaitForEventData();
+      break;
+    }
+    case EncoderType::TemporalUpscale: {
+      auto data = static_cast<TemporalUpscaleData *>(current);
+      cmdbuf.encodeTemporalScale(data->scaler, data->input, data->output, data->depth, data->motion_vector, data->exposure, {}, data->props);
+      data->~TemporalUpscaleData();
+      break;
+    }
+    default:
+      break;
+    }
+    encoder_index--;
+  }
+  encoder_head.next = nullptr;
+  encoder_last = &encoder_head;
+  encoder_count_ = 0;
+
+  cmdbuf.encodeSignalEvent(queue_.event, event_seq_id);
+
+  for (size_t i = cpu_buffer_chunks_.size() - 1; i > current_buffer_chunk_; i--) {
+    if (++cpu_buffer_chunks_[i].underused_times > kEncodingContextCPUHeapLifetime) {
+      cpu_buffer_chunks_.pop_back();
+    }
+  }
+
+  return visibility_readback;
+}
+
+DXMT_ENCODER_LIST_OP
+ArgumentEncodingContext::checkEncoderRelation(EncoderData *former, EncoderData *latter) {
+  if (former->type == EncoderType::Null)
+    return DXMT_ENCODER_LIST_OP_SWAP;
+  if (latter->type == EncoderType::Null)
+    return DXMT_ENCODER_LIST_OP_SWAP;
+  if (former->type == EncoderType::SignalEvent)
+    return DXMT_ENCODER_LIST_OP_SYNCHRONIZE;
+  if (latter->type == EncoderType::SignalEvent)
+    return DXMT_ENCODER_LIST_OP_SYNCHRONIZE;
+  if (former->type == EncoderType::WaitForEvent)
+    return DXMT_ENCODER_LIST_OP_SYNCHRONIZE;
+  if (latter->type == EncoderType::WaitForEvent)
+    return DXMT_ENCODER_LIST_OP_SYNCHRONIZE;
+
+  while (former->type != latter->type) {
+    if (former->type == EncoderType::Clear && latter->type == EncoderType::Render) {
+      auto render = reinterpret_cast<RenderEncoderData *>(latter);
+      auto clear = reinterpret_cast<ClearEncoderData *>(former);
+
+      if (render->render_target_array_length != clear->array_length)
+        break;
+
+      if (clear->clear_dsv) {
+        if (auto depth_attachment = isClearDepthSignatureMatched(clear, render)) {
+          if (depth_attachment->load_action == WMTLoadActionLoad) {
+            depth_attachment->clear_depth = clear->depth_stencil.first;
+            depth_attachment->load_action = WMTLoadActionClear;
+            depth_attachment->store_action = WMTStoreActionStore;
+            render->tex_write.merge(clear->tex_write);
+          }
+          clear->clear_dsv &= ~1;
+        }
+        if (auto stencil_attachment = isClearStencilSignatureMatched(clear, render)) {
+          if (stencil_attachment->load_action == WMTLoadActionLoad) {
+            stencil_attachment->clear_stencil = clear->depth_stencil.second;
+            stencil_attachment->load_action = WMTLoadActionClear;
+            stencil_attachment->store_action = WMTStoreActionStore;
+            render->tex_write.merge(clear->tex_write);
+          }
+          clear->clear_dsv &= ~2;
+        }
+        if (clear->clear_dsv == 0) {
+          currentFrameStatistics().clear_pass_optimized++;
+          clear->~ClearEncoderData();
+          clear->next = nullptr;
+          clear->type = EncoderType::Null;
+          return DXMT_ENCODER_LIST_OP_SYNCHRONIZE;
+        }
+      } else {
+        if (auto attachment = isClearColorSignatureMatched(clear, render)) {
+          if (attachment->load_action == WMTLoadActionLoad) {
+            attachment->load_action = WMTLoadActionClear;
+            attachment->clear_color = clear->color;
+            if (attachment->store_action != WMTStoreActionDontCare)
+              render->tex_write.merge(clear->tex_write);
+          }
+
+          currentFrameStatistics().clear_pass_optimized++;
+          clear->~ClearEncoderData();
+          clear->next = nullptr;
+          clear->type = EncoderType::Null;
+          return DXMT_ENCODER_LIST_OP_SYNCHRONIZE;
+        }
+      }
+      break;
+    }
+    if (latter->type == EncoderType::Clear && former->type == EncoderType::Render) {
+      auto render = reinterpret_cast<RenderEncoderData *>(former);
+      auto clear = reinterpret_cast<ClearEncoderData *>(latter);
+
+      // MADEIRA (ml1190): DXMT_CLEAR_DISCARD_STORE is a Madeira switch
+      // (util_madeira_switch.hpp), on by default only in the i386 build.
+      static const bool discardColor = [] {
+        const bool enabled = madeiraSwitch("DXMT_CLEAR_DISCARD_STORE");
+        if (enabled)
+          Logger::info("[clear-store] ml1190 enabled (DXMT_CLEAR_DISCARD_STORE=0 disables)");
+        return enabled;
+      }();
+      // A full clear makes the preceding color store dead. Keep dependency
+      // tracking intact, and only match the exact view and covered subresource.
+      // Resolve stores and partial clears must retain their original behavior.
+      if (discardColor && !clear->clear_dsv && clear->attachment &&
+          clear->array_length == render->render_target_array_length &&
+          clear->width == render->render_target_width && clear->height == render->render_target_height) {
+        for (unsigned i = 0; i < render->render_target_count; ++i) {
+          auto &color = render->colors[i];
+          if (color.attachment == clear->attachment && !color.level && !color.slice && !color.depth_plane &&
+              !color.resolve_attachment && color.store_action == WMTStoreActionStore) {
+            color.store_action = WMTStoreActionDontCare;
+            static std::atomic<uint64_t> saved{0};
+            const auto total = saved.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (total <= 4 || !(total % 4096))
+              Logger::warn(str::format("[clear-store] ml1190 overwritten color stores skipped=", total));
+          }
+        }
+      }
+
+      // DontCare can be used because it's going to be cleared anyway
+      // just keep in mind DontCare != DontStore
+      if (clear->clear_dsv & 1 && render->depth.attachment == clear->attachment)
+        render->depth.store_action = WMTStoreActionDontCare;
+      if (clear->clear_dsv & 2 && render->stencil.attachment == clear->attachment)
+        render->stencil.store_action = WMTStoreActionDontCare;
+    }
+    if (former->type == EncoderType::Render && latter->type == EncoderType::Resolve) {
+      auto render = reinterpret_cast<RenderEncoderData *>(former);
+      auto resolve = reinterpret_cast<ResolveEncoderData *>(latter);
+      auto result = isResolveSignatureMatched(render, resolve);
+      if (result.src) {
+        result.src->store_action = WMTStoreActionStoreAndMultisampleResolve;
+        result.src->resolve_attachment = result.dst;
+        render->tex_write.merge(resolve->tex_write);
+
+        currentFrameStatistics().resolve_pass_optimized++;
+        resolve->~ResolveEncoderData();
+        resolve->next = nullptr;
+        resolve->type = EncoderType::Null;
+        return DXMT_ENCODER_LIST_OP_SWAP; // carry on (RENDER -> RESOLVE -> RESOLVE -> ...)
+      }
+    }
+    return hasDataDependency(latter, former) ? DXMT_ENCODER_LIST_OP_SYNCHRONIZE : DXMT_ENCODER_LIST_OP_SWAP;
+  }
+
+  if (former->type == EncoderType::Render) {
+    auto r1 = reinterpret_cast<RenderEncoderData *>(latter);
+    auto r0 = reinterpret_cast<RenderEncoderData *>(former);
+
+    if (isEncoderSignatureMatched(r0, r1)) {
+      for (unsigned i = 0; i < r0->render_target_count; i++) {
+        auto &a0 = r0->colors[i];
+        auto &a1 = r1->colors[i];
+        a1.load_action = a0.load_action;
+        a1.clear_color = a0.clear_color;
+      }
+
+      r1->depth.load_action = r0->depth.load_action;
+      r1->depth.clear_depth = r0->depth.clear_depth;
+      r1->depth.store_action = r0->depth.store_action;
+      r1->stencil.load_action = r0->stencil.load_action;
+      r1->stencil.clear_stencil = r0->stencil.clear_stencil;
+      r1->stencil.store_action = r0->stencil.store_action;
+
+      if ((void *)r0->cmd_tail != &r0->cmd_head) {
+        r0->cmd_tail->next.set(r1->cmd_head.next.get());
+        r1->cmd_head.next.set(r0->cmd_head.next.get());
+        r0->cmd_head.next.set(nullptr);
+        r0->cmd_tail = (wmtcmd_base *)&r0->cmd_head;
+      }
+      r1->use_tessellation = r0->use_tessellation || r1->use_tessellation;
+      r1->use_geometry = r0->use_geometry || r1->use_geometry;
+      std::move(
+        r1->gs_arg_marshal_tasks.begin(),
+        r1->gs_arg_marshal_tasks.end(),
+        std::back_inserter(r0->gs_arg_marshal_tasks)
+      );
+      std::move(
+        r1->ts_arg_marshal_tasks.begin(),
+        r1->ts_arg_marshal_tasks.end(),
+        std::back_inserter(r0->ts_arg_marshal_tasks)
+      );
+      r1->gs_arg_marshal_tasks = std::move(r0->gs_arg_marshal_tasks);
+      r1->ts_arg_marshal_tasks = std::move(r0->ts_arg_marshal_tasks);
+      r1->use_visibility_result = r0->use_visibility_result || r1->use_visibility_result;
+
+      r1->buf_read.merge(r0->buf_read);
+      r1->buf_write.merge(r0->buf_write);
+      r1->tex_read.merge(r0->tex_read);
+      r1->tex_write.merge(r0->tex_write);
+
+      currentFrameStatistics().render_pass_optimized++;
+      r0->~RenderEncoderData();
+      r0->next = nullptr;
+      r0->type = EncoderType::Null;
+
+      return DXMT_ENCODER_LIST_OP_SYNCHRONIZE;
+    }
+  }
+
+  return hasDataDependency(latter, former) ? DXMT_ENCODER_LIST_OP_SYNCHRONIZE : DXMT_ENCODER_LIST_OP_SWAP;
+}
+
+bool
+ArgumentEncodingContext::hasDataDependency(EncoderData *latter, EncoderData *former) {
+  if (latter->type == EncoderType::Clear && former->type == EncoderType::Clear) {
+    // FIXME: prove it's safe to return false
+    return false;
+  }
+  // read-after-write
+  if (!former->buf_write.isDisjointWith(latter->buf_read))
+    return true;
+  if (!former->tex_write.isDisjointWith(latter->tex_read))
+    return true;
+  // write-after-write
+  if (!former->buf_write.isDisjointWith(latter->buf_write))
+    return true;
+  if (!former->tex_write.isDisjointWith(latter->tex_write))
+    return true;
+  // write-after-read
+  if (!former->buf_read.isDisjointWith(latter->buf_write))
+    return true;
+  if (!former->tex_read.isDisjointWith(latter->tex_write))
+    return true;
+  return false;
+}
+
+bool
+ArgumentEncodingContext::isEncoderSignatureMatched(RenderEncoderData *r0, RenderEncoderData *r1) {
+  // FIXME: it can be different?
+  if (r0->render_target_count != r1->render_target_count)
+    return false;
+  if (r0->dsv_planar_flags != r1->dsv_planar_flags)
+    return false;
+  if (r0->dsv_readonly_flags != r1->dsv_readonly_flags)
+    return false;
+  if (r0->render_target_array_length != r1->render_target_array_length)
+    return false;
+  /**
+  In case two encoder has different argument buffer
+  It can be further optimized by inserting extra setBuffer() calls
+  but let's just simplify it, as it's a rather rare case.
+  */
+  if (r0->allocated_argbuf != r1->allocated_argbuf)
+    return false;
+  if (r0->dsv_planar_flags & 1) {
+    if (r0->depth.attachment != r1->depth.attachment)
+      return false;
+    if (r0->dsv_readonly_flags & 1) {
+      if (r1->depth.load_action == WMTLoadActionClear)
+        return false;
+    } else {
+      if (r0->depth.store_action != WMTStoreActionStore)
+        return false;
+      if (r1->depth.load_action != WMTLoadActionLoad)
+        return false;
+    }
+  }
+  if (r0->dsv_planar_flags & 2) {
+    if (r0->stencil.attachment != r1->stencil.attachment)
+      return false;
+    if (r0->dsv_readonly_flags & 2) {
+      if (r1->stencil.load_action == WMTLoadActionClear)
+        return false;
+    } else {
+      if (r0->stencil.store_action != WMTStoreActionStore)
+        return false;
+      if (r1->stencil.load_action != WMTLoadActionLoad)
+        return false;
+    }
+  }
+  for (unsigned i = 0; i < r0->render_target_count; i++) {
+    auto &a0 = r0->colors[i];
+    auto &a1 = r1->colors[i];
+    if (a0.attachment != a1.attachment)
+      return false;
+    if (a0.depth_plane != a1.depth_plane)
+      return false;
+    if (!a0.attachment)
+      continue;
+    if (a0.store_action != WMTStoreActionStore)
+      return false;
+    if (a1.load_action != WMTLoadActionLoad)
+      return false;
+  }
+  return true;
+}
+
+RenderEncoderColorAttachmentData *
+ArgumentEncodingContext::isClearColorSignatureMatched(ClearEncoderData *clear, RenderEncoderData *render) {
+  for (unsigned i = 0; i < render->render_target_count; i++) {
+    auto &attachment = render->colors[i];
+    if (attachment.attachment == clear->attachment) {
+      return &attachment;
+    }
+  }
+  return nullptr;
+}
+
+RenderEncoderDepthAttachmentData *
+ArgumentEncodingContext::isClearDepthSignatureMatched(ClearEncoderData *clear, RenderEncoderData *render) {
+  if ((clear->clear_dsv & 1) == 0)
+    return nullptr;
+  if (render->depth.attachment != clear->attachment)
+    return nullptr;
+  return &render->depth;
+}
+
+RenderEncoderStencilAttachmentData *
+ArgumentEncodingContext::isClearStencilSignatureMatched(ClearEncoderData *clear, RenderEncoderData *render) {
+  if ((clear->clear_dsv & 2) == 0)
+    return nullptr;
+  if (render->stencil.attachment != clear->attachment)
+    return nullptr;
+  return &render->stencil;
+}
+
+ArgumentEncodingContext::ResolveSignatureMatchResult
+ArgumentEncodingContext::isResolveSignatureMatched(RenderEncoderData *render, ResolveEncoderData *resolve) {
+  ResolveSignatureMatchResult ret{};
+  for (unsigned i = 0; i < render->render_target_count; i++) {
+    auto &color = render->colors[i];
+    if (!color.attachment)
+      continue;
+    if (color.store_action != WMTStoreActionStore)
+      continue;
+    if (color.resolve_attachment)
+      continue;
+    if (color.attachment->allocation != resolve->src->allocation)
+      continue;
+    if (color.attachment->key == resolve->src->key) {
+      ret.src = &color;
+      ret.dst = resolve->dst;
+      break;
+    };
+    auto &descriptor_src = resolve->src->allocation->descriptor;
+    auto &descriptor_dst = resolve->dst->allocation->descriptor;
+    auto color_format = descriptor_src->pixelFormat(color.attachment->key);
+    auto view_src_in_color_format = descriptor_src->checkViewUseFormat(resolve->src->key, color_format);
+    if (color.attachment->key == view_src_in_color_format) {
+      auto view_dst_in_color_format = descriptor_dst->checkViewUseFormat(resolve->dst->key, color_format);
+      ret.src = &color;
+      ret.dst = descriptor_dst->view(view_dst_in_color_format, resolve->dst->allocation);
+      break;
+    }
+  }
+  return ret;
+}
+
+} // namespace dxmt

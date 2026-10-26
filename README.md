@@ -12,6 +12,31 @@ Madeira's Direct3D 12 runtime) and adds its own interface, stores and quality-of
 > RIG is an experimental, personal project. Many games start and some play
 > well, but performance and compatibility vary from game to game.
 
+> **Tested on an iPhone 16 Pro Max** (8 GB) running iOS 27. Other recent Pro
+> iPhones should work; phones with less memory will run fewer games.
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/home.jpg" alt="Home: jump back in to your last game" width="49%">
+  <img src="docs/screenshots/store.jpg" alt="Store: Steam, GOG and Epic in one place" width="49%">
+</p>
+<p align="center">
+  <img src="docs/screenshots/guide.jpg" alt="The guide, opened with the Xbox button" width="49%">
+  <img src="docs/screenshots/download.jpg" alt="A store page while downloading, with the compatibility estimate" width="49%">
+</p>
+<p align="center">
+  <img src="docs/screenshots/touch-library.jpg" alt="The touch library" width="70%">
+</p>
+
+| | |
+|---|---|
+| **Home** | Jump back in to your last game, with your library underneath. |
+| **Store** | Steam, GOG and Epic Games together, with filters and compatibility badges. |
+| **Guide** | The Xbox button opens it from anywhere: profile, store, settings, restart. |
+| **Store page** | Download progress, download versus installed size, and whether it will run. |
+| **Touch library** | Everything also works by touch when no controller is connected. |
+
 ## What RIG adds
 
 ### A console home screen
@@ -64,7 +89,8 @@ emulation are labelled as such.
 
 ## Requirements
 
-- An iPhone on **iOS 26 or later** (developed on an iPhone 16 Pro Max on iOS 27).
+- An iPhone on **iOS 26 or later**. RIG is developed and tested on an
+  **iPhone 16 Pro Max** on iOS 27.
 - **JIT**, which iOS only allows while a debugger is attached, through
   [StikDebug](https://github.com/StikDebug/StikDebug) or the built-in StikJIT
   helper. See [`docs/JIT.md`](docs/JIT.md).
@@ -73,20 +99,20 @@ emulation are labelled as such.
 ## Building
 
 ```sh
-git clone --recurse-submodules https://github.com/yabdelsa2862-lab/RIG.git
+git clone https://github.com/yabdelsa2862-lab/RIG.git
 ```
 
-Open `app/Madeira.xcodeproj` and build the **Madeira** scheme. The project and
+Everything is in this one repository, including RIG's versions of Wine, FEX-Emu,
+DXMT and the Steam launcher (no submodules to fetch). Open
+`app/Madeira.xcodeproj` and build the **Madeira** scheme; the project and
 internal names still say Madeira, and the app shows as RIG. The native parts
 (Wine unix libraries, ARM64EC modules, FEX, DXMT) are built with the scripts in
 [`build/`](build); [`docs/BUILDING.md`](docs/BUILDING.md) walks through all of it.
 
-The `FEX`, `wine`, `dxmt` and `madeira-dock` submodules point at Madeira's
-public forks. RIG's own small changes to them are not published yet.
-
 | Path | Contents |
 |---|---|
 | [`app/`](app) | The iOS app: SwiftUI interface, stores, Wine bridge and resources |
+| [`wine/`](wine), [`FEX/`](FEX), [`dxmt/`](dxmt), [`madeira-dock/`](madeira-dock) | Wine, the x86 translator, the Direct3D-to-Metal layer and the Steam launcher, with RIG's changes |
 | [`build/`](build) | Build scripts and iOS-side sources, one folder per component |
 | [`madeira-d3d12/`](madeira-d3d12) | The native Direct3D 12 runtime |
 | [`docs/`](docs) | Documentation (inherited from Madeira) |
@@ -100,13 +126,20 @@ Third-party components keep their own licenses; see
 [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md) and [`LICENSES/`](LICENSES).
 Microsoft's Visual C++ runtime is not included.
 
+## Thank you, Madeira
+
+RIG would not exist without [**Madeira**](https://github.com/willfaust/Madeira).
+All the hard parts are Madeira's work: running Windows games on an iPhone at all,
+the JIT, Wine and FEX on iOS, Direct3D on Metal and Steam support. Thank you to
+**Will Faust** ([@willfaust](https://github.com/willfaust)) for creating it and
+sharing it as open source, and to everyone who built it with him, including
+125hz, Jfishin, JesseLovelace, danperks, bahacan16, spitefulowl, meshoklv and
+TheHadesc. If you like RIG, go star and support Madeira.
+
 ## Credits
 
-RIG exists because of [Madeira](https://github.com/willfaust/Madeira),
-created by **Will Faust** ([@willfaust](https://github.com/willfaust)), and
-everyone who contributed to it, including 125hz, Jfishin, JesseLovelace,
-danperks, bahacan16, spitefulowl, meshoklv and TheHadesc. Fixes were also taken
-from the community forks of [Notbood](https://github.com/Notbood/Madeira) and
+Fixes were also taken from the community forks of
+[Notbood](https://github.com/Notbood/Madeira) and
 [kuscholar](https://github.com/kuscholar/Madeira).
 
 It is built on [Wine](https://www.winehq.org/), [FEX-Emu](https://github.com/FEX-Emu/FEX),

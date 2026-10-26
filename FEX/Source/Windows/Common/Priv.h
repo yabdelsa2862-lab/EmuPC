@@ -1,0 +1,118 @@
+// SPDX-License-Identifier: MIT
+#pragma once
+
+#include <cstdint>
+#include <exception>
+#include <winternl.h>
+
+#ifdef FEX_IOS_HOST
+// Defined in FEXCore (Arm64Emitter.cpp); both modules import it from ntdll at process init.
+extern "C" uint32_t IosTebTsdOffset;
+#endif
+
+static inline __TEB* GetCurrentTEB() {
+#ifdef FEX_IOS_HOST
+  // MADEIRA: NtCurrentTeb() is a read of x18, which the iOS host does not preserve: it reads 0 on
+  // some threads, and the WinAPI shims (TlsGetValue and friends) then fault on TEB->TlsSlots.
+  // Take the TEB Wine publishes in the thread's TSD slot, as IOSLoadTEB() and the JIT do, and fall
+  // back to x18 only while the offset is not imported yet or the slot is still empty.
+  if (const uint32_t Offset = ::IosTebTsdOffset) {
+    uintptr_t Tpidrro;
+    __asm__ volatile("mrs %0, TPIDRRO_EL0" : "=r"(Tpidrro));
+    if (auto* Teb = *reinterpret_cast<__TEB**>((Tpidrro & ~uintptr_t(7)) + Offset)) {
+      return Teb;
+    }
+  }
+#endif
+  return reinterpret_cast<__TEB*>(NtCurrentTeb());
+}
+
+static inline __PEB* GetCurrentPEB() {
+  return GetCurrentTEB()->Peb;
+}
+
+static inline bool WinAPIReturn(NTSTATUS Status) {
+  if (!Status) {
+    return true;
+  }
+  GetCurrentTEB()->LastErrorValue = RtlNtStatusToDosError(Status);
+  return false;
+}
+
+static inline UNICODE_STRING InitUnicodeString(const wchar_t* String) {
+  UNICODE_STRING StringDesc;
+  RtlInitUnicodeString(&StringDesc, String);
+  return StringDesc;
+}
+
+static inline STRING InitAnsiString(const char* String) {
+  STRING StringDesc;
+  RtlInitAnsiString(&StringDesc, String);
+  return StringDesc;
+}
+
+class ScopedUnicodeString {
+private:
+  UNICODE_STRING Str {};
+public:
+  ScopedUnicodeString() = default;
+
+  ScopedUnicodeString(const char* AStr) {
+    RtlCreateUnicodeStringFromAsciiz(&Str, AStr);
+  }
+
+  ~ScopedUnicodeString() {
+    RtlFreeUnicodeString(&Str);
+  }
+
+  UNICODE_STRING* operator->() {
+    return &Str;
+  }
+
+  UNICODE_STRING& operator*() {
+    return Str;
+  }
+};
+
+
+/* Encode the stub's source location in the exit status so we can identify
+ * which UNIMPLEMENTED was hit. The 16 LSBs of __LINE__ go into bits 0-15;
+ * the next 8 bits hash the basename (mostly first letter for disambiguation
+ * between IO.cpp/String.cpp/Misc.cpp); 0xFE marks "FEX UNIMPLEMENTED" exits. */
+#define UNIMPLEMENTED()                                                       \
+  do {                                                                        \
+    /* Use __FILE__'s last byte before the extension as a discriminator. */   \
+    unsigned _file_tag = (unsigned char)(__FILE__[sizeof(__FILE__) - 6]);     \
+    NtTerminateProcess(NtCurrentProcess(),                                    \
+        (NTSTATUS)(0xFE000000u | ((_file_tag & 0xFFu) << 16) |                \
+                   (__LINE__ & 0xFFFFu)));                                    \
+    __fastfail(0);                                                            \
+  } while (0)
+
+#define DLLEXPORT_FUNC(Ret, Name, Args) \
+  extern "C" Ret Name Args;             \
+  Ret(*__imp_##Name) Args = Name;       \
+  Ret(*__imp_aux_##Name) Args = Name;   \
+  Ret Name Args
+
+// Whether a caller's MEM_EXTENDED_PARAMETER list already names `Type` (used by VirtualAlloc2).
+//
+// NtAllocateVirtualMemoryEx rejects a list that names the same parameter type twice, so the WOW64
+// module must not append its own MemExtendedParameterAddressRequirements to a caller's list that
+// already has one: on the iOS host that failed every deliberate host-band placement FEX makes
+// (AllocatorHooks.h, CallRetStack.h). The caller's requirement is the stricter one. The ARM64EC
+// module keeps its current behaviour (always false). A template so that this header does not need
+// the memory-API declarations.
+template<typename ParamT, typename TypeT>
+static inline bool HasExtendedParameter(const ParamT* Params, unsigned long Count, TypeT Type) {
+#if defined(ARCHITECTURE_arm64ec)
+  return false;
+#else
+  for (unsigned long i = 0; Params && i < Count; ++i) {
+    if (Params[i].Type == Type) {
+      return true;
+    }
+  }
+  return false;
+#endif
+}
