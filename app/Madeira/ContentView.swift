@@ -2529,9 +2529,26 @@ struct ContentView: View {
             }
             return
         }
+        // MABD local: GOG's Quake II plays through Yamagi Quake II, set up here once if missing.
+        if entry.gogID == YamagiSetup.gameID {
+            let folder = LibraryModel.drive.appendingPathComponent((entry.relativePath as NSString).deletingLastPathComponent)
+            if YamagiSetup.shouldTry(folder) {
+                library.sessionMessage = "Setting up Quake II…"
+                Task { @MainActor in
+                    do { try await YamagiSetup.install(into: folder) }
+                    catch { library.error = error.localizedDescription }
+                    launchLibraryEntry(entry)
+                }
+                return
+            }
+        }
+        // MABD local: GOG launchers find their game through GOG's registry keys (GOG.swift).
+        if entry.gogID != nil { GOGRegistry.ensure(entry) }
         // madeira-bcd: a game seen for the first time starts with Madeira's recommended
         // settings (GameRecommendationsApply.swift).
         var entry = entry
+        if GOGLaunchOverride.apply(&entry) { library.save(entry) }
+        ButtonLayout.activate(for: entry)
         let isNew = !library.entries.contains { $0.id == entry.id }
         if GameRecommendations.prepare(&entry, new: isNew) { library.save(entry) }
         // A Steam game starts through Madeira Dock with its own launch profile (SteamGames.swift),

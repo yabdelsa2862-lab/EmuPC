@@ -62,7 +62,8 @@ Madeira's Direct3D 12 runtime) and adds its own interface, stores and quality-of
 - **Steam**, **GOG** and **Epic Games** in one store with filters (all, per
   store, ready to play, offline only, downloading).
 - **GOG**: sign in (Google sign-in supported), browse, download and install
-  owned games.
+  owned games. Older GOG releases (first-generation builds) download too, and
+  GOG games find their install folder the way they do on Windows.
 - **Epic Games**: sign in (including passkeys through Safari), install owned
   games, and launch them signed in.
 - **Store pages** with screenshots you can open full screen (and browse with
@@ -88,6 +89,12 @@ Madeira's Direct3D 12 runtime) and adds its own interface, stores and quality-of
 - **Wi-Fi controllers**: other phones on your network join as players 2–4.
 - **External display**: the game on a TV while the phone keeps the controls.
 - **External drive** support for game installs.
+- **Button layouts**: remap every controller button for all games (Settings ›
+  Controls) or give one game its own layout from its page. The Xbox / Home
+  button always opens the guide.
+- **Quake II from GOG** sets itself up: RIG fetches
+  [Yamagi Quake II](https://www.yamagi.org/quake2/) (checksum-pinned), keeps
+  GOG's files as backups, and starts it full screen with controller binds.
 - Better mouse wheel and pointer lock, and controllers that are detected even by
   games that only look for one at startup.
 

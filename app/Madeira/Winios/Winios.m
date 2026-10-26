@@ -1240,6 +1240,16 @@ static int winios_game_windows_enabled(void) {
     return !(e && *e == '0');
 }
 
+/* MABD local: MADEIRA_GAME_GDI_FULLSCREEN=1 (a game's own config) draws a
+ * full-desktop window that does not present through Metal too: a game that
+ * draws its picture with GDI, such as SDL's software renderer (Yamagi Quake
+ * II). Off by default, for God of War's full-desktop window above. Read every
+ * time, like MADEIRA_DESKTOP: each game session exports its own config. */
+static int winios_game_gdi_fullscreen(void) {
+    const char *e = getenv("MADEIRA_GAME_GDI_FULLSCREEN");
+    return e && *e == '1';
+}
+
 /* A window whose rect covers the whole guest desktop: a game's own window. */
 static BOOL winios_covers_desktop(CGRect px) {
     int dw = 0, dh = 0;
@@ -1277,7 +1287,7 @@ static BOOL winios_game_window_shown(NSNumber *key) {
     if (!g_comp_game) return YES;
     NSValue *rv = g_px_rects[key];
     BOOL metal = [g_game_metal containsObject:key];
-    if (!metal && rv && !winios_covers_desktop(rv.CGRectValue)) return YES;
+    if (!metal && rv && (!winios_covers_desktop(rv.CGRectValue) || winios_game_gdi_fullscreen())) return YES;
     CALayer *l = g_layers[key];
     if (l) {
         [l removeFromSuperlayer];

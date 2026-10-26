@@ -430,6 +430,9 @@ final class GamepadInput: @unchecked Sendable {
                         state.connected = 1
                         hidLive = nil
                         if keyboardMouse != nil { PadKeyboardMouse.shared.releaseAll("library menu") }
+                    } else if keyboardMouse == nil {
+                        // MABD local: the game's controller layout (GameTuning.swift).
+                        state = ButtonLayout.apply(state)
                     } else if let kbm = keyboardMouse {
                         // Keyboard-and-mouse mode: the pad becomes keys and mouse
                         // motion; XInput sees no physical player 1 (touch may still
@@ -447,6 +450,8 @@ final class GamepadInput: @unchecked Sendable {
                         state = winios_gamepad()
                         state.connected = 1
                     }
+                } else {
+                    state = ButtonLayout.apply(state)   // MABD local: players 2-4 follow the same layout
                 }
             }
             if active && touchConnected {

@@ -58,7 +58,9 @@ enum GOGAPI {
     }
 
     /// GOG serves its metadata and chunks zlib-wrapped; Foundation inflates raw DEFLATE.
+    /// MABD local: first-generation (v1) builds serve plain JSON, passed through as is.
     static func inflate(_ data: Data) throws -> Data {
+        if let first = data.first(where: { ![0x20, 0x09, 0x0a, 0x0d, 0xef, 0xbb, 0xbf].contains($0) }), first == UInt8(ascii: "{") { return data }
         guard data.count > 6, data[data.startIndex] & 0x0f == 8 else { throw GOGError.message("Bad compressed data from GOG.") }
         let raw = data.subdata(in: (data.startIndex + 2)..<(data.endIndex - 4))
         return try (raw as NSData).decompressed(using: .zlib) as Data
@@ -153,6 +155,14 @@ final class GOGLibrary: ObservableObject {
                   let (mdata, _) = try? await URLSession.shared.data(from: link),
                   let plain = try? GOGAPI.inflate(mdata),
                   let manifest = try? JSONSerialization.jsonObject(with: plain) as? [String: Any] else { return }
+            if let product = manifest["product"] as? [String: Any] {
+                // v1: one size per depot, the same downloaded and installed (no compression).
+                let chosen = GOGInstaller.v1Depots(product["depots"] as? [[String: Any]] ?? [], game: String(id))
+                let disk = chosen.reduce(Int64(0)) { $0 + ((($1["size"] as? NSNumber)?.int64Value) ?? Int64($1["size"] as? String ?? "") ?? 0) }
+                sizes[id] = StoreSize(download: disk, disk: disk)
+                StoreSize.save(Dictionary(uniqueKeysWithValues: sizes.map { (String($0.key), $0.value) }), "gog-sizes.json")
+                return
+            }
             let depots = (manifest["depots"] as? [[String: Any]] ?? []).filter {
                 ($0["isGogDepot"] as? Bool) != true && ($0["productId"] as? String) == String(id)
             }
@@ -370,6 +380,50 @@ struct GOGInstaller {
               let link = (build["link"] as? String).flatMap(URL.init(string:)) else {
             throw GOGError.message("This game has no Galaxy download on GOG (only an older installer), which Rig can't use yet.")
         }
+        let generation = (build["generation"] as? NSNumber)?.intValue ?? 2
+        let (folder, folderName, need) = generation == 1
+            ? try await downloadV1(build: build, link: link)
+            : try await downloadV2(build: build, link: link)
+
+        // The program: goggame-<id>.info's primary play task.
+        let info = folder.appendingPathComponent("goggame-\(game.id).info")
+        var program: URL?
+        var arguments = ""
+        var workingDirectory: String?
+        if let data = try? Data(contentsOf: info),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let tasks = obj["playTasks"] as? [[String: Any]] {
+            let task = tasks.first { ($0["isPrimary"] as? Bool) == true && ($0["type"] as? String ?? "FileTask") == "FileTask" }
+                ?? tasks.first { ($0["type"] as? String ?? "FileTask") == "FileTask" }
+            if let task, let path = task["path"] as? String {
+                program = folder.appendingPathComponent(Self.localPath(path))
+                arguments = task["arguments"] as? String ?? ""
+                if let wd = task["workingDir"] as? String, !wd.isEmpty {
+                    let rel = (external ? "External\\GOG Games\\" : "GOG Games\\") + folderName + "\\" + wd.replacingOccurrences(of: "/", with: "\\")
+                    workingDirectory = "C:\\" + rel
+                }
+            }
+        }
+        if game.id == YamagiSetup.gameID {
+            do { try await YamagiSetup.install(into: folder) }
+            catch { LogStore.shared.log("[yamagi] setup after install failed: \(error.localizedDescription)") }
+        }
+        if let (exe, args) = GOGLaunchOverride.program(for: game.id, in: folder) {
+            program = folder.appendingPathComponent(exe); arguments = args; workingDirectory = nil
+        }
+        if program == nil {
+            // No info file: the largest .exe in the top folder.
+            let exes = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.fileSizeKey]))?
+                .filter { $0.pathExtension.lowercased() == "exe" && !$0.lastPathComponent.lowercased().hasPrefix("unins") } ?? []
+            program = exes.max { (($0.fileSize) ?? 0) < (($1.fileSize) ?? 0) }
+        }
+        guard let program else { throw GOGError.message("Installed, but Rig could not find the game's program.") }
+        let cover = await Self.fetchCover(game.id)
+        return Result(program: program, arguments: arguments, workingDirectory: workingDirectory, bytes: need, cover: cover)
+    }
+
+    /// v2 (current Galaxy builds): zlib-compressed chunks, each fetched by its hash.
+    private func downloadV2(build: [String: Any], link: URL) async throws -> (URL, String, Int64) {
         let manifest = try await json(link, compressed: true)
         let folderName = (manifest["installDirectory"] as? String).map(Self.safeName) ?? Self.safeName(game.title)
         let depots = (manifest["depots"] as? [[String: Any]] ?? []).filter { ($0["isGogDepot"] as? Bool) != true }
@@ -483,35 +537,134 @@ struct GOGInstaller {
             }
             try await group.waitForAll()
         }
+        return (folder, folderName, need)
+    }
 
-        // The program: goggame-<id>.info's primary play task.
-        let info = folder.appendingPathComponent("goggame-\(game.id).info")
-        var program: URL?
-        var arguments = ""
-        var workingDirectory: String?
-        if let data = try? Data(contentsOf: info),
-           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let tasks = obj["playTasks"] as? [[String: Any]] {
-            let task = tasks.first { ($0["isPrimary"] as? Bool) == true && ($0["type"] as? String ?? "FileTask") == "FileTask" }
-                ?? tasks.first { ($0["type"] as? String ?? "FileTask") == "FileTask" }
-            if let task, let path = task["path"] as? String {
-                program = folder.appendingPathComponent(Self.localPath(path))
-                arguments = task["arguments"] as? String ?? ""
-                if let wd = task["workingDir"] as? String, !wd.isEmpty {
-                    let rel = (external ? "External\\GOG Games\\" : "GOG Games\\") + folderName + "\\" + wd.replacingOccurrences(of: "/", with: "\\")
-                    workingDirectory = "C:\\" + rel
-                }
+    /// v1 depots for a game: its own, in English (or language-neutral) where it
+    /// offers English, otherwise every language it has.
+    static func v1Depots(_ depots: [[String: Any]], game: String) -> [[String: Any]] {
+        let own = depots.filter { d in
+            d["redist"] == nil && (d["gameIDs"] as? [Any] ?? []).contains { "\($0)" == game }
+        }
+        func langs(_ d: [String: Any]) -> [String] { d["languages"] as? [String] ?? [] }
+        let english = own.contains { langs($0).contains { $0.lowercased().hasPrefix("en") } }
+        return own.filter { d in
+            let l = langs(d)
+            return !english || l.isEmpty || l.contains { $0 == "Neutral" || $0 == "*" || $0.lowercased().hasPrefix("en") }
+        }
+    }
+
+    /// MABD local: v1 (GOG 1.0 builds, older games): no compression; every file is
+    /// a byte range of one main.bin per product, fetched with Range requests and
+    /// checked against the file's MD5. Follows Heroic's gogdl.
+    private func downloadV1(build: [String: Any], link: URL) async throws -> (URL, String, Int64) {
+        let meta = try await json(link, compressed: true)
+        guard let product = meta["product"] as? [String: Any] else { throw GOGError.message("Unexpected answer from GOG.") }
+        let timestamp = "\(product["timestamp"] ?? build["legacy_build_id"] ?? "")"
+        let base = String(game.id)
+        let folderName = (product["installDirectory"] as? String).map(Self.safeName) ?? Self.safeName(game.title)
+        let chosen = Self.v1Depots(product["depots"] as? [[String: Any]] ?? [], game: base)
+        guard !chosen.isEmpty else { throw GOGError.message("GOG lists no Windows files for this game.") }
+
+        struct V1File { let path: String; let product: String; let size: Int64; let offset: Int64; let md5: String }
+        var files: [V1File] = []
+        for depot in chosen {
+            guard let name = depot["manifest"] as? String else { continue }
+            let owner = (depot["gameIDs"] as? [Any])?.first.map { "\($0)" } ?? base
+            let url = URL(string: "https://cdn.gog.com/content-system/v1/manifests/\(owner)/windows/\(timestamp)/\(name)")!
+            let content = try await json(url, compressed: true)
+            for record in (content["depot"] as? [String: Any])?["files"] as? [[String: Any]] ?? [] where record["directory"] == nil {
+                guard let path = record["path"] as? String,
+                      let size = (record["size"] as? NSNumber)?.int64Value else { continue }
+                let offset = (record["offset"] as? NSNumber)?.int64Value ?? 0
+                files.append(V1File(path: path, product: owner, size: size, offset: offset, md5: (record["hash"] as? String ?? "").lowercased()))
             }
         }
-        if program == nil {
-            // No info file: the largest .exe in the top folder.
-            let exes = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.fileSizeKey]))?
-                .filter { $0.pathExtension.lowercased() == "exe" && !$0.lastPathComponent.lowercased().hasPrefix("unins") } ?? []
-            program = exes.max { (($0.fileSize) ?? 0) < (($1.fileSize) ?? 0) }
+
+        let root = LibraryModel.drive.appendingPathComponent(external ? "External/GOG Games" : "GOG Games", isDirectory: true)
+        let folder = root.appendingPathComponent(folderName, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let need = files.reduce(Int64(0)) { $0 + $1.size }
+        if let free = ExternalDrive.freeBytes(atPath: root.path), Int64(free) < need {
+            throw GOGError.message("Not enough space: \(ByteCountFormatter.string(fromByteCount: need, countStyle: .file)) needed.")
         }
-        guard let program else { throw GOGError.message("Installed, but Rig could not find the game's program.") }
-        let cover = await Self.fetchCover(game.id)
-        return Result(program: program, arguments: arguments, workingDirectory: workingDirectory, bytes: need, cover: cover)
+        LogStore.shared.log("[gog] \(game.title): v1 build \(timestamp), \(chosen.count) depot(s), \(files.count) files, \(need >> 20)MB -> \(folder.path)")
+
+        // One signed main.bin link per product.
+        var bins: [String: URL] = [:]
+        for owner in Set(files.map(\.product)) {
+            let secure = try await json(URL(string: "https://content-system.gog.com/products/\(owner)/secure_link?_version=2&type=depot&path=/windows/\(timestamp)/")!, auth: true)
+            guard let first = (secure["urls"] as? [[String: Any]])?.first, let format = first["url_format"] as? String else {
+                throw GOGError.message("GOG did not give a download link.")
+            }
+            var params: [String: String] = [:]
+            for (k, v) in first["parameters"] as? [String: Any] ?? [:] { params[k] = "\(v)" }
+            params["path"] = (params["path"] ?? "") + "/main.bin"
+            var url = format
+            for (k, v) in params { url = url.replacingOccurrences(of: "{\(k)}", with: v) }
+            guard let bin = URL(string: url) else { throw GOGError.message("GOG did not give a download link.") }
+            bins[owner] = bin
+        }
+
+        let counter = GOGProgress(total: need, report: progress)
+        let piece: Int64 = 8 << 20
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            var running = 0
+            for file in files {
+                if running >= 6 { try await group.next(); running -= 1 }
+                running += 1
+                group.addTask {
+                    try Task.checkCancellation()
+                    let target = folder.appendingPathComponent(Self.localPath(file.path))
+                    guard target.standardizedFileURL.path.hasPrefix(folder.standardizedFileURL.path + "/") else {
+                        throw GOGError.message("GOG listed a file outside the game folder.")
+                    }
+                    let fm = FileManager.default
+                    if let attrs = try? fm.attributesOfItem(atPath: target.path), (attrs[.size] as? NSNumber)?.int64Value == file.size {
+                        await counter.add(file.size)
+                        return
+                    }
+                    try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    let partial = target.appendingPathExtension("madeira-part")
+                    fm.createFile(atPath: partial.path, contents: nil)
+                    let handle = try FileHandle(forWritingTo: partial)
+                    defer { try? handle.close() }
+                    guard let bin = bins[file.product] else { throw GOGError.message("No download link for a file.") }
+                    var hasher = Insecure.MD5()
+                    var done: Int64 = 0
+                    while done < file.size {
+                        try Task.checkCancellation()
+                        let length = min(piece, file.size - done)
+                        var request = URLRequest(url: bin)
+                        request.setValue("bytes=\(file.offset + done)-\(file.offset + done + length - 1)", forHTTPHeaderField: "Range")
+                        var attempt = 0
+                        while true {
+                            do {
+                                let (data, response) = try await URLSession.shared.data(for: request)
+                                let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+                                guard status == 206 || status == 200, Int64(data.count) == length else { throw GOGError.message("GOG's server refused a file.") }
+                                hasher.update(data: data)
+                                try handle.write(contentsOf: data)
+                                break
+                            } catch {
+                                attempt += 1
+                                if attempt >= 3 || error is CancellationError { throw error }
+                                try await Task.sleep(nanoseconds: 1_000_000_000)
+                            }
+                        }
+                        done += length
+                        await counter.add(length)
+                    }
+                    let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+                    guard file.md5.isEmpty || digest == file.md5 else { throw GOGError.message("A downloaded file was damaged.") }
+                    try handle.close()
+                    if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }
+                    try fm.moveItem(at: partial, to: target)
+                }
+            }
+            try await group.waitForAll()
+        }
+        return (folder, folderName, need)
     }
 
     static func localPath(_ gogPath: String) -> String {
@@ -770,5 +923,211 @@ struct GOGDownloadSection: View {
         .padding(.vertical, 2)
         .contentShape(Rectangle())
         .onTapGesture { StorePageRouter.shared.page = StorePageID(value: "gog:\(game.id)") }
+    }
+}
+
+
+/// MABD local: the registry keys GOG's own installer writes
+/// (HKLM\\Software\\GOG.com\\Games\\<id>, both registry views). GOG launchers
+/// such as Quake II's Q2Launcher read the install folder from them and say
+/// "Game installation not found" without. Written into the prefix's system.reg
+/// just before a GOG game starts, while no Wine session is running.
+enum GOGRegistry {
+    static func ensure(_ entry: LibraryEntry) {
+        guard let id = entry.gogID else { return }
+        let drive = LibraryModel.drive
+        let exe = drive.appendingPathComponent(entry.relativePath)
+        // The game folder: where goggame-<id>.info is, at or above the program's folder.
+        var folder = exe.deletingLastPathComponent()
+        for _ in 0..<3 where !FileManager.default.fileExists(atPath: folder.appendingPathComponent("goggame-\(id).info").path) {
+            let up = folder.deletingLastPathComponent()
+            guard up.path.hasPrefix(drive.path + "/") else { break }
+            folder = up
+        }
+        if !FileManager.default.fileExists(atPath: folder.appendingPathComponent("goggame-\(id).info").path) {
+            folder = exe.deletingLastPathComponent()
+        }
+        func windows(_ url: URL) -> String {
+            "C:\\" + url.path.dropFirst(drive.path.count + 1).replacingOccurrences(of: "/", with: "\\")
+        }
+        let path = windows(folder), program = windows(exe)
+        let values: [(String, String)] = [
+            ("path", path), ("exe", program), ("exeFile", exe.lastPathComponent), ("workingDir", path),
+            ("launchCommand", "\"\(program)\" \(entry.arguments)".trimmingCharacters(in: .whitespaces)),
+            ("gameID", String(id)), ("productID", String(id)), ("gameName", entry.title), ("language", "English"),
+        ]
+        let registry = LibraryModel.documents.appendingPathComponent("wine/system.reg")
+        guard let data = try? Data(contentsOf: registry), !data.isEmpty else { return }   // no prefix yet
+        var lines = String(decoding: data, as: UTF8.self).components(separatedBy: "\n")
+        let now = Int(Date().timeIntervalSince1970)
+        var changed = 0
+        for key in ["Software\\GOG.com\\Games\\\(id)", "Software\\Wow6432Node\\GOG.com\\Games\\\(id)"] {
+            let header = "[" + SteamInstallScripts.escape(key) + "]"
+            if lines.firstIndex(where: { $0.lowercased().hasPrefix(header.lowercased()) }) == nil {
+                while let last = lines.last, last.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { lines.removeLast() }
+                lines += ["", header + " \(now)", ""]
+            }
+            let start = lines.firstIndex { $0.lowercased().hasPrefix(header.lowercased()) }!
+            for (name, value) in values {
+                var end = start + 1
+                while end < lines.count, !lines[end].hasPrefix("[") { end += 1 }
+                let prefix = "\"" + SteamInstallScripts.escape(name) + "\"="
+                let line = prefix + "\"" + SteamInstallScripts.escape(value) + "\""
+                if let index = (start + 1..<end).first(where: { lines[$0].lowercased().hasPrefix(prefix.lowercased()) }) {
+                    if lines[index] != line { lines[index] = line; changed += 1 }
+                } else {
+                    var at = end
+                    while at > start + 1, lines[at - 1].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { at -= 1 }
+                    lines.insert(line, at: at); changed += 1
+                }
+            }
+        }
+        guard changed > 0 else { return }
+        do {
+            try Data(lines.joined(separator: "\n").utf8).write(to: registry, options: .atomic)
+            LogStore.shared.log("[gog] registry: \(entry.title) (\(id)) at \(path), \(changed) value(s)")
+        } catch {
+            LogStore.shared.log("[gog] registry: could not write system.reg: \(error.localizedDescription)")
+        }
+    }
+}
+
+
+/// MABD local: GOG games whose own program cannot run here start a better one.
+/// Quake II: Q2Launcher never starts the game, and the original quake2.exe needs
+/// OpenGL (not available) or its software renderer, which rewrites its own code
+/// (not allowed on iOS). Yamagi Quake II, an open-source engine for the same game
+/// files, runs instead when its yquake2.exe is in the game folder: software
+/// renderer, full screen at the screen's resolution.
+enum GOGLaunchOverride {
+    struct Override { let replaces: [String]; let program: String; let arguments: String; var config: [String] = [] }
+    static let games: [Int: Override] = [
+        // SDL draws through Direct3D 9: its Direct3D 11 renderer aborts on DXMT (SetRotation),
+        // and its GDI framebuffer never reaches the screen here.
+        1441704824: Override(replaces: ["q2launcher.exe", "quake2.exe"], program: "yquake2.exe",
+                             arguments: "+set vid_renderer soft +set vid_fullscreen 2 +set r_mode -2",
+                             config: ["env.SDL_RENDER_DRIVER = direct3d"]),
+    ]
+
+    /// The program and arguments for a fresh install, when the better program is there.
+    static func program(for id: Int, in folder: URL) -> (String, String)? {
+        guard let o = games[id], FileManager.default.fileExists(atPath: folder.appendingPathComponent(o.program).path) else { return nil }
+        return (o.program, o.arguments)
+    }
+
+    /// Moves an installed entry to the better program when it is in the game folder.
+    static func apply(_ entry: inout LibraryEntry) -> Bool {
+        guard let id = entry.gogID, let o = games[id] else { return false }
+        let name = entry.relativePath.split(separator: "/").last.map { $0.lowercased() } ?? ""
+        let folder = (entry.relativePath as NSString).deletingLastPathComponent
+        var changed = false
+        if o.replaces.contains(name),
+           FileManager.default.fileExists(atPath: LibraryModel.drive.appendingPathComponent(folder).appendingPathComponent(o.program).path) {
+            entry.relativePath = folder + "/" + o.program
+            entry.arguments = o.arguments
+            LogStore.shared.log("[gog] \(entry.title): starts \(o.program)")
+            changed = true
+        }
+        // The program's own config lines (the player's other lines stay); keys this
+        // override set before and no longer sets are dropped.
+        if entry.relativePath.lowercased().hasSuffix("/" + o.program.lowercased()) {
+            func key(_ line: String) -> String { line.split(separator: "=").first.map { $0.trimmingCharacters(in: .whitespaces) } ?? line }
+            let managed: Set<String> = ["env.SDL_RENDER_DRIVER", "env.SDL_FRAMEBUFFER_ACCELERATION", "env.MADEIRA_GAME_GDI_FULLSCREEN"]
+            let old = entry.config?.components(separatedBy: "\n").filter { !$0.isEmpty } ?? []
+            let lines = old.filter { !managed.contains(key($0)) } + o.config
+            if lines != old { entry.config = lines.joined(separator: "\n"); changed = true }
+        }
+        return changed
+    }
+}
+
+
+/// MABD local: Yamagi Quake II for GOG's Quake II, set up by Rig. The game's own
+/// quake2.exe cannot draw here (GOGLaunchOverride), so the first install or
+/// start fetches Yamagi Quake II (open source, GPL) from its official site,
+/// checks it against the SHA-256 of the release that was tested, and puts its
+/// engine next to the GOG files: GOG's game data is used as it is, a replaced
+/// GOG file is kept as <name>.gog. A controller layout goes in baseq2/autoexec.cfg
+/// unless the player already has one.
+enum YamagiSetup {
+    static let gameID = 1441704824
+    static let url = URL(string: "https://deponie.yamagi.org/quake2/windows/quake2-8.70a.zip")!
+    static let sha256 = "26cc30f81598d746d691c4adfd7010403969680dc6c65e83df30260cea1e652a"
+    static let root = "quake2-8.70a"
+    static let files = ["yquake2.exe", "SDL3.dll", "curl.dll", "openal32.dll", "ref_soft.dll",
+                        "baseq2/game.dll", "baseq2/footsteps.pkz", "ctf/game.dll", "rogue/game.dll", "xatrix/game.dll"]
+    static let autoexec = """
+        // Rig: controller layout for Yamagi Quake II (Xbox names).
+        // Runs at every start; change it here or remove this file to use your own binds.
+        set joy_labels 1
+        bind TRIG_RIGHT +attack
+        bind TRIG_LEFT +movedown
+        bind BTN_SOUTH +moveup
+        bind BTN_EAST +movedown
+        bind BTN_WEST invuse
+        bind BTN_NORTH inven
+        bind SHOULDR_RIGHT weapnext
+        bind SHOULDR_LEFT weapprev
+        bind DP_LEFT invprev
+        bind DP_RIGHT invnext
+        bind DP_UP invuse
+        bind DP_DOWN invdrop
+        bind BTN_BACK "cmd help"
+        bind STICK_LEFT +speed
+        bind STICK_RIGHT centerview
+
+        """
+    nonisolated(unsafe) private static var tried = Set<String>()
+
+    static func needed(_ folder: URL) -> Bool {
+        let fm = FileManager.default
+        return !fm.fileExists(atPath: folder.appendingPathComponent("yquake2.exe").path)
+            || !fm.fileExists(atPath: folder.appendingPathComponent("baseq2/autoexec.cfg").path)
+    }
+
+    /// Once per app run per folder, so a failed download never blocks Play.
+    static func shouldTry(_ folder: URL) -> Bool { needed(folder) && tried.insert(folder.path).inserted }
+
+    static func install(into folder: URL) async throws {
+        let fm = FileManager.default
+        if !fm.fileExists(atPath: folder.appendingPathComponent("yquake2.exe").path) {
+            LogStore.shared.log("[yamagi] downloading \(url.lastPathComponent) for \(folder.lastPathComponent)")
+            let (downloaded, response) = try await URLSession.shared.download(from: url)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw GOGError.message("Yamagi Quake II could not be downloaded.") }
+            let work = fm.temporaryDirectory.appendingPathComponent("yamagi-\(UUID().uuidString)", isDirectory: true)
+            try fm.createDirectory(at: work, withIntermediateDirectories: true)
+            defer { try? fm.removeItem(at: work) }
+            let zip = work.appendingPathComponent("yamagi.zip")
+            try fm.moveItem(at: downloaded, to: zip)
+            var hasher = SHA256()
+            let handle = try FileHandle(forReadingFrom: zip)
+            while let chunk = try handle.read(upToCount: 1 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
+            try handle.close()
+            let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
+            guard digest == sha256 else {
+                LogStore.shared.log("[yamagi] checksum mismatch \(digest): not installed")
+                throw GOGError.message("The Yamagi Quake II download did not match the tested release, so Rig did not install it.")
+            }
+            let unpacked = work.appendingPathComponent("x", isDirectory: true)
+            try fm.createDirectory(at: unpacked, withIntermediateDirectories: true)
+            try ZipExtractor.extract(zip, into: unpacked) { _ in }
+            for name in files {
+                let source = unpacked.appendingPathComponent(root).appendingPathComponent(name)
+                let target = folder.appendingPathComponent(name)
+                guard fm.fileExists(atPath: source.path) else { throw GOGError.message("The Yamagi Quake II download is missing \(name).") }
+                try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+                if fm.fileExists(atPath: target.path) {
+                    let backup = target.appendingPathExtension("gog")
+                    if !fm.fileExists(atPath: backup.path) { try fm.moveItem(at: target, to: backup) } else { try fm.removeItem(at: target) }
+                }
+                try fm.copyItem(at: source, to: target)
+            }
+            LogStore.shared.log("[yamagi] installed \(files.count) files into \(folder.lastPathComponent)")
+        }
+        let cfg = folder.appendingPathComponent("baseq2/autoexec.cfg")
+        if !fm.fileExists(atPath: cfg.path) {
+            try fm.createDirectory(at: cfg.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(autoexec.utf8).write(to: cfg, options: .atomic)
+        }
     }
 }

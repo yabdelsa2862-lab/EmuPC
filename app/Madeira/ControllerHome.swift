@@ -563,13 +563,30 @@ struct ControllerHome: View {
             Row(title: "Fast CPU mode", value: entry.fastCPU == true ? "On" : "Off") { _ in
                 update { $0.fastCPU = $0.fastCPU == true ? nil : true }
             },
-        ] + (UnrealFix.isUnreal(entry) ? [
+        ] + buttonRows(entry, update: update) + (UnrealFix.isUnreal(entry) ? [
             Row(title: "Unreal Engine: DirectX 11", value: UnrealFix.enabled(entry) ? "On" : "Off") { _ in
                 update { UnrealFix.toggle(&$0) }
             },
         ] : []) + [
             Row(title: "Delete game", value: nil) { _ in confirmDelete = entry },
         ]
+    }
+
+    /// MABD local: the game's controller layout: the global one, or its own
+    /// (starting from the global one), then one row per button while it is its own.
+    private func buttonRows(_ entry: LibraryEntry, update: @escaping ((inout LibraryEntry) -> Void) -> Void) -> [Row] {
+        let own = entry.buttonLayout
+        var rows = [Row(title: "Button layout", value: own == nil ? "Global" : "This game") { _ in
+            update { $0.buttonLayout = $0.buttonLayout == nil ? ButtonLayout.global : nil }
+        }]
+        if let own {
+            rows += PadButton.allCases.map { button in
+                Row(title: "   \(button.label)", value: ButtonLayout.label(ButtonLayout.target(button, in: own))) { d in
+                    update { var map = $0.buttonLayout ?? [:]; ButtonLayout.cycle(button, in: &map, d == 0 ? 1 : d); $0.buttonLayout = map }
+                }
+            }
+        }
+        return rows
     }
 
     private func gamePage(_ entry: LibraryEntry) -> some View {
@@ -1178,7 +1195,18 @@ struct ControllerHome: View {
             Setting(title: "Startup animation", value: theme.startup ? "On" : "Off",
                     note: "Plays when Rig opens with a controller.") { _ in theme.startup.toggle() },
         ])
-        return [general, themeCategory, memory, jit] + catalog + [more]
+        // MABD local: the global controller layout (GameTuning.swift ButtonLayout).
+        let layout = ButtonLayout.global
+        let controls = SettingsCategory(title: "Controls", symbol: "gamecontroller.fill", items: PadButton.allCases.map { button in
+            Setting(title: button.label, value: ButtonLayout.label(ButtonLayout.target(button, in: layout)),
+                    note: "What the \(button.label) button does in games. Left and right change it; a game can have its own layout on its page.") { d in
+                var map = ButtonLayout.global; ButtonLayout.cycle(button, in: &map, d); ButtonLayout.global = map; settingsRevision += 1
+            }
+        } + [
+            Setting(title: "Reset to default", value: layout.isEmpty ? "Default" : "Custom",
+                    note: "Every button does what it says again.") { _ in ButtonLayout.global = [:]; settingsRevision += 1 },
+        ])
+        return [general, controls, themeCategory, memory, jit] + catalog + [more]
     }
 
     private var settingsSection: some View {

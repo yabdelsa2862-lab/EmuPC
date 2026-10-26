@@ -237,6 +237,143 @@ struct GameDeleteDialog: ViewModifier {
 }
 
 
+// MARK: - Controller button layout
+
+/// MABD local: controller remapping, one global layout and an optional one per
+/// game. Applied to the pad state the game sees (GamepadInput), never to what
+/// Rig's own menus read, so the guide and its chords keep working. A layout maps
+/// each physical button to the button the game gets, or to nothing.
+enum PadButton: String, CaseIterable, Codable {
+    case a, b, x, y, lb, rb, lt, rt, view, menu, ls, rs, up, down, left, right
+
+    var label: String {
+        switch self {
+        case .a: "A"; case .b: "B"; case .x: "X"; case .y: "Y"
+        case .lb: "LB"; case .rb: "RB"; case .lt: "LT"; case .rt: "RT"
+        case .view: "View"; case .menu: "Menu"; case .ls: "Left stick"; case .rs: "Right stick"
+        case .up: "D-pad up"; case .down: "D-pad down"; case .left: "D-pad left"; case .right: "D-pad right"
+        }
+    }
+
+    /// XInput button bit; nil for the analog triggers.
+    var mask: UInt16? {
+        switch self {
+        case .up: 0x0001; case .down: 0x0002; case .left: 0x0004; case .right: 0x0008
+        case .menu: 0x0010; case .view: 0x0020; case .ls: 0x0040; case .rs: 0x0080
+        case .lb: 0x0100; case .rb: 0x0200; case .a: 0x1000; case .b: 0x2000; case .x: 0x4000; case .y: 0x8000
+        case .lt, .rt: nil
+        }
+    }
+}
+
+enum ButtonLayout {
+    /// "none" turns a button off; a missing key keeps the button as it is.
+    typealias Map = [String: String]
+    static let none = "none"
+    private static let globalKey = "madeiraButtonLayout"
+
+    static var global: Map {
+        get { (UserDefaults.standard.dictionary(forKey: globalKey) as? Map) ?? [:] }
+        set { UserDefaults.standard.set(newValue.filter { $0.key != $0.value }, forKey: globalKey) }
+    }
+
+    /// What a physical button sends under a layout ("none" or a PadButton raw value).
+    static func target(_ button: PadButton, in map: Map) -> String { map[button.rawValue] ?? button.rawValue }
+    static func label(_ target: String) -> String { PadButton(rawValue: target)?.label ?? "Nothing" }
+
+    /// The next choice for a button's target: every button, then nothing.
+    static func cycle(_ button: PadButton, in map: inout Map, _ d: Int) {
+        let choices = PadButton.allCases.map(\.rawValue) + [none]
+        let i = choices.firstIndex(of: target(button, in: map)) ?? 0
+        let next = choices[(i + (d < 0 ? choices.count - 1 : 1)) % choices.count]
+        if next == button.rawValue { map.removeValue(forKey: button.rawValue) } else { map[button.rawValue] = next }
+    }
+
+    // The layout of the running game (GamepadInput reads it on its own queue).
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var activeMap: Map = [:]
+
+    /// At launch: the game's own layout, else the global one.
+    static func activate(for entry: LibraryEntry?) {
+        let map = entry?.buttonLayout ?? global
+        lock.lock(); activeMap = map; lock.unlock()
+        if !map.isEmpty { LogStore.shared.log("[buttons] \(entry?.buttonLayout == nil ? "global" : "game") layout: " + map.sorted { $0.key < $1.key }.map { "\($0.key)->\($0.value)" }.joined(separator: " ")) }
+    }
+
+    /// The pad state with the running game's layout applied. The guide (Home) bit stays.
+    static func apply(_ s: winios_gamepad) -> winios_gamepad {
+        lock.lock(); let map = activeMap; lock.unlock()
+        guard !map.isEmpty else { return s }
+        var out = s
+        out.buttons = s.buttons & 0x0400
+        out.left_trigger = 0; out.right_trigger = 0
+        for button in PadButton.allCases {
+            let analog: UInt8
+            switch button {
+            case .lt: analog = s.left_trigger
+            case .rt: analog = s.right_trigger
+            default: analog = s.buttons & (button.mask ?? 0) != 0 ? 255 : 0
+            }
+            guard analog > 0, let to = PadButton(rawValue: target(button, in: map)) else { continue }
+            switch to {
+            case .lt: out.left_trigger = max(out.left_trigger, analog)
+            case .rt: out.right_trigger = max(out.right_trigger, analog)
+            default: if analog > 30 { out.buttons |= to.mask ?? 0 }
+            }
+        }
+        return out
+    }
+}
+
+/// One picker per button (touch library).
+struct ButtonLayoutRows: View {
+    @Binding var map: ButtonLayout.Map
+
+    var body: some View {
+        ForEach(PadButton.allCases, id: \.self) { button in
+            Picker(button.label, selection: Binding(
+                get: { ButtonLayout.target(button, in: map) },
+                set: { v in if v == button.rawValue { map.removeValue(forKey: button.rawValue) } else { map[button.rawValue] = v } })) {
+                ForEach(PadButton.allCases, id: \.self) { Text($0.label).tag($0.rawValue) }
+                Text("Nothing").tag(ButtonLayout.none)
+            }
+        }
+    }
+}
+
+/// Settings › Controller buttons: the global layout.
+struct ButtonLayoutSettingsSection: View {
+    @State private var map = ButtonLayout.global
+
+    var body: some View {
+        Section {
+            DisclosureGroup("Button layout") {
+                ButtonLayoutRows(map: $map)
+                Button("Reset to default") { map = [:] }.disabled(map.isEmpty)
+            }
+        } header: { Text("Controller buttons") } footer: {
+            Text("What each controller button does in games. A game can have its own layout in its details. Rig's guide (Xbox button) always works.")
+        }
+        .onChange(of: map) { _, m in ButtonLayout.global = m }
+    }
+}
+
+/// Game details › Controller buttons: this game's own layout, or the global one.
+struct ButtonLayoutGameSection: View {
+    @Binding var layout: ButtonLayout.Map?
+
+    var body: some View {
+        Section {
+            Toggle("Own layout for this game", isOn: Binding(get: { layout != nil }, set: { layout = $0 ? ButtonLayout.global : nil }))
+            if layout != nil {
+                ButtonLayoutRows(map: Binding(get: { layout ?? [:] }, set: { layout = $0 }))
+            }
+        } header: { Text("Controller buttons") } footer: {
+            Text(layout == nil ? "This game uses the layout from Settings." : "Starts from the layout in Settings. Applies at the next start.")
+        }
+    }
+}
+
 // MARK: - Low-memory devices
 
 /// MABD local: a profile for devices with 4 GB of RAM or less (iPad Air 4,

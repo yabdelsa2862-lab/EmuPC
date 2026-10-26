@@ -309,6 +309,8 @@ struct LibraryEntry: Codable, Identifiable {
     var gogID: Int?
     /// MABD local: the Epic app name this game was downloaded as (Epic.swift); nil otherwise.
     var epicApp: String?
+    /// MABD local: this game's controller layout (ButtonLayout, GameTuning.swift); nil = the global one.
+    var buttonLayout: [String: String]?
 
     /// What MadeiraConfig.applyGame writes for this game: the lines its pickers
     /// stand for, then its own config, which wins where both set a key.
@@ -2949,6 +2951,7 @@ struct LibraryView: View {
             }
             if settingsShow("theme", "accent", "colour", "color", "background", "startup", "animation") {
                 ThemeSettingsSection()
+                ButtonLayoutSettingsSection()
             }
             if settingsShow("Wi-Fi controllers", "controller", "phone", "multiplayer", "QR", "player") {
                 RemotePadSettingsSection()
@@ -3594,6 +3597,7 @@ struct LibraryDetail: View {
                 Text("Passed on every start. Above: the full command.")
             }
         }
+        ButtonLayoutGameSection(layout: $entry.buttonLayout)   // MABD local (GameTuning.swift)
     }
 
     @ViewBuilder private var compatibilityPage: some View {
