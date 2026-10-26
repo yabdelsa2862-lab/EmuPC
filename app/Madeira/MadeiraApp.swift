@@ -28,6 +28,7 @@ struct MadeiraApp: App {
                 .background(InteractionFrameRateInstaller())   // touch frame-rate request (New library grid)
                 .modifier(ClaimGamepadEvents())
                 .onAppear {
+                    LowMemoryDevice.applyIfNeeded()   // 4 GB devices (GameTuning.swift)
                     GamepadInput.shared.start()
                     HardwareInput.shared.start()
                     JITNetworkShortcut.shared.restoreLeftover()   // also starts its network path monitor

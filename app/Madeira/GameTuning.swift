@@ -237,6 +237,39 @@ struct GameDeleteDialog: ViewModifier {
 }
 
 
+// MARK: - Low-memory devices
+
+/// MABD local: a profile for devices with 4 GB of RAM or less (iPad Air 4,
+/// older iPhones), where the defaults sized for 8 GB phones run out of memory.
+/// Applied once, at the first start on such a device, and only to keys the
+/// player has not set: a smaller JIT pool, a 1 GB video memory budget (games
+/// pick lighter settings), a 2 GB swap tier, and 30 FPS for new games.
+/// Settings › General turns it on or off on any device.
+enum LowMemoryDevice {
+    /// 4 GB devices report a little under 4 GiB; 6 GB ones about 5.7.
+    static let isLow = ProcessInfo.processInfo.physicalMemory < 5_000_000_000
+    static let profile: [(key: String, value: String)] = [("pool", "512"), ("vram-mb", "1024"), ("swap-mb", "2048")]
+    private static let appliedKey = "madeiraLowMemoryProfileApplied"
+
+    /// Every profile value is in madeira.cfg.
+    static var active: Bool { profile.allSatisfy { MadeiraConfig.get($0.key) == $0.value } }
+    /// New games start at 30 FPS while the profile is on.
+    static var defaultFPSMode: Int { (isLow || UserDefaults.standard.bool(forKey: appliedKey)) && active ? 3 : 1 }
+
+    static func applyIfNeeded() {
+        guard isLow, !UserDefaults.standard.bool(forKey: appliedKey) else { return }
+        UserDefaults.standard.set(true, forKey: appliedKey)
+        for item in profile where MadeiraConfig.get(item.key) == nil { MadeiraConfig.set(item.key, item.value) }
+        LogStore.shared.log("[low-memory] ram=\(ProcessInfo.processInfo.physicalMemory >> 20)MB profile applied")
+    }
+
+    static func set(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: appliedKey)
+        for item in profile { MadeiraConfig.set(item.key, on ? item.value : nil) }
+        LogStore.shared.log("[low-memory] profile \(on ? "on" : "off") from Settings")
+    }
+}
+
 // MARK: - Known games
 
 /// MABD local: settings a game is known to need, put on its library entry when

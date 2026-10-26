@@ -402,7 +402,7 @@ struct ControllerHome: View {
             if !pads.players.isEmpty {
                 Label("\(pads.players.count + 1)", systemImage: "person.2.fill").font(.headline).lineLimit(1).fixedSize()
             }
-            if !compact { Image(systemName: "gamecontroller.fill").foregroundStyle(.secondary) }
+            BatteryIndicator(compact: compact)
             Text(now.formatted(date: .omitted, time: .shortened))
                 .font((compact ? Font.subheadline : .headline).monospacedDigit())
                 .lineLimit(1).fixedSize()
@@ -1086,6 +1086,10 @@ struct ControllerHome: View {
                     note: "Keeps a 120 Hz panel at 120 Hz in the 60 FPS limit. Uses more power.") { _ in
                 setConfig("env.MADEIRA_PROMOTE", promote ? nil : "1")
             },
+            Setting(title: "Low-memory profile", value: LowMemoryDevice.active ? "On" : "Off",
+                    note: "For devices with 4 GB of RAM: 512 MB JIT pool, 1 GB video memory, a 2 GB swap file and 30 FPS for new games. On by itself on such devices. Applies to the next game.") { _ in
+                LowMemoryDevice.set(!LowMemoryDevice.active); settingsRevision += 1
+            },
             Setting(title: "Tabs across the top", value: showTabs ? "On" : "Off",
                     note: "Home, Store and Settings tabs, switched with LB and RB. Off: press the Xbox button (or View + Menu) for the guide.") { _ in
                 showTabs.toggle()
@@ -1270,7 +1274,8 @@ struct ControllerHome: View {
          GuideItem(title: "Settings", symbol: "gearshape.fill") { section = .settings; page = nil; downloadPage = nil },
          GuideItem(title: "Touch library", symbol: "hand.tap.fill") { openLibrary() },
          GuideItem(title: pads.running ? "Wi-Fi controllers: on" : "Wi-Fi controllers: off", symbol: "iphone.radiowaves.left.and.right") { pads.setEnabled(!pads.running) },
-         GuideItem(title: "Restart Rig", symbol: "arrow.clockwise") { AppRelaunch.closeAndOffer("guide") }]
+         GuideItem(title: "Restart Rig", symbol: "arrow.clockwise") { AppRelaunch.closeAndOffer("guide") },
+         GuideItem(title: "Close Rig", symbol: "power") { AppRelaunch.close() }]
     }
 
     /// The guide, sliding in from the left like a console's.
@@ -1282,7 +1287,11 @@ struct ControllerHome: View {
                     ProfileAvatar(size: 44)
                     VStack(alignment: .leading) {
                         Text(ProfileSettings.shared.displayName).font(.headline)
-                        Text(now.formatted(date: .omitted, time: .shortened)).font(.subheadline).foregroundStyle(.white.opacity(0.7))
+                        HStack(spacing: 10) {
+                            Text(now.formatted(date: .omitted, time: .shortened))
+                            BatteryIndicator(compact: true)
+                        }
+                        .font(.subheadline).foregroundStyle(.white.opacity(0.7))
                     }
                 }
                 .padding(.bottom, 8)
@@ -1568,6 +1577,63 @@ struct DetailPanel<Art: View, Backdrop: View, Content: View>: View {
 }
 
 /// One controller button and what it does, as consoles show them.
+/// MABD local: the device's battery, and the controller's when it reports one,
+/// console style (top bar and guides). Red at 20% and below; a bolt while charging.
+struct BatteryIndicator: View {
+    var compact = false
+    @State private var level: Float = -1
+    @State private var state: UIDevice.BatteryState = .unknown
+    @State private var pad: Float?
+
+    var body: some View {
+        HStack(spacing: compact ? 8 : 14) {
+            if let pad {
+                HStack(spacing: 4) {
+                    Image(systemName: "gamecontroller.fill")
+                    if !compact { Text("\(Int(pad * 100))%").monospacedDigit() }
+                }
+                .foregroundStyle(pad <= 0.2 ? Color.red : .secondary)
+            } else if !compact {
+                Image(systemName: "gamecontroller.fill").foregroundStyle(.secondary)
+            }
+            if level >= 0 {
+                HStack(spacing: 4) {
+                    Image(systemName: symbol)
+                    Text("\(Int((level * 100).rounded()))%").monospacedDigit()
+                }
+                .foregroundStyle(level <= 0.2 && state != .charging ? Color.red : .primary)
+            }
+        }
+        .font((compact ? Font.subheadline : .headline))
+        .lineLimit(1).fixedSize()
+        .onAppear { UIDevice.current.isBatteryMonitoringEnabled = true; read() }
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.batteryLevelDidChangeNotification)) { _ in read() }
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.batteryStateDidChangeNotification)) { _ in read() }
+        // Controllers report no change notification: look again every half minute.
+        .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { _ in read() }
+        .onReceive(NotificationCenter.default.publisher(for: .GCControllerDidConnect)) { _ in read() }
+        .onReceive(NotificationCenter.default.publisher(for: .GCControllerDidDisconnect)) { _ in read() }
+    }
+
+    private var symbol: String {
+        if state == .charging || state == .full { return "battery.100percent.bolt" }
+        switch level {
+        case ..<0.13: return "battery.0percent"
+        case ..<0.38: return "battery.25percent"
+        case ..<0.63: return "battery.50percent"
+        case ..<0.88: return "battery.75percent"
+        default: return "battery.100percent"
+        }
+    }
+
+    private func read() {
+        level = UIDevice.current.batteryLevel
+        state = UIDevice.current.batteryState
+        let controller = GCController.current ?? GCController.controllers().first
+        pad = controller?.battery.map { $0.batteryLevel }.flatMap { $0 > 0 ? $0 : nil }
+    }
+}
+
 struct ButtonHint: View {
     let glyph: String
     let label: String

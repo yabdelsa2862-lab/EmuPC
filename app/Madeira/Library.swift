@@ -193,7 +193,8 @@ struct LibraryEntry: Codable, Identifiable {
     /// How the monitor is scaled to the screen (DisplayMode raw value; nil = Fit).
     var display: String?
     /// FPS limit: 1 = 60, 3 = 30, 4 = 40, 0 = display maximum, 2 = uncapped (madeira_set_vsync_locked).
-    var fpsMode = 1
+    /// MABD local: 30 for new games under the low-memory profile (GameTuning.swift).
+    var fpsMode = LowMemoryDevice.defaultFPSMode
     /// FEX's X87ReducedPrecision for this game. Export both states explicitly:
     /// FEX defaults to reduced precision when no override is set.
     var reducedX87 = false

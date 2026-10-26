@@ -394,6 +394,17 @@ enum AppRelaunch {
         }
     }
 
+    /// Close on the player's request: to the Home Screen as iOS does, then quit.
+    /// Not a crash, so no reopen notification and the Shortcuts check says no.
+    static func close() {
+        LogStore.shared.log("[relaunch] closing on request")
+        UserDefaults.standard.set(false, forKey: wantedKey)
+        Watchdog.stop()
+        clear()
+        UIControl().sendAction(#selector(URLSessionTask.suspend), to: UIApplication.shared, for: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { exit(0) }
+    }
+
     /// At launch: the reopen notification has done its job.
     static func clear() {
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [identifier, Watchdog.identifier])
@@ -456,6 +467,11 @@ final class InGameGuide: ObservableObject {
             },
             Item(title: "All settings", value: nil, symbol: "slider.horizontal.3") { _ in self.fullMenu = true },
             Item(title: "Restart Rig", value: nil, symbol: "arrow.clockwise") { _ in AppRelaunch.closeAndOffer("in-game guide") },
+            Item(title: "Close Rig", value: nil, symbol: "power") { _ in
+                // Stop the game first so it gets its normal shutdown, then close.
+                model.menu = false; model.stopGame()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { AppRelaunch.close() }
+            },
         ]
     }
 
@@ -490,7 +506,11 @@ struct InGameGuideView: View {
                 ProfileAvatar(size: 40)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(model.activeEntry?.title ?? "Game").font(.headline).lineLimit(1)
-                    Text(now.formatted(date: .omitted, time: .shortened)).font(.subheadline).foregroundStyle(.white.opacity(0.7))
+                    HStack(spacing: 10) {
+                        Text(now.formatted(date: .omitted, time: .shortened))
+                        BatteryIndicator(compact: true)
+                    }
+                    .font(.subheadline).foregroundStyle(.white.opacity(0.7))
                 }
             }
             .padding(.bottom, 10)

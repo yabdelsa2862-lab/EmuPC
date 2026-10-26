@@ -705,7 +705,8 @@ final class GameCompatibility: ObservableObject {
     /// Device memory a game can realistically use: the increased-memory-limit
     /// entitlement leaves about all but 2 GB of the phone's RAM to one app.
     nonisolated static var memoryBudgetGB: Double {
-        max(3, Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824 - 2)
+        // MABD local: a floor of 2, so a 4 GB iPad is judged by its 2 GB.
+        max(2, Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824 - 2)
     }
 
     /// Asks for a report once; rows call this as they appear.

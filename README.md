@@ -46,6 +46,9 @@ Madeira's Direct3D 12 runtime) and adds its own interface, stores and quality-of
   Home, Store, Settings, Wi-Fi controllers and Restart.
 - **In-game guide**: the same buttons during a game open Resume, **Quit game**,
   FPS limit, performance overlay and touch controls, all driven by the controller.
+- **Battery at a glance**: your iPhone or iPad battery and your controller's,
+  next to the clock and in the guides.
+- **Close Rig** from the guide, without reaching for the screen.
 - **Optional tab bar** across the top (Home / Store / Settings, switched with LB
   and RB), off by default.
 - **Themes**: accent colours, animated backgrounds (waves, orbs, aurora,
@@ -78,6 +81,9 @@ Madeira's Direct3D 12 runtime) and adds its own interface, stores and quality-of
 - Per-game **graphics presets**, an Unreal Engine fix, a fast CPU mode and known
   profiles for specific games.
 - **Easier game deletion** from the library and details page.
+- **Low-memory profile** for 4 GB devices such as the iPad Air 4: a smaller JIT
+  pool, a lighter video memory budget, a swap file and 30 FPS for new games,
+  switched on by itself (Settings › General).
 - **Wi-Fi controllers**: other phones on your network join as players 2–4.
 - **External display**: the game on a TV while the phone keeps the controls.
 - **External drive** support for game installs.
@@ -89,8 +95,9 @@ emulation are labelled as such.
 
 ## Requirements
 
-- An iPhone on **iOS 26 or later**. RIG is developed and tested on an
-  **iPhone 16 Pro Max** on iOS 27.
+- An iPhone or iPad on **iOS 26 or later**. RIG is developed and tested on an
+  **iPhone 16 Pro Max** on iOS 27; 4 GB devices like the iPad Air 4 get a
+  low-memory profile and run lighter games.
 - **JIT**, which iOS only allows while a debugger is attached, through
   [StikDebug](https://github.com/StikDebug/StikDebug) or the built-in StikJIT
   helper. See [`docs/JIT.md`](docs/JIT.md).
