@@ -6752,6 +6752,7 @@ int ios_image_section_describe( unsigned long long va, char *buf, size_t len, un
 #define X18_ROLE_RN   1  /* bits[9:5] = base register for loads/stores/data-proc */
 #define X18_ROLE_RM   2  /* bits[20:16] = second register (MOV, register offset) */
 #define X18_ROLE_RT2  3  /* bits[14:10] = second register in LDP/STP */
+#define X18_ROLE_RT   4  /* bits[4:0] = the register a STORE writes to memory */
 
 static int ios_insn_x18_role(uint32_t insn)
 {
@@ -6759,7 +6760,8 @@ static int ios_insn_x18_role(uint32_t insn)
     int rn = (insn >> 5) & 0x1f;
     int rm = (insn >> 16) & 0x1f;
     int rt2 = (insn >> 10) & 0x1f;
-    if (rn != 18 && rm != 18 && rt2 != 18) return X18_ROLE_NONE;
+    int rt = insn & 0x1f;
+    if (rn != 18 && rm != 18 && rt2 != 18 && rt != 18) return X18_ROLE_NONE;
 
     /* Classify instruction to verify the field is actually a register */
     uint32_t top8 = insn >> 24;
@@ -6825,6 +6827,21 @@ static int ios_insn_x18_role(uint32_t insn)
         if (rm == 18) return X18_ROLE_RM;
     }
 
+    /* MABD local: x18 as the VALUE a store writes. Wine's ARM64EC opengl32
+     * builds every call's parameter block with `.teb = NtCurrentTeb()`, which
+     * clang emits as `str x18, [sp, #n]` / `stp x18, xN, [sp, #n]` (~3,100
+     * sites). Unpatched, a zeroed x18 put teb = NULL into every OpenGL call
+     * and the unix side faulted on teb->glContext. Integer stores only (V=0):
+     * a SIMD store's Rt 18 is v18, not x18. Patched with the x18 form in
+     * ios_jit_patch_x18 (x18 <- TEB, then the original store). */
+    if (rt == 18 && !((insn >> 26) & 1))
+    {
+        uint32_t cls = (insn >> 27) & 7;
+        if (cls == 5 && !((insn >> 22) & 1))           /* STP (any indexing), L = 0 */
+            return X18_ROLE_RT;
+        if (cls == 7 && !((insn >> 22) & 3))           /* STR/STRB/STRH/STUR, opc = 00 */
+            return X18_ROLE_RT;
+    }
     return X18_ROLE_NONE;
 }
 
@@ -11533,6 +11550,9 @@ extern const void *dnsapi_unix_call_funcs[];
  * ml494 measured exactly that (12/12 [dwrite-bounds] EMPTY, [dwrite-ink]
  * never called). Chromium drew no text anywhere as a result. */
 extern const void *dwrite_unix_call_funcs[];
+/* MABD local: opengl32's unix side (libwin32u_unix.a, build/win32u-unix/build.sh). */
+extern const void *opengl32_unix_call_funcs[];
+extern const void *opengl32_unix_call_wow64_funcs[];
 
 /* MADEIRA 2026-09-19: winegstreamer's unix side, which upstream implements
  * with GStreamer (dlls/winegstreamer/wg_transform.c, wg_parser.c) and this
@@ -11895,6 +11915,16 @@ static NTSTATUS load_builtin_unixlib( void *module, BOOL wow, const void **funcs
             }
             libname = "win32u (stub table)";
             funcs64 = funcs_wow64 = (const void *)ios_stub_unix_call_table;
+        } else if (match && strstr(match, "opengl32") && getenv("MADEIRA_OPENGL") &&
+                   *getenv("MADEIRA_OPENGL") == '1') {
+            /* MABD local: OpenGL on (the app sets MADEIRA_OPENGL=1 for games
+             * whose program uses OpenGL): Wine's own opengl32 unix side,
+             * which reaches the iOS driver in driver_ios.c (gl4es). */
+            WARN_(module)("iOS: module %p (%s) -> opengl32 unix side (gl4es on OpenGL ES)\n",
+                          module, match);
+            libname = "opengl32 (gl4es)";
+            funcs64 = (const void *)opengl32_unix_call_funcs;
+            funcs_wow64 = (const void *)opengl32_unix_call_wow64_funcs;
         } else if (match && strstr(match, "opengl32")) {
             pthread_once( &ios_stub_tables_once, ios_init_stub_tables );
             WARN_(module)("iOS: module %p (%s) -> GL-absent stub table (attach ok, wgl/gl NOT_SUPPORTED)\n",

@@ -91,6 +91,14 @@ stores and quality-of-life features on top.
 - Store pages and art cached, so they open instantly the second time.
 
 ### Running games
+- **OpenGL games**: games that draw with OpenGL (Geometry Dash, Quake II's
+  OpenGL renderer and other older or indie titles) run through
+  [gl4es](https://github.com/ptitSeb/gl4es) on iOS's OpenGL ES, shown with Metal.
+  EmuPC turns it on by itself for those games. Geometry Dash plays at 60 FPS on
+  an iPhone 16 Pro Max and runs on an iPad Air 4 (4 GB).
+- **Current Steam client**: EmuPC installs Valve's current 64-bit Steam client
+  components and updates older installs automatically, so games built with
+  newer Steamworks versions start.
 - **Session doctor**: explains crashes after the fact, warns on low memory, and a
   **heat guard** drops games to 30 FPS while the phone is hot.
 - **Reopen after a close**: if EmuPC closes or crashes, a notification brings it
@@ -210,7 +218,7 @@ Fixes were also taken from the community forks of
 [kuscholar](https://github.com/kuscholar/Madeira).
 
 It is built on [Wine](https://www.winehq.org/), [FEX-Emu](https://github.com/FEX-Emu/FEX),
-[DXMT](https://github.com/3Shain/DXMT), [rpmalloc](https://github.com/mjansson/rpmalloc),
+[DXMT](https://github.com/3Shain/DXMT), [gl4es](https://github.com/ptitSeb/gl4es), [rpmalloc](https://github.com/mjansson/rpmalloc),
 [StikDebug](https://github.com/StikDebug/StikDebug), [StikJIT](https://github.com/StikDebug/StikJIT)
 and [idevice](https://github.com/jkcoxson/idevice). GOG and Epic support follows the
 approach of [Legendary](https://github.com/derrod/legendary) and the GOG Galaxy API.

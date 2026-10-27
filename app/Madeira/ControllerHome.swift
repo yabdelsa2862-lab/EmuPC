@@ -565,13 +565,26 @@ struct ControllerHome: View {
             Row(title: "Fast CPU mode", value: entry.fastCPU == true ? "On" : "Off") { _ in
                 update { $0.fastCPU = $0.fastCPU == true ? nil : true }
             },
-        ] + buttonRows(entry, update: update) + (UnrealFix.isUnreal(entry) ? [
+        ] + rendererRows(entry, update: update) + buttonRows(entry, update: update) + (UnrealFix.isUnreal(entry) ? [
             Row(title: "Unreal Engine: DirectX 11", value: UnrealFix.enabled(entry) ? "On" : "Off") { _ in
                 update { UnrealFix.toggle(&$0) }
             },
         ] : []) + [
             Row(title: "Delete game", value: nil) { _ in confirmDelete = entry },
         ]
+    }
+
+    /// MABD local: games EmuPC can run through Direct3D or OpenGL (GOGLaunchOverride).
+    private func rendererRows(_ entry: LibraryEntry, update: @escaping ((inout LibraryEntry) -> Void) -> Void) -> [Row] {
+        guard GOGLaunchOverride.hasRendererChoice(entry) else { return [] }
+        return [Row(title: "Renderer", value: GOGLaunchOverride.wantsOpenGL(entry) ? "OpenGL" : "Direct3D 9") { _ in
+            update {
+                var lines = $0.config?.components(separatedBy: "\n").filter { !$0.isEmpty } ?? []
+                if GOGLaunchOverride.wantsOpenGL($0) { lines.removeAll { $0 == GOGLaunchOverride.openGLLine } }
+                else { lines.append(GOGLaunchOverride.openGLLine) }
+                $0.config = lines.isEmpty ? nil : lines.joined(separator: "\n")
+            }
+        }]
     }
 
     /// MABD local: the game's controller layout: the global one, or its own

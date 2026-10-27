@@ -929,3 +929,57 @@ struct LayoutEditorView: View {
         } cancel: { editor.picking = nil }
     }
 }
+
+// MARK: - OpenGL games
+
+/// MABD local: a game whose program draws with OpenGL starts with the OpenGL
+/// driver on (env.MADEIRA_OPENGL = 1 in its config: gl4es on OpenGL ES,
+/// driver_ios.c and build/gl4es-ios). Other games keep it off, so Direct3D
+/// games and Steam behave as before. A player's own "env.MADEIRA_OPENGL = 0"
+/// stays and turns it off for that game.
+enum OpenGLGames {
+    static let line = "env.MADEIRA_OPENGL = 1"
+    /// Bring-up tracing lines of earlier builds, removed from configs on sight.
+    static let oldTraces: Set<String> = [
+        "env.WINEDEBUG = err+all,err-virtual,fixme-d3dcompiler,trace+wgl,trace+opengl,warn+win,warn+system,warn+monitor,trace+display",
+        "env.WINEDEBUG = err+all,err-virtual,fixme-d3dcompiler,warn+all,warn-virtual,warn-seh,warn-module,warn-file,warn-heap,trace+wgl,trace+opengl,trace+dialog,trace+msgbox",
+    ]
+
+    static func uses(_ entry: LibraryEntry) -> Bool {
+        entry.graphicsAPI?.localizedCaseInsensitiveContains("OpenGL") == true
+            || GOGLaunchOverride.wantsOpenGL(entry)
+            || folderImportsOpenGL(entry)
+    }
+
+    /// A game whose library scan has not named its graphics API (or named another
+    /// program's): any program in its folder that imports opengl32.dll. Geometry
+    /// Dash on one device had no API recorded, started without OpenGL and crashed.
+    private static func folderImportsOpenGL(_ entry: LibraryEntry) -> Bool {
+        let fm = FileManager.default
+        var folder = LibraryModel.drive.appendingPathComponent(entry.relativePath)
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: folder.path, isDirectory: &isDir) else { return false }
+        if !isDir.boolValue { folder.deleteLastPathComponent() }
+        let programs = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        return programs.contains { $0.pathExtension.lowercased() == "exe" && LibraryModel.importNames($0).contains("opengl32.dll") }
+    }
+
+    /// True when the config changed.
+    static func apply(_ entry: inout LibraryEntry) -> Bool {
+        var lines = entry.config?.components(separatedBy: "\n").filter { !$0.isEmpty } ?? []
+        let key = { (l: String) in l.split(separator: "=").first.map { $0.trimmingCharacters(in: .whitespaces) } ?? l }
+        let own = lines.first { key($0) == "env.MADEIRA_OPENGL" }
+        let traced = lines.contains(where: oldTraces.contains)
+        lines.removeAll(where: oldTraces.contains)
+        if uses(entry) {
+            guard own == nil || traced else { return false }
+            if own == nil { lines.append(line) }
+        } else {
+            guard own == line || traced else { return false }
+            lines.removeAll { $0 == line }
+        }
+        entry.config = lines.isEmpty ? nil : lines.joined(separator: "\n")
+        LogStore.shared.log("[gl] \(entry.title): OpenGL driver \(uses(entry) ? "on" : "off")")
+        return true
+    }
+}

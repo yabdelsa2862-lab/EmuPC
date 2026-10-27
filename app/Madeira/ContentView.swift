@@ -2542,12 +2542,29 @@ struct ContentView: View {
                 return
             }
         }
+        // MABD local: an earlier pinned Steam client is updated to the current one before a
+        // Steam game starts (SteamRuntime.swift): newer games' SteamAPI_Init needs it.
+        if entry.steamAppID != nil, !SteamClientUpdate.tried,
+           SteamRuntimeFiles.needsUpdate(MadeiraDock.clientRoot) {
+            SteamClientUpdate.tried = true
+            library.sessionMessage = "Updating Steam…"
+            Task { @MainActor in
+                do {
+                    try await SteamRuntimeInstaller.shared.prepare(prefix: MadeiraDock.prefix) { text in
+                        await MainActor.run { LogStore.shared.log("[steam-update] \(text)") }
+                    }
+                } catch { library.error = "Steam could not be updated: \(error.localizedDescription)" }
+                launchLibraryEntry(entry)
+            }
+            return
+        }
         // MABD local: GOG launchers find their game through GOG's registry keys (GOG.swift).
         if entry.gogID != nil { GOGRegistry.ensure(entry) }
         // madeira-bcd: a game seen for the first time starts with Madeira's recommended
         // settings (GameRecommendationsApply.swift).
         var entry = entry
         if GOGLaunchOverride.apply(&entry) { library.save(entry) }
+        if OpenGLGames.apply(&entry) { library.save(entry) }
         ButtonLayout.activate(for: entry)
         let isNew = !library.entries.contains { $0.id == entry.id }
         if GameRecommendations.prepare(&entry, new: isNew) { library.save(entry) }

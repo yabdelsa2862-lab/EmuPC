@@ -132,6 +132,16 @@ for src in $WINE_SRC/dlls/win32u/*.c $WINE_SRC/dlls/win32u/dibdrv/*.c; do
     compile_one "$src" "$name"
 done
 
+# MABD local: opengl32's unix side (Wine's OpenGL front end: wgl, contexts,
+# the GL thunks), bound by name in build/ntdll-unix/virtual_ios.c when
+# MADEIRA_OPENGL=1. Its table names are renamed so they do not collide.
+for src in unix_wgl unix_thunks; do
+    compile_one "$WINE_SRC/dlls/opengl32/$src.c" "opengl32_$src" \
+        -I"$WINE_SRC/dlls/opengl32" -D_OPENGL32_ \
+        -D__wine_unix_call_funcs=opengl32_unix_call_funcs \
+        -D__wine_unix_call_wow64_funcs=opengl32_unix_call_wow64_funcs
+done
+
 echo ""
 echo "Results: $SUCCEEDED succeeded, $FAILED failed"
 if [ -n "$FAILED_FILES" ]; then
@@ -146,6 +156,7 @@ fi
 
 echo ""
 echo "=== Building libwin32u_unix.a ==="
+rm -f "$OBJ_DIR/libwin32u_unix.a"   # ar only adds: start clean (no stale OpenGL stub)
 ar rcs "$OBJ_DIR/libwin32u_unix.a" "$OBJ_DIR"/*.o
 
 # Merge the static freetype so the app link needs no project changes.
@@ -155,6 +166,20 @@ if [ -f "$FREETYPE_DIR/build/libfreetype.a" ]; then
     echo "merged libfreetype.a"
 else
     echo "WARNING: no libfreetype.a — fonts will be disabled"
+fi
+
+# MABD local: OpenGL (gl4es + the iOS glue, build/gl4es-ios/build.sh). Without
+# it the driver's weak winios_gl_* references stay NULL and OpenGL stays off.
+GL4ES_LIB="$REPO_ROOT/build/gl4es-ios/out/libgl4es_ios.a"
+if [ -f "$GL4ES_LIB" ]; then
+    libtool -static -o "$OBJ_DIR/libwin32u_unix.a" \
+        "$OBJ_DIR/libwin32u_unix.a" "$GL4ES_LIB" 2>/dev/null
+    echo "merged libgl4es_ios.a"
+else
+    xcrun -sdk iphoneos clang -arch arm64 -isysroot "$SDK" -miphoneos-version-min=17.0 -O2 \
+        -c "$REPO_ROOT/build/gl4es-ios/winios_gl_stub.c" -o "$OBJ_DIR/winios_gl_stub.o.part"
+    ar rs "$OBJ_DIR/libwin32u_unix.a" "$OBJ_DIR/winios_gl_stub.o.part" 2>/dev/null
+    echo "NOTE: no libgl4es_ios.a — OpenGL programs will not run (stub linked)"
 fi
 
 echo "Copying to app..."

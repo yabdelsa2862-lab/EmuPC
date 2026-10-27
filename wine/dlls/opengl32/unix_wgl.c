@@ -2041,6 +2041,9 @@ GLsync wrap_glImportSyncEXT( TEB *teb, GLenum external_sync_type, GLintptr exter
 
 NTSTATUS process_attach( void *args )
 {
+#ifdef WINE_IOS
+    dprintf( 2, "[gl] opengl32 unix side attached\n" );
+#endif
     struct process_attach_params *params = args;
     call_gl_debug_message_callback = params->call_gl_debug_message_callback;
     if (is_win64 && is_wow64())

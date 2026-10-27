@@ -19,15 +19,35 @@ enum SteamRuntimeFiles {
         let sha256: String
     }
     static let origin = "https://client-update.akamai.steamstatic.com/"
+    // MABD local: Valve's 64-bit client 1792618285 (steam_client_win64). The
+    // 32-bit channel (steam_client_win32) stopped at the January 2026 build,
+    // whose steamclient64.dll lacks the interfaces newer games ask for
+    // (SteamUtils011, SteamInput007, SteamNetworkingSockets013): Geometry
+    // Dash's SteamAPI_Init failed with it. Dock's adapter 202610 matches this build.
     static let packages = [
-        Package(file: "bins_win32.zip.23e34a6d4b10596a44561a5100dac5585d2517da", bytes: 59_544_006,
-                sha256: "8b712b2a3412a9066b7725f4e1c5cef9a7ca5b187b6585a5b92d25d09df0ba62"),
-        Package(file: "bins_win64_win32.zip.f29d67dc38a4be027f1734802697c668621a6da1", bytes: 10_509_550,
-                sha256: "345f6e4bdc19b27ae53bf752c21e2d894e0e899d94823222fb426e890d1226b5"),
-        Package(file: "steam_win32.zip.3e96965d109fc2d4cc14206b2fc4ec960a746ed3", bytes: 2_307_664,
-                sha256: "1369615c795b60de822876b4dc4042186cf58d0dc8f63ea1371167f667e16925")
+        Package(file: "bins_win64.zip.1f91da2609327de9658146b01307e89a13cc1ef8", bytes: 64_309_479,
+                sha256: "f34b0d5924d0cca4c81775ed2fef0aee1ca060e2daa5c24270711267786c0236"),
+        Package(file: "steam_win64_steamrow.zip.9ddc7f402ba9bec08b7dbee2cf6ee37d21e1b4e0", bytes: 2_692_595,
+                sha256: "9a5aba7f8b5341344717f4a07027ac128e6913bb918454672e843fb5f7e61468")
     ]
-    static let clientSHA256 = "71b391fe9f3e2006cbc81a5c75eef3eb4186012deabfdb2c8b7e8d4850ecf640"
+    static let clientSHA256 = "253e0a11a4415b38c78a42f7bdd6ecc426455f06c1ba6453a48090df3142dbbc"
+    /// Earlier pinned clients (Dock adapters 202601, 202609): an install of one of
+    /// these is updated in place to the current pin.
+    static let previousClients: Set<String> = [
+        "71b391fe9f3e2006cbc81a5c75eef3eb4186012deabfdb2c8b7e8d4850ecf640",
+        "caba4826aa3501039d095aee1843a6bfb270fb43a3ab4455b2d6733223579fee",
+    ]
+    nonisolated(unsafe) private static var checkedUpdate: Bool?
+    /// The installed client is an earlier pinned build (checked once per app run).
+    static func needsUpdate(_ root: URL) -> Bool {
+        if let checkedUpdate { return checkedUpdate }
+        let dll = root.appendingPathComponent("steamclient64.dll")
+        guard let data = try? Data(contentsOf: dll, options: .mappedIfSafe) else { checkedUpdate = false; return false }
+        let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        checkedUpdate = previousClients.contains(hash)
+        return checkedUpdate!
+    }
+    static func updated() { checkedUpdate = false }
     static let relativeRoot = "Program Files (x86)/Steam"
     static let windowsRoot = "C:\\Program Files (x86)\\Steam"
 
@@ -238,8 +258,10 @@ actor SteamRuntimeInstaller {
             SteamRuntimeFiles.lastConflict = "a linked Steam folder"
             throw SteamRuntimeFiles.Failure.conflict
         }
-        // Existing installs are retained; this trial prepares missing files.
-        guard !fm.fileExists(atPath: root.appendingPathComponent("steam.exe").path) else {
+        // Existing installs are retained; this trial prepares missing files. MABD local:
+        // an earlier pinned client is replaced by the current one instead.
+        let upgrading = fm.fileExists(atPath: root.appendingPathComponent("steam.exe").path) && SteamRuntimeFiles.needsUpdate(root)
+        guard upgrading || !fm.fileExists(atPath: root.appendingPathComponent("steam.exe").path) else {
             SteamRuntimeFiles.lastConflict = "steam.exe already there"
             throw SteamRuntimeFiles.Failure.conflict
         }
@@ -302,7 +324,7 @@ actor SteamRuntimeInstaller {
         }
         for name in files {
             let target = try SteamRuntimeFiles.destination(SteamRuntimeFiles.relativeRoot + "/" + name, under: drive)
-            if fm.fileExists(atPath: target.path), !fm.contentsEqual(atPath: target.path, andPath: stage.appendingPathComponent(name).path) {
+            if !upgrading, fm.fileExists(atPath: target.path), !fm.contentsEqual(atPath: target.path, andPath: stage.appendingPathComponent(name).path) {
                 SteamRuntimeFiles.lastConflict = name
                 throw SteamRuntimeFiles.Failure.conflict
             }
@@ -318,13 +340,22 @@ actor SteamRuntimeInstaller {
         }
         for name in files.sorted(by: { $0 == "steam.exe" ? false : ($1 == "steam.exe" ? true : $0 < $1) }) {
             let target = try SteamRuntimeFiles.destination(SteamRuntimeFiles.relativeRoot + "/" + name, under: drive)
-            if fm.fileExists(atPath: target.path) { continue }
+            if fm.fileExists(atPath: target.path) {
+                guard upgrading else { continue }
+                try fm.removeItem(at: target)
+            }
             try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
             try fm.moveItem(at: stage.appendingPathComponent(name), to: target)
         }
-        await progress("Steam components are ready.")
+        if upgrading { SteamRuntimeFiles.updated() }
+        await progress(upgrading ? "Steam's client is up to date." : "Steam components are ready.")
     }
 
     private static func hash(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
 }
 #endif
+
+/// MABD local: one automatic update attempt per app run (ContentView's launch).
+enum SteamClientUpdate {
+    nonisolated(unsafe) static var tried = false
+}

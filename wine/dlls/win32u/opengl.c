@@ -25,6 +25,9 @@
 
 #include <assert.h>
 #include <pthread.h>
+#ifdef WINE_IOS
+#include <stdio.h> /* dprintf */
+#endif
 #include <dlfcn.h>
 #include <unistd.h>
 
@@ -2699,6 +2702,9 @@ static void display_funcs_init(void)
 
     if ((status = user_driver->pOpenGLInit( WINE_OPENGL_DRIVER_VERSION, &display_funcs, &driver_funcs )))
         WARN( "Failed to initialize the driver OpenGL functions, status %#x\n", status );
+#ifdef WINE_IOS
+    dprintf( 2, "[gl] display OpenGL init: driver status %#x\n", status );
+#endif
     init_egl_platforms( &display_funcs, driver_funcs );
 
     formats_count = driver_funcs->p_init_pixel_formats( &onscreen_count );

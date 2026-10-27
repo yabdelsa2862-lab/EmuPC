@@ -77,6 +77,10 @@ extern void winios_direct_cursor_pos( int x, int y ) __attribute__((weak));
 
 static int winios_desktop_mode(void);
 
+/* MABD local: OpenGL (end of this file; build/gl4es-ios). */
+static UINT winios_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs,
+                               const struct opengl_driver_funcs **driver_funcs );
+
 static int winios_direct_cursor_on(void)
 {
     return !winios_desktop_mode() && winios_direct_cursor_wanted && winios_direct_cursor_wanted();
@@ -2235,6 +2239,7 @@ static void load_display_driver(void)
                         "(MADEIRA_GAME_WINDOWS=0 hides them)\n" );
         }
         winios_user_driver.pUpdateDisplayDevices = winios_UpdateDisplayDevices;
+        winios_user_driver.pOpenGLInit = winios_OpenGLInit;
         __wine_set_user_driver( &winios_user_driver, WINE_GDI_DRIVER_VERSION );
 #else
         __wine_set_user_driver( &null_user_driver, WINE_GDI_DRIVER_VERSION );
@@ -2922,3 +2927,229 @@ ULONG_PTR ios_gamepad_query( UINT index, UINT op, void *buffer )
         return 0;
     }
 }
+
+
+#ifdef WINE_IOS
+/* MABD local: OpenGL for Windows programs.
+ *
+ * win32u's OpenGL front end needs a driver for contexts, pixel formats and
+ * window surfaces; on iOS that is this one. The GL functions come from gl4es
+ * (desktop OpenGL 2.1 on iOS's OpenGL ES), a window's buffers are IOSurfaces
+ * and SwapBuffers draws the finished one into the game's Metal layer: all in
+ * build/gl4es-ios/winios_gl.m. Opt-in per process: MADEIRA_OPENGL=1 (the app
+ * sets it for games whose program uses OpenGL); without it the driver reports
+ * no OpenGL, as before. */
+#include "wine/opengl_driver.h"
+
+extern int   winios_gl_init( void ) __attribute__((weak));
+extern void *winios_gl_proc( const char *name ) __attribute__((weak));
+extern void *winios_gl_context_create( void ) __attribute__((weak));
+extern void  winios_gl_context_destroy( void *ctx ) __attribute__((weak));
+extern int   winios_gl_make_current( void *ctx, void *surface, int w, int h ) __attribute__((weak));
+extern void *winios_gl_surface_create( void *hwnd ) __attribute__((weak));
+extern void  winios_gl_surface_destroy( void *surface ) __attribute__((weak));
+extern int   winios_gl_swap( void *surface, int w, int h ) __attribute__((weak));
+extern void  winios_gl_flush( void ) __attribute__((weak));
+
+struct winios_client_surface
+{
+    struct client_surface base;
+};
+
+struct winios_gl_drawable
+{
+    struct opengl_drawable base;
+    void *surface;                  /* winios_gl.m window buffers */
+};
+
+static struct winios_gl_drawable *winios_gl_impl( struct opengl_drawable *base )
+{
+    return CONTAINING_RECORD( base, struct winios_gl_drawable, base );
+}
+
+static void winios_gl_client_size( struct opengl_drawable *base, int *w, int *h )
+{
+    RECT rect = {0};
+    HWND hwnd = base && base->client ? base->client->hwnd : 0;
+    if (hwnd) NtUserGetClientRect( hwnd, &rect, NtUserGetDpiForWindow( hwnd ) );
+    *w = rect.right - rect.left;
+    *h = rect.bottom - rect.top;
+}
+
+static void winios_client_destroy( struct client_surface *client ) { }
+static void winios_client_detach( struct client_surface *client ) { }
+static void winios_client_update( struct client_surface *client ) { }
+static void winios_client_present( struct client_surface *client, HDC hdc ) { }
+
+static const struct client_surface_funcs winios_client_funcs =
+{
+    .destroy = winios_client_destroy,
+    .detach = winios_client_detach,
+    .update = winios_client_update,
+    .present = winios_client_present,
+};
+
+static void winios_gl_drawable_destroy( struct opengl_drawable *base )
+{
+    struct winios_gl_drawable *gl = winios_gl_impl( base );
+    winios_gl_surface_destroy( gl->surface );
+    gl->surface = NULL;
+}
+
+static void winios_gl_drawable_flush( struct opengl_drawable *base, UINT flags )
+{
+    int w, h;
+    /* single-buffered programs draw to the front buffer: show it at each flush */
+    if (!(flags & GL_FLUSH_PRESENT)) return;
+    winios_gl_client_size( base, &w, &h );
+    winios_gl_swap( winios_gl_impl( base )->surface, w, h );
+}
+
+static BOOL winios_gl_drawable_swap( struct opengl_drawable *base )
+{
+    int w, h;
+    winios_gl_client_size( base, &w, &h );
+    return winios_gl_swap( winios_gl_impl( base )->surface, w, h );
+}
+
+static const struct opengl_drawable_funcs winios_gl_drawable_funcs =
+{
+    .destroy = winios_gl_drawable_destroy,
+    .flush = winios_gl_drawable_flush,
+    .swap = winios_gl_drawable_swap,
+};
+
+/* RGBA8 with and without depth/stencil, double and single buffered. */
+static const struct { BYTE depth, stencil, doublebuffer; } winios_gl_formats[] =
+{
+    { 24, 8, 1 }, { 24, 8, 0 }, { 0, 0, 1 }, { 0, 0, 0 }, { 16, 0, 1 },
+};
+
+static UINT winios_gl_init_pixel_formats( UINT *onscreen_count )
+{
+    *onscreen_count = ARRAY_SIZE(winios_gl_formats);
+    return ARRAY_SIZE(winios_gl_formats);
+}
+
+static BOOL winios_gl_describe_pixel_format( int format, struct wgl_pixel_format *descr )
+{
+    if (format <= 0 || format > ARRAY_SIZE(winios_gl_formats)) return FALSE;
+    memset( descr, 0, sizeof(*descr) );
+    descr->pfd.nSize        = sizeof(descr->pfd);
+    descr->pfd.nVersion     = 1;
+    descr->pfd.dwFlags      = PFD_SUPPORT_OPENGL | PFD_DRAW_TO_WINDOW | PFD_SUPPORT_COMPOSITION;
+    if (winios_gl_formats[format - 1].doublebuffer) descr->pfd.dwFlags |= PFD_DOUBLEBUFFER;
+    descr->pfd.iPixelType   = PFD_TYPE_RGBA;
+    descr->pfd.cColorBits   = 32;
+    descr->pfd.cRedBits     = 8; descr->pfd.cRedShift   = 16;
+    descr->pfd.cGreenBits   = 8; descr->pfd.cGreenShift = 8;
+    descr->pfd.cBlueBits    = 8; descr->pfd.cBlueShift  = 0;
+    descr->pfd.cAlphaBits   = 8; descr->pfd.cAlphaShift = 24;
+    descr->pfd.cDepthBits   = winios_gl_formats[format - 1].depth;
+    descr->pfd.cStencilBits = winios_gl_formats[format - 1].stencil;
+    descr->pfd.iLayerType   = PFD_MAIN_PLANE;
+    descr->swap_method      = WGL_SWAP_UNDEFINED_ARB;
+    descr->pixel_type       = WGL_TYPE_RGBA_ARB;
+    return TRUE;
+}
+
+static const char *winios_gl_init_wgl_extensions( struct opengl_funcs *funcs )
+{
+    return "";
+}
+
+static void *winios_gl_get_proc_address( const char *name )
+{
+    return winios_gl_proc( name );
+}
+
+static BOOL winios_gl_surface_create_cb( HWND hwnd, int format, struct opengl_drawable **drawable )
+{
+    struct winios_client_surface *client;
+    struct winios_gl_drawable *gl;
+
+    if (!(client = client_surface_create( sizeof(*client), &winios_client_funcs, hwnd ))) return FALSE;
+    gl = opengl_drawable_create( sizeof(*gl), &winios_gl_drawable_funcs, format, &client->base );
+    client_surface_release( &client->base );
+    if (!gl) return FALSE;
+    gl->surface = winios_gl_surface_create( hwnd );
+    dprintf( 2, "[gl] window %p format %d: OpenGL surface\n", hwnd, format );
+    *drawable = &gl->base;
+    return TRUE;
+}
+
+static BOOL winios_gl_context_create_cb( int format, void *share, const int *attribs, void **context )
+{
+    for (const int *a = attribs; a && *a; a += 2)
+        if (a[0] == WGL_CONTEXT_MAJOR_VERSION_ARB && a[1] > 2)
+            dprintf( 2, "[gl] program asks for OpenGL %d.x; gl4es provides 2.1, trying anyway\n", a[1] );
+    return !!(*context = winios_gl_context_create());
+}
+
+static BOOL winios_gl_context_destroy_cb( void *context )
+{
+    winios_gl_context_destroy( context );
+    return TRUE;
+}
+
+static BOOL winios_gl_make_current_cb( struct opengl_drawable *draw, struct opengl_drawable *read, void *context )
+{
+    int w = 0, h = 0;
+    if (!context) return winios_gl_make_current( NULL, NULL, 0, 0 );
+    if (draw) winios_gl_client_size( draw, &w, &h );
+    return winios_gl_make_current( context, draw ? winios_gl_impl( draw )->surface : NULL, w, h );
+}
+
+static BOOL winios_gl_pbuffer_create( HDC hdc, int format, BOOL largest, GLenum texture_format, GLenum texture_target,
+                                      GLint max_level, GLsizei *width, GLsizei *height, struct opengl_drawable **drawable )
+{
+    return FALSE;
+}
+
+static BOOL winios_gl_pbuffer_updated( HDC hdc, struct opengl_drawable *drawable, GLenum cube_face, GLint mipmap_level )
+{
+    return GL_TRUE;
+}
+
+static UINT winios_gl_pbuffer_bind( HDC hdc, struct opengl_drawable *drawable, GLenum buffer )
+{
+    return -1; /* use the default implementation */
+}
+
+static const struct opengl_driver_funcs winios_gl_driver_funcs =
+{
+    .p_get_proc_address = winios_gl_get_proc_address,
+    .p_init_pixel_formats = winios_gl_init_pixel_formats,
+    .p_describe_pixel_format = winios_gl_describe_pixel_format,
+    .p_init_wgl_extensions = winios_gl_init_wgl_extensions,
+    .p_surface_create = winios_gl_surface_create_cb,
+    .p_context_create = winios_gl_context_create_cb,
+    .p_context_destroy = winios_gl_context_destroy_cb,
+    .p_make_current = winios_gl_make_current_cb,
+    .p_pbuffer_create = winios_gl_pbuffer_create,
+    .p_pbuffer_updated = winios_gl_pbuffer_updated,
+    .p_pbuffer_bind = winios_gl_pbuffer_bind,
+};
+
+static UINT winios_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs,
+                               const struct opengl_driver_funcs **driver_funcs )
+{
+    const char *want = getenv( "MADEIRA_OPENGL" );
+    if (version != WINE_OPENGL_DRIVER_VERSION) return STATUS_INVALID_PARAMETER;
+    if (!want || *want != '1') return STATUS_NOT_IMPLEMENTED;
+    if (!winios_gl_init || !winios_gl_init())
+    {
+        dprintf( 2, "[gl] OpenGL requested but not available in this build\n" );
+        return STATUS_NOT_SUPPORTED;
+    }
+    dprintf( 2, "[gl] OpenGL driver active (gl4es on OpenGL ES, Metal present)\n" );
+    *driver_funcs = &winios_gl_driver_funcs;
+    return STATUS_SUCCESS;
+}
+#else
+static UINT winios_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs,
+                               const struct opengl_driver_funcs **driver_funcs )
+{
+    return STATUS_NOT_IMPLEMENTED;
+}
+#endif

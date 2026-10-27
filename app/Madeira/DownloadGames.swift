@@ -345,7 +345,10 @@ struct DownloadGamesView: View {
     @FocusState private var linkFocused: Bool
 
     private var steamItems: [SteamGamesRules.Item] {
-        let items = SteamGamesRules.items(installed: games.games, owned: steam.owned, search: search)
+        // MABD local: a game Steam has a record for but has not finished installing
+        // (an interrupted or paused download) belongs here too, as on the controller
+        // home's Store: only fully installed games leave the download page.
+        let items = SteamGamesRules.items(installed: games.games.filter(\.installed), owned: steam.owned, search: search)
         let groups = SteamGamesRules.groups(items, downloading: Set(steam.downloads.keys))
         return groups.downloading + groups.notInstalled
     }

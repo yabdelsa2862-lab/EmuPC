@@ -1000,13 +1000,26 @@ enum GOGRegistry {
 /// files, runs instead when its yquake2.exe is in the game folder: software
 /// renderer, full screen at the screen's resolution.
 enum GOGLaunchOverride {
-    struct Override { let replaces: [String]; let program: String; let arguments: String; var config: [String] = [] }
+    struct Override {
+        let replaces: [String]; let program: String; let arguments: String; var config: [String] = []
+        /// Arguments for the OpenGL renderer (the game page's Renderer row; driver_ios.c + gl4es).
+        var openGLArguments: String? = nil
+    }
+    /// The player's choice of the OpenGL renderer, kept in the game's config.
+    static let openGLLine = "env.EMUPC_RENDERER = opengl"
+    static func wantsOpenGL(_ entry: LibraryEntry) -> Bool {
+        entry.config?.components(separatedBy: "\n").contains(openGLLine) == true
+    }
+    static func hasRendererChoice(_ entry: LibraryEntry) -> Bool {
+        entry.gogID.flatMap { games[$0]?.openGLArguments } != nil
+    }
     static let games: [Int: Override] = [
         // SDL draws through Direct3D 9: its Direct3D 11 renderer aborts on DXMT (SetRotation),
         // and its GDI framebuffer never reaches the screen here.
         1441704824: Override(replaces: ["q2launcher.exe", "quake2.exe"], program: "yquake2.exe",
                              arguments: "+set vid_renderer soft +set vid_fullscreen 2 +set r_mode -2",
-                             config: ["env.SDL_RENDER_DRIVER = direct3d"]),
+                             config: ["env.SDL_RENDER_DRIVER = direct3d"],
+                             openGLArguments: "+set vid_renderer gl1 +set vid_fullscreen 2 +set r_mode -2"),
     ]
 
     /// The program and arguments for a fresh install, when the better program is there.
@@ -1033,9 +1046,12 @@ enum GOGLaunchOverride {
         if entry.relativePath.lowercased().hasSuffix("/" + o.program.lowercased()) {
             func key(_ line: String) -> String { line.split(separator: "=").first.map { $0.trimmingCharacters(in: .whitespaces) } ?? line }
             let managed: Set<String> = ["env.SDL_RENDER_DRIVER", "env.SDL_FRAMEBUFFER_ACCELERATION", "env.MADEIRA_GAME_GDI_FULLSCREEN"]
+            let gl = o.openGLArguments != nil && wantsOpenGL(entry)
             let old = entry.config?.components(separatedBy: "\n").filter { !$0.isEmpty } ?? []
-            let lines = old.filter { !managed.contains(key($0)) } + o.config
+            let lines = old.filter { !managed.contains(key($0)) } + (gl ? [] : o.config)
             if lines != old { entry.config = lines.joined(separator: "\n"); changed = true }
+            let args = gl ? o.openGLArguments! : o.arguments
+            if entry.arguments != args { entry.arguments = args; changed = true }
         }
         return changed
     }
@@ -1054,7 +1070,7 @@ enum YamagiSetup {
     static let url = URL(string: "https://deponie.yamagi.org/quake2/windows/quake2-8.70a.zip")!
     static let sha256 = "26cc30f81598d746d691c4adfd7010403969680dc6c65e83df30260cea1e652a"
     static let root = "quake2-8.70a"
-    static let files = ["yquake2.exe", "SDL3.dll", "curl.dll", "openal32.dll", "ref_soft.dll",
+    static let files = ["yquake2.exe", "SDL3.dll", "curl.dll", "openal32.dll", "ref_soft.dll", "ref_gl1.dll",
                         "baseq2/game.dll", "baseq2/footsteps.pkz", "ctf/game.dll", "rogue/game.dll", "xatrix/game.dll"]
     static let autoexec = """
         // EmuPC: controller layout for Yamagi Quake II (Xbox names).

@@ -125,3 +125,27 @@ signed-negative cleanup test: slots 5 and 214 take only `this` and read back a
 and reads back a 4-byte result. Neighbouring slots 216
 `ValidateOfflineLogonTicket` and 217 `BGetOfflineLogonTicket` are not called:
 Dock never handles the ticket itself.
+
+## 202610 — Valve's 64-bit client 1792618285 (EmuPC)
+
+Valve froze the 32-bit channel (`steam_client_win32`) at the January 2026
+build above. Its `steamclient64.dll` lacks the interfaces newer Steamworks
+SDKs ask for (`SteamUtils011`, `SteamInput007`, `SteamNetworkingSockets013`,
+`SteamMatchMakingServers003`), so such games' `SteamAPI_Init` fails (Geometry
+Dash 2.2 exits with 1 before opening a window). The 64-bit channel
+(`steam_client_win64`, manifest version 1792618285, `bins_win64.zip`
+SHA-256 `f34b0d59…0236`) ships
+`steamclient64.dll` SHA-256
+`253e0a11a4415b38c78a42f7bdd6ecc426455f06c1ba6453a48090df3142dbbc`.
+
+All 18 pinned methods are at the same slots as 202601. Each slot's wrapper
+was matched by the method name it references (LogOn, BLoggedOn, BConnected,
+BHasCachedCredentials, SetAccountNameForCachedCredentialLogin, SetLoginToken,
+BIsGameRunning, BIsSubscribedApp, GetSubscribedApps, LaunchApp,
+GetAppInstallDir, RequestCustomBinaries, GetLogonState, CanLogonOffline,
+LogOnOffline). The CSteamClient getters (slots 8 and 43) are byte-identical
+apart from relocations; slot 33 (GetAPICallResult) reorders loads but passes
+the same arguments to the same vtable call. `tools/check-client-layout.py`
+passes on this DLL, and still passes on the January DLL. Device result:
+Dock signed in and launched Geometry Dash on an iPad Air 4; its
+`SteamAPI_Init` succeeded.
