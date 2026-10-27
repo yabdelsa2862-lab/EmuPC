@@ -23,6 +23,8 @@
 #include <dlfcn.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <mach/mach_time.h>
+#import <UIKit/UIKit.h>
 
 // gl4es (include/gl4esinit.h and gl/glstate.c)
 void set_getprocaddress(void *(*new_proc_address)(const char *));
@@ -38,6 +40,9 @@ int winios_gl4es_set_mainfbo(unsigned int fbo, unsigned int tex, int width, int 
 CAMetalLayer *madeira_display_layer(void) __attribute__((weak));
 CAMetalLayer *winios_metal_layer_for_hwnd(void *hwnd) __attribute__((weak));
 void winios_note_game_metal_hwnd(void *hwnd) __attribute__((weak));
+
+// DXMT's FPS limit (winemetal_unix.c): 1 = 60, 4 = 40, 3 = 30, 0 = display maximum, 2 = uncapped.
+int madeira_get_vsync_locked(void) __attribute__((weak));
 
 #define LOG(...) do { fprintf(stderr, "[gl] " __VA_ARGS__); fputc('\n', stderr); } while (0)
 
@@ -392,6 +397,33 @@ static CAMetalLayer *layer_for(struct winios_gl_surface *s)
     return layer;
 }
 
+// Frame pacing at the player's FPS limit, after the present. Without it an
+// OpenGL game that draws faster than the screen is held back only by Metal's
+// drawable queue, which then stays full: every frame waits behind older ones
+// and the picture lags the input by two or three frames (Geometry Dash).
+// Waiting here instead keeps the queue empty, and the game reads its input
+// right before the frame it draws.
+static void pace(void)
+{
+    static uint64_t next;
+    static mach_timebase_info_data_t tb;
+    int mode = madeira_get_vsync_locked ? madeira_get_vsync_locked() : 1;
+    double hz;
+    switch (mode) {
+    case 2: next = 0; return;                       // uncapped
+    case 3: hz = 30; break;
+    case 4: hz = 40; break;
+    case 0: hz = (double)UIScreen.mainScreen.maximumFramesPerSecond; break;
+    default: hz = 60; break;
+    }
+    if (!tb.denom) mach_timebase_info(&tb);
+    uint64_t interval = (uint64_t)(1e9 / hz * tb.denom / tb.numer);
+    uint64_t now = mach_absolute_time();
+    if (!next || now > next + interval) next = now;   // late by a frame or more: start over
+    next += interval;
+    if (next > now) mach_wait_until(next);
+}
+
 int winios_gl_swap(void *surf_handle, int w, int h)
 {
     struct winios_gl_surface *s = surf_handle;
@@ -431,6 +463,7 @@ int winios_gl_swap(void *surf_handle, int w, int h)
         }
     }
     s->swaps++;
+    pace();
     // Next frame into the next buffer (Metal may still be reading this one).
     s->cur = (s->cur + 1) % BUFFERS;
     if (w > 0 && h > 0 && (w != s->w || h != s->h)) make_buffers(s, w, h);
