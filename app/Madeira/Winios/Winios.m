@@ -1740,6 +1740,14 @@ CAMetalLayer *winios_metal_layer_for_hwnd(void *hwnd) {
             ml.device = MTLCreateSystemDefaultDevice();
             ml.pixelFormat = MTLPixelFormatBGRA8Unorm;
             ml.opaque = YES;
+            /* MABD local: two drawables, not iOS's default three. A game drawing at
+             * the display's rate filled all three, so what was shown ran up to two
+             * frames (~33 ms at 60 Hz) behind the input. MADEIRA_WINDOW_DRAWABLES=3
+             * restores the default. */
+            {
+                const char *n = getenv("MADEIRA_WINDOW_DRAWABLES");
+                ml.maximumDrawableCount = (n && *n == '3') ? 3 : 2;
+            }
             g_metal_layers[key] = ml;
             [win addSublayer:ml];
             winios_place_metal_layer(key);
