@@ -158,6 +158,7 @@ struct ControllerHome: View {
     @State private var downloadPageFocus = 0
     /// The guide (View+Menu): open, and its focused row.
     @State private var guide = false
+    @ObservedObject private var layoutEditor = LayoutEditor.shared
     /// The profile page (the avatar, or Profile in the guide).
     @State private var profilePage = false
     @ObservedObject private var profile = ProfileSettings.shared
@@ -293,6 +294,7 @@ struct ControllerHome: View {
                 }
                 if guide { guidePanel.zIndex(6) }
                 if profilePage { ProfilePage { profilePage = false }.transition(.opacity).zIndex(7) }
+                if layoutEditor.open { LayoutEditorView().transition(.opacity).zIndex(8) }
                 if !viewerURLs.isEmpty {
                     FullScreenImages(urls: viewerURLs, index: $viewerIndex) { viewerURLs = [] }
                         .transition(.opacity).zIndex(5)
@@ -575,18 +577,11 @@ struct ControllerHome: View {
     /// MABD local: the game's controller layout: the global one, or its own
     /// (starting from the global one), then one row per button while it is its own.
     private func buttonRows(_ entry: LibraryEntry, update: @escaping ((inout LibraryEntry) -> Void) -> Void) -> [Row] {
-        let own = entry.buttonLayout
-        var rows = [Row(title: "Button layout", value: own == nil ? "Global" : "This game") { _ in
-            update { $0.buttonLayout = $0.buttonLayout == nil ? ButtonLayout.global : nil }
-        }]
-        if let own {
-            rows += PadButton.allCases.map { button in
-                Row(title: "   \(button.label)", value: ButtonLayout.label(ButtonLayout.target(button, in: own))) { d in
-                    update { var map = $0.buttonLayout ?? [:]; ButtonLayout.cycle(button, in: &map, d == 0 ? 1 : d); $0.buttonLayout = map }
-                }
+        [Row(title: "Controller layout", value: entry.buttonLayout == nil ? "Global" : "This game") { _ in
+            LayoutEditor.shared.show(game: entry) { edited in
+                update { $0.buttonLayout = edited.buttonLayout }
             }
-        }
-        return rows
+        }]
     }
 
     private func gamePage(_ entry: LibraryEntry) -> some View {
@@ -1201,13 +1196,12 @@ struct ControllerHome: View {
         ])
         // MABD local: the global controller layout (GameTuning.swift ButtonLayout).
         let layout = ButtonLayout.global
-        let controls = SettingsCategory(title: "Controls", symbol: "gamecontroller.fill", items: PadButton.allCases.map { button in
-            Setting(title: button.label, value: ButtonLayout.label(ButtonLayout.target(button, in: layout)),
-                    note: "What the \(button.label) button does in games. Left and right change it; a game can have its own layout on its page.") { d in
-                var map = ButtonLayout.global; ButtonLayout.cycle(button, in: &map, d); ButtonLayout.global = map; settingsRevision += 1
-            }
-        } + [
-            Setting(title: "Reset to default", value: layout.isEmpty ? "Default" : "Custom",
+        let controls = SettingsCategory(title: "Controls", symbol: "gamecontroller.fill", items: [
+            Setting(title: "Edit button layout", value: layout.isEmpty ? "Default" : "\(layout.count) changed",
+                    note: "The controller with every button around it: pick one and choose what it does in games. A game can have its own layout from its page.") { _ in
+                LayoutEditor.shared.show()
+            },
+            Setting(title: "Reset to default", value: nil,
                     note: "Every button does what it says again.") { _ in ButtonLayout.global = [:]; settingsRevision += 1 },
         ])
         return [general, controls, themeCategory, memory, jit] + catalog + [more]
@@ -1371,6 +1365,8 @@ struct ControllerHome: View {
     private func handle(_ command: String) {
         // The photo picker is up: the pad would act on the page behind it.
         if PhotoPick.showing { return }
+        // The layout editor has the pad while it is open (B closes it).
+        if layoutEditor.open { layoutEditor.command(command); return }
         if command == "guide" {
             pendingLibrary = nil
             withAnimation(.easeOut(duration: 0.2)) { guide.toggle() }

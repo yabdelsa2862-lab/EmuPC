@@ -92,8 +92,9 @@ Madeira's Direct3D 12 runtime) and adds its own interface, stores and quality-of
 - **Wi-Fi controllers**: other phones on your network join as players 2–4.
 - **External display**: the game on a TV while the phone keeps the controls.
 - **External drive** support for game installs.
-- **Button layouts**: remap every controller button for all games (Settings ›
-  Controls) or give one game its own layout from its page. The Xbox / Home
+- **Button layouts**: a Steam-style editor shows the controller with every button
+  around it; pick one and choose what it does, for all games (Settings ›
+  Controls) or just one game (its page, LB/RB to switch). The Xbox / Home
   button always opens the guide.
 - **Quake II from GOG** sets itself up: RIG fetches
   [Yamagi Quake II](https://www.yamagi.org/quake2/) (checksum-pinned), keeps
