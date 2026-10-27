@@ -446,70 +446,88 @@ enum KnownGameProfiles {
 
 // MARK: - Controller layout editor
 
-/// MABD local: Steam-style layout editor for the controller home. The pad is
-/// drawn in the middle with every button around it; the d-pad moves between
-/// them, A picks what one does, LB/RB switch between this game and all games.
+/// MABD local: the layout editor of the controller home, in the style of
+/// Steam's controller settings: a drawn pad in the middle, what each shoulder,
+/// trigger and View/Menu does beside it, and the sticks, d-pad and A/B/X/Y as
+/// groups underneath. The d-pad moves, A opens, LB/RB switch this game / all
+/// games, Y resets, B goes back.
 extension PadButton {
-    /// The name on the editor's pills and in the picker.
+    /// The name in the editor and the command list.
     var longLabel: String {
         switch self {
         case .lt: "Left Trigger"; case .lb: "Left Bumper"; case .rt: "Right Trigger"; case .rb: "Right Bumper"
+        case .a: "A Button"; case .b: "B Button"; case .x: "X Button"; case .y: "Y Button"
+        case .ls: "Left Stick Click"; case .rs: "Right Stick Click"
         default: label
         }
     }
-    /// The few characters on a small button or a badge.
-    var short: String {
-        switch self {
-        case .ls: "LS"; case .rs: "RS"; case .view: "View"; case .menu: "Menu"
-        case .up: "↑"; case .down: "↓"; case .left: "←"; case .right: "→"
-        default: label
-        }
-    }
-    /// Where the button sits in the editor, as fractions of its area.
-    var spot: CGPoint {
-        switch self {
-        case .lt: CGPoint(x: 0.15, y: 0.07); case .lb: CGPoint(x: 0.15, y: 0.19)
-        case .ls: CGPoint(x: 0.15, y: 0.43)
-        case .up: CGPoint(x: 0.15, y: 0.66); case .down: CGPoint(x: 0.15, y: 0.92)
-        case .left: CGPoint(x: 0.09, y: 0.79); case .right: CGPoint(x: 0.21, y: 0.79)
-        case .view: CGPoint(x: 0.40, y: 0.13); case .menu: CGPoint(x: 0.60, y: 0.13)
-        case .rt: CGPoint(x: 0.85, y: 0.07); case .rb: CGPoint(x: 0.85, y: 0.19)
-        case .y: CGPoint(x: 0.85, y: 0.34); case .a: CGPoint(x: 0.85, y: 0.58)
-        case .x: CGPoint(x: 0.79, y: 0.46); case .b: CGPoint(x: 0.91, y: 0.46)
-        case .rs: CGPoint(x: 0.85, y: 0.82)
-        }
-    }
-    var isPill: Bool { [.lt, .lb, .rt, .rb, .view, .menu].contains(self) }
 }
 
 @MainActor
 final class LayoutEditor: ObservableObject {
     static let shared = LayoutEditor()
+
+    /// The four groups under the pad.
+    struct Group { let title: String; let buttons: [PadButton]; let standard: String }
+    static let groups = [
+        Group(title: "LEFT JOYSTICK", buttons: [.ls], standard: "Standard Joystick"),
+        Group(title: "DIRECTIONAL PAD", buttons: [.up, .down, .left, .right], standard: "Standard DPad"),
+        Group(title: "RIGHT JOYSTICK", buttons: [.rs], standard: "Standard Joystick"),
+        Group(title: "A,B,X,Y", buttons: [.a, .b, .x, .y], standard: "Standard ABXY"),
+    ]
+    static let leftColumn: [PadButton] = [.lb, .lt, .view]
+    static let rightColumn: [PadButton] = [.rb, .rt, .menu]
+
+    enum Slot: Hashable { case left(Int), right(Int), group(Int) }
+
     @Published private(set) var open = false
     /// The game being edited; nil edits the layout for all games only.
     @Published private(set) var game: LibraryEntry?
     /// 0: this game, 1: all games (only 1 without a game).
     @Published var tab = 0
-    @Published var focus = PadButton.a
-    /// The command list for the focused button, and its row.
-    @Published var picking = false
+    @Published var focus = Slot.left(0)
+    /// A group's buttons, listed after A on the group.
+    @Published var groupOpen: Int?
+    @Published var groupFocus = 0
+    /// The command list for one button.
+    @Published var picking: PadButton?
     @Published var pickFocus = 0
     private var saveGame: ((LibraryEntry) -> Void)?
 
     var editingGame: Bool { game != nil && tab == 0 }
     var tabs: [String] { game == nil ? ["All games"] : ["This game", "All games"] }
-
-    /// What the buttons do on the current tab.
     var map: ButtonLayout.Map { editingGame ? (game?.buttonLayout ?? ButtonLayout.global) : ButtonLayout.global }
-    /// This game follows the global layout (no own layout yet).
     var followsGlobal: Bool { editingGame && game?.buttonLayout == nil }
 
     func show(game: LibraryEntry? = nil, save: ((LibraryEntry) -> Void)? = nil) {
         self.game = game; saveGame = save
-        tab = 0; focus = .a; picking = false; open = true
+        tab = 0; focus = .left(0); groupOpen = nil; picking = nil; open = true
     }
 
-    func close() { picking = false; open = false; game = nil; saveGame = nil }
+    func close() { picking = nil; groupOpen = nil; open = false; game = nil; saveGame = nil }
+
+    func target(_ b: PadButton) -> String { ButtonLayout.target(b, in: map) }
+    func does(_ b: PadButton) -> String { ButtonLayout.label(target(b)) }
+    func changed(_ b: PadButton) -> Bool { target(b) != b.rawValue }
+
+    /// "Standard DPad", or what changed in the group.
+    func summary(_ g: Group) -> String {
+        let moved = g.buttons.filter(changed)
+        if moved.isEmpty { return g.standard }
+        if g.buttons.count == 1 { return "Click: \(does(g.buttons[0]))" }
+        return "Custom (\(moved.count) changed)"
+    }
+
+    /// The buttons the focus stands for (lit on the drawing).
+    var focusedButtons: [PadButton] {
+        if let picking { return [picking] }
+        if let g = groupOpen { return [Self.groups[g].buttons[groupFocus]] }
+        switch focus {
+        case .left(let i): return [Self.leftColumn[i]]
+        case .right(let i): return [Self.rightColumn[i]]
+        case .group(let i): return Self.groups[i].buttons
+        }
+    }
 
     private func store(_ map: ButtonLayout.Map) {
         if editingGame, var entry = game {
@@ -521,62 +539,87 @@ final class LayoutEditor: ObservableObject {
         }
     }
 
-    /// The picker's choices: the button itself, every other button, nothing.
-    var choices: [String] {
-        [focus.rawValue] + PadButton.allCases.filter { $0 != focus }.map(\.rawValue) + [ButtonLayout.none]
+    /// The command list: the button itself, every other button, nothing.
+    func choices(_ b: PadButton) -> [String] {
+        [b.rawValue] + PadButton.allCases.filter { $0 != b }.map(\.rawValue) + [ButtonLayout.none]
     }
-    func choiceLabel(_ c: String) -> String {
-        c == focus.rawValue ? "\(focus.longLabel) (default)" : PadButton(rawValue: c)?.longLabel ?? "Nothing (off)"
+    func choiceLabel(_ c: String, for b: PadButton) -> String {
+        c == b.rawValue ? "\(b.longLabel) (default)" : PadButton(rawValue: c)?.longLabel ?? "Nothing (off)"
     }
 
     func choose(_ c: String) {
+        guard let b = picking else { return }
         var m = map
-        if c == focus.rawValue { m.removeValue(forKey: focus.rawValue) } else { m[focus.rawValue] = c }
-        store(m); picking = false
+        if c == b.rawValue { m.removeValue(forKey: b.rawValue) } else { m[b.rawValue] = c }
+        store(m); picking = nil
     }
 
-    /// Y: this game back to the global layout, or the global layout back to default.
+    func pick(_ b: PadButton) {
+        pickFocus = choices(b).firstIndex(of: target(b)) ?? 0
+        picking = b
+    }
+
+    /// A on the focus: a button's command list, or a group's buttons.
+    func select(_ slot: Slot) {
+        focus = slot
+        switch slot {
+        case .left(let i): pick(Self.leftColumn[i])
+        case .right(let i): pick(Self.rightColumn[i])
+        case .group(let i):
+            let g = Self.groups[i]
+            if g.buttons.count == 1 { pick(g.buttons[0]) } else { groupFocus = 0; groupOpen = i }
+        }
+    }
+
+    /// Y: this game back to the global layout, or the global layout to default.
     func reset() {
         if editingGame, var entry = game { entry.buttonLayout = nil; game = entry; saveGame?(entry); return }
         store([:])
     }
     var resetLabel: String { editingGame ? "Use global layout" : "Reset to default" }
 
-    func openPicker() {
-        pickFocus = choices.firstIndex(of: ButtonLayout.target(focus, in: map)) ?? 0
-        picking = true
-    }
-
-    /// The nearest button in a direction: along it, and not far off to the side.
-    private func move(_ dx: CGFloat, _ dy: CGFloat) {
-        let from = focus.spot
-        let best = PadButton.allCases.filter { $0 != focus }.compactMap { b -> (PadButton, CGFloat)? in
-            let vx = b.spot.x - from.x, vy = b.spot.y - from.y
-            let along = vx * dx + vy * dy
-            guard along > 0.01 else { return nil }
-            let side = abs(vx * dy - vy * dx)
-            return (b, along + side * 2.5)
-        }.min { $0.1 < $1.1 }
-        if let best { focus = best.0 }
+    private func move(_ c: String) {
+        let last = Self.leftColumn.count - 1, groups = Self.groups.count
+        switch (focus, c) {
+        case (.left(let i), "up"): if i > 0 { focus = .left(i - 1) }
+        case (.left(let i), "down"): focus = i < last ? .left(i + 1) : .group(0)
+        case (.left(let i), "right"): focus = .right(i)
+        case (.right(let i), "up"): if i > 0 { focus = .right(i - 1) }
+        case (.right(let i), "down"): focus = i < last ? .right(i + 1) : .group(groups - 1)
+        case (.right(let i), "left"): focus = .left(i)
+        case (.group(let j), "left"): if j > 0 { focus = .group(j - 1) }
+        case (.group(let j), "right"): if j < groups - 1 { focus = .group(j + 1) }
+        case (.group(let j), "up"): focus = j < groups / 2 ? .left(last) : .right(last)
+        default: break
+        }
     }
 
     func command(_ c: String) {
-        if picking {
+        if let b = picking {
+            let list = choices(b)
             switch c {
             case "up": pickFocus = max(pickFocus - 1, 0)
-            case "down": pickFocus = min(pickFocus + 1, choices.count - 1)
-            case "accept": choose(choices[pickFocus])
-            case "back", "guide": picking = false
+            case "down": pickFocus = min(pickFocus + 1, list.count - 1)
+            case "accept": choose(list[pickFocus])
+            case "back", "guide": picking = nil
+            default: break
+            }
+            return
+        }
+        if let g = groupOpen {
+            let buttons = Self.groups[g].buttons
+            switch c {
+            case "up": groupFocus = max(groupFocus - 1, 0)
+            case "down": groupFocus = min(groupFocus + 1, buttons.count - 1)
+            case "accept": pick(buttons[groupFocus])
+            case "back", "guide": groupOpen = nil
             default: break
             }
             return
         }
         switch c {
-        case "up": move(0, -1)
-        case "down": move(0, 1)
-        case "left": move(-1, 0)
-        case "right": move(1, 0)
-        case "accept": openPicker()
+        case "up", "down", "left", "right": move(c)
+        case "accept": select(focus)
         case "add": reset()
         case "tab", "tabBack": if game != nil { tab = tab == 0 ? 1 : 0 }
         case "back", "guide": close()
@@ -585,96 +628,237 @@ final class LayoutEditor: ObservableObject {
     }
 }
 
+/// An Xbox-style pad, drawn in lines; the given buttons are lit.
+struct PadDrawing: View {
+    let lit: Set<PadButton>
+    let accent: Color
+
+    var body: some View {
+        Canvas { ctx, size in
+            // Drawn on a 400 × 300 grid, scaled to fit.
+            let k = min(size.width / 400, size.height / 300)
+            let ox = (size.width - 400 * k) / 2, oy = (size.height - 300 * k) / 2
+            func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: ox + x * k, y: oy + y * k) }
+            let line = Color.white.opacity(0.7), faint = Color.white.opacity(0.45)
+            let stroke = StrokeStyle(lineWidth: max(1.2, 1.6 * k), lineCap: .round, lineJoin: .round)
+
+            func circle(_ x: CGFloat, _ y: CGFloat, _ r: CGFloat) -> Path {
+                Path(ellipseIn: CGRect(x: ox + (x - r) * k, y: oy + (y - r) * k, width: 2 * r * k, height: 2 * r * k))
+            }
+            func on(_ b: PadButton) -> Bool { lit.contains(b) }
+            func draw(_ path: Path, _ b: PadButton?, fill: Bool = false) {
+                if let b, on(b) {
+                    ctx.fill(path, with: .color(accent.opacity(fill ? 0.9 : 0.35)))
+                    ctx.stroke(path, with: .color(accent), style: stroke)
+                } else {
+                    ctx.stroke(path, with: .color(line), style: stroke)
+                }
+            }
+
+            // Bumpers along the top.
+            var lb = Path()
+            lb.move(to: p(66, 68)); lb.addQuadCurve(to: p(162, 38), control: p(95, 40))
+            lb.addLine(to: p(166, 49)); lb.addQuadCurve(to: p(80, 76), control: p(108, 52))
+            lb.closeSubpath()
+            var rb = Path()
+            rb.move(to: p(334, 68)); rb.addQuadCurve(to: p(238, 38), control: p(305, 40))
+            rb.addLine(to: p(234, 49)); rb.addQuadCurve(to: p(320, 76), control: p(292, 52))
+            rb.closeSubpath()
+            draw(lb, .lb); draw(rb, .rb)
+            // Triggers peek out behind them.
+            var lt = Path()
+            lt.move(to: p(96, 42)); lt.addQuadCurve(to: p(146, 20), control: p(108, 22)); lt.addLine(to: p(156, 30))
+            var rt = Path()
+            rt.move(to: p(304, 42)); rt.addQuadCurve(to: p(254, 20), control: p(292, 22)); rt.addLine(to: p(244, 30))
+            if on(.lt) { ctx.stroke(lt, with: .color(accent), style: StrokeStyle(lineWidth: 4 * k, lineCap: .round)) } else { ctx.stroke(lt, with: .color(faint), style: stroke) }
+            if on(.rt) { ctx.stroke(rt, with: .color(accent), style: StrokeStyle(lineWidth: 4 * k, lineCap: .round)) } else { ctx.stroke(rt, with: .color(faint), style: stroke) }
+
+            // The body: shoulders, grips, and the curve between them.
+            var body = Path()
+            body.move(to: p(200, 50))
+            body.addCurve(to: p(318, 58), control1: p(250, 48), control2: p(295, 50))
+            body.addCurve(to: p(370, 150), control1: p(345, 70), control2: p(360, 110))
+            body.addCurve(to: p(392, 262), control1: p(382, 195), control2: p(395, 235))
+            body.addCurve(to: p(345, 292), control1: p(390, 290), control2: p(365, 298))
+            body.addCurve(to: p(285, 232), control1: p(320, 285), control2: p(305, 250))
+            body.addCurve(to: p(115, 232), control1: p(250, 212), control2: p(150, 212))
+            body.addCurve(to: p(55, 292), control1: p(95, 250), control2: p(80, 285))
+            body.addCurve(to: p(8, 262), control1: p(35, 298), control2: p(10, 290))
+            body.addCurve(to: p(30, 150), control1: p(5, 235), control2: p(18, 195))
+            body.addCurve(to: p(82, 58), control1: p(40, 110), control2: p(55, 70))
+            body.addCurve(to: p(200, 50), control1: p(105, 50), control2: p(150, 48))
+            ctx.stroke(body, with: .color(line), style: stroke)
+
+            // Xbox button.
+            ctx.stroke(circle(200, 78, 15), with: .color(faint), style: stroke)
+            var x = Path()
+            x.move(to: p(191, 69)); x.addLine(to: p(209, 87)); x.move(to: p(209, 69)); x.addLine(to: p(191, 87))
+            ctx.stroke(x, with: .color(faint), style: stroke)
+
+            // Left stick (top left) and right stick (bottom right), as on an Xbox pad.
+            for (b, cx, cy) in [(PadButton.ls, CGFloat(115), CGFloat(118)), (.rs, 252, 182)] {
+                draw(circle(cx, cy, 30), nil)
+                draw(circle(cx, cy, 20), b, fill: false)
+            }
+            // View and Menu.
+            draw(circle(170, 118, 8), .view, fill: true)
+            draw(circle(230, 118, 8), .menu, fill: true)
+
+            // D-pad.
+            ctx.stroke(circle(160, 182, 32), with: .color(faint), style: stroke)
+            let arms: [(PadButton, CGRect)] = [
+                (.up, CGRect(x: 151, y: 156, width: 18, height: 18)), (.down, CGRect(x: 151, y: 190, width: 18, height: 18)),
+                (.left, CGRect(x: 134, y: 173, width: 18, height: 18)), (.right, CGRect(x: 168, y: 173, width: 18, height: 18)),
+            ]
+            var cross = Path()
+            cross.move(to: p(151, 156)); cross.addLine(to: p(169, 156)); cross.addLine(to: p(169, 173)); cross.addLine(to: p(186, 173))
+            cross.addLine(to: p(186, 191)); cross.addLine(to: p(169, 191)); cross.addLine(to: p(169, 208)); cross.addLine(to: p(151, 208))
+            cross.addLine(to: p(151, 191)); cross.addLine(to: p(134, 191)); cross.addLine(to: p(134, 173)); cross.addLine(to: p(151, 173))
+            cross.closeSubpath()
+            for (b, r) in arms where on(b) {
+                ctx.fill(Path(CGRect(x: ox + r.minX * k, y: oy + r.minY * k, width: r.width * k, height: r.height * k)), with: .color(accent.opacity(0.9)))
+            }
+            ctx.stroke(cross, with: .color(line), style: stroke)
+
+            // A, B, X, Y.
+            for (b, cx, cy) in [(PadButton.y, CGFloat(285), CGFloat(92)), (.x, 260, 118), (.b, 310, 118), (.a, 285, 144)] {
+                let c = circle(cx, cy, 12)
+                if on(b) { ctx.fill(c, with: .color(accent)) }
+                ctx.stroke(c, with: .color(on(b) ? accent : line), style: stroke)
+                ctx.draw(Text(b.label).font(.system(size: 13 * k, weight: .bold))
+                            .foregroundStyle(on(b) ? Color.black : Color.white.opacity(0.85)),
+                         at: p(cx, cy))
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
 struct LayoutEditorView: View {
     @ObservedObject private var editor = LayoutEditor.shared
     @ObservedObject private var theme = ThemeSettings.shared
-    @State private var now = Date()
 
     var body: some View {
-        let map = editor.map
         VStack(spacing: 0) {
             header
-            HStack(spacing: 6) {
-                Text("Select a command for \(editor.focus.longLabel)")
-                Image(systemName: "arrow.right")
-                Text(ButtonLayout.label(ButtonLayout.target(editor.focus, in: map)))
-                    .padding(.horizontal, 10).padding(.vertical, 2)
-                    .background(Color.white.opacity(0.15), in: Capsule())
+            HStack(spacing: 10) {
+                if editor.game != nil { glyphChip("LB") }
+                ForEach(editor.tabs.indices, id: \.self) { i in
+                    Text("LAYOUT FOR – \(editor.tabs[i].uppercased())")
+                        .font(.footnote.weight(i == editor.tab ? .bold : .regular)).tracking(0.5)
+                        .foregroundStyle(.white.opacity(i == editor.tab ? 0.95 : 0.4))
+                        .onTapGesture { editor.tab = i }
+                }
+                if editor.game != nil { glyphChip("RB") }
             }
-            .font(.title3.weight(.medium)).lineLimit(1).minimumScaleFactor(0.6)
-            .padding(.top, 10)
+            .padding(.top, 8)
             if editor.followsGlobal {
-                Text("This game uses the global layout. Changing a button gives it its own.")
-                    .font(.footnote).foregroundStyle(.white.opacity(0.6)).padding(.top, 2)
+                Text("Uses the global layout. Changing a button gives this game its own.")
+                    .font(.caption).foregroundStyle(.white.opacity(0.5)).padding(.top, 2)
             }
             GeometryReader { geo in
-                ZStack {
-                    Image(systemName: "gamecontroller")
-                        .resizable().scaledToFit()
-                        .fontWeight(.ultraLight)
-                        .foregroundStyle(.white.opacity(0.22))
-                        .frame(width: geo.size.width * 0.34, height: geo.size.height * 0.62)
-                        .position(x: geo.size.width * 0.5, y: geo.size.height * 0.56)
-                    stickRing(.ls, geo.size); stickRing(.rs, geo.size)
-                    padBackdrop(center: CGPoint(x: PadButton.up.spot.x, y: 0.79), geo.size)
-                    padBackdrop(center: CGPoint(x: PadButton.a.spot.x, y: 0.46), geo.size)
-                    ForEach(PadButton.allCases, id: \.self) { b in
-                        control(b, map: map, size: geo.size)
-                            .position(x: b.spot.x * geo.size.width, y: b.spot.y * geo.size.height)
-                    }
+                let padW = geo.size.width * 0.4
+                HStack(spacing: 0) {
+                    column(LayoutEditor.leftColumn, left: true, height: geo.size.height)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    PadDrawing(lit: Set(editor.focusedButtons), accent: theme.accent.color)
+                        .frame(width: padW, height: geo.size.height)
+                    column(LayoutEditor.rightColumn, left: false, height: geo.size.height)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .padding(.horizontal, 12).padding(.vertical, 8)
+            .padding(.horizontal, 24).padding(.top, 6)
+            HStack(alignment: .top, spacing: 12) {
+                ForEach(LayoutEditor.groups.indices, id: \.self) { i in
+                    groupCell(i)
+                }
+            }
+            .padding(.horizontal, 24).padding(.vertical, 10)
+            .padding(.leading, IslandMargins.current().leading)
             footer
         }
         .foregroundStyle(.white)
-        .background(Color(red: 0.07, green: 0.08, blue: 0.1).ignoresSafeArea())
-        .overlay { if editor.picking { picker } }
-        .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { now = $0 }
+        .background(Color(red: 0.06, green: 0.08, blue: 0.1).ignoresSafeArea())
+        .overlay { if let g = editor.groupOpen, editor.picking == nil { groupPanel(g) } }
+        .overlay { if let b = editor.picking { picker(b) } }
     }
 
     private var header: some View {
-        VStack(spacing: 8) {
-            HStack {
-                Text("\(editor.game?.title ?? "Rig") Controller Settings")
-                    .font(.title3.weight(.semibold)).lineLimit(1)
-                Spacer()
-                BatteryIndicator(compact: true)
-                Text(now.formatted(date: .omitted, time: .shortened)).font(.headline)
-                ProfileAvatar(size: 30)
-            }
-            .padding(.horizontal, 20).padding(.vertical, 10)
-            .padding(.leading, IslandMargins.current().leading)
-            .background(Color.black)
-            HStack(spacing: 12) {
-                if editor.game != nil { shoulderChip("LB") }
-                Spacer()
-                ForEach(editor.tabs.indices, id: \.self) { i in
-                    Text(editor.tabs[i].uppercased())
-                        .font(.subheadline.weight(.bold)).tracking(1)
-                        .padding(.horizontal, 18).padding(.vertical, 8)
-                        .background(i == editor.tab ? Color.white.opacity(0.18) : .clear, in: Capsule())
-                        .foregroundStyle(i == editor.tab ? .white : .white.opacity(0.65))
-                        .onTapGesture { editor.tab = i }
-                }
-                Spacer()
-                if editor.game != nil { shoulderChip("RB") }
-            }
-            .padding(.horizontal, 24)
+        HStack {
+            Text("\(editor.game?.title ?? "Rig") Controller Settings")
+                .font(.title3.weight(.semibold)).lineLimit(1)
+            Spacer()
+        }
+        .padding(.horizontal, 24).padding(.vertical, 12)
+        .padding(.leading, IslandMargins.current().leading)
+        .background(Color.black)
+    }
+
+    private func glyphChip(_ s: String) -> some View {
+        Text(s).font(.system(size: 10, weight: .heavy)).foregroundStyle(.black)
+            .padding(.horizontal, 5).padding(.vertical, 2)
+            .background(Color.white, in: Capsule())
+    }
+
+    /// The physical button's glyph next to its label.
+    @ViewBuilder private func glyph(_ b: PadButton) -> some View {
+        switch b {
+        case .view: Image(systemName: "rectangle.on.rectangle").font(.subheadline)
+        case .menu: Image(systemName: "line.3.horizontal").font(.subheadline)
+        default: glyphChip(b.label)
         }
     }
 
-    private func shoulderChip(_ s: String) -> some View {
-        Text(s).font(.headline.weight(.heavy)).foregroundStyle(.black)
-            .padding(.horizontal, 8).padding(.vertical, 4)
-            .background(Color.white, in: RoundedRectangle(cornerRadius: 5))
+    /// LB, LT, View (or RB, RT, Menu): what each does, spread down the pad's height.
+    private func column(_ buttons: [PadButton], left: Bool, height: CGFloat) -> some View {
+        VStack(alignment: left ? .trailing : .leading, spacing: 0) {
+            ForEach(buttons.indices, id: \.self) { i in
+                let b = buttons[i]
+                let slot: LayoutEditor.Slot = left ? .left(i) : .right(i)
+                let on = editor.focus == slot && editor.groupOpen == nil && editor.picking == nil
+                HStack(spacing: 10) {
+                    if !left { glyph(b) }
+                    Text(editor.does(b))
+                        .font(.body)
+                        .foregroundStyle(editor.changed(b) ? theme.accent.color : .white)
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                    if left { glyph(b) }
+                }
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(on ? Color.white.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(on ? theme.accent.color : .clear, lineWidth: 2))
+                .contentShape(Rectangle())
+                .onTapGesture { editor.select(slot) }
+                .frame(height: height / CGFloat(buttons.count + 1))
+                if i == 0 { Spacer(minLength: 0) }
+            }
+        }
+        .frame(height: height * 0.85)
+    }
+
+    private func groupCell(_ i: Int) -> some View {
+        let g = LayoutEditor.groups[i]
+        let on = editor.focus == .group(i) && editor.groupOpen == nil && editor.picking == nil
+        let custom = g.buttons.contains(where: editor.changed)
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(g.title).font(.caption.weight(.bold)).tracking(0.8).foregroundStyle(.white.opacity(0.55))
+            Text(editor.summary(g)).font(.body)
+                .foregroundStyle(custom ? theme.accent.color : .white)
+                .lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(on ? Color.white.opacity(0.14) : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(on ? theme.accent.color : .clear, lineWidth: 2))
+        .contentShape(Rectangle())
+        .onTapGesture { editor.select(.group(i)) }
     }
 
     private var footer: some View {
         HStack(spacing: 22) {
             ButtonHint(glyph: "y.circle.fill", label: editor.resetLabel).onTapGesture { editor.reset() }
             Spacer()
-            ButtonHint(glyph: "a.circle.fill", label: "Select").onTapGesture { editor.openPicker() }
+            ButtonHint(glyph: "a.circle.fill", label: "Select")
             ButtonHint(glyph: "b.circle.fill", label: "Back").onTapGesture { editor.close() }
         }
         .padding(.horizontal, 24).padding(.vertical, 12)
@@ -682,111 +866,68 @@ struct LayoutEditorView: View {
         .background(Color.black)
     }
 
-    private func stickRing(_ b: PadButton, _ size: CGSize) -> some View {
-        let d = min(size.width * 0.13, size.height * 0.3)
-        return ZStack {
-            Circle().stroke(Color.white.opacity(0.12), lineWidth: 2)
-            ForEach(0..<4, id: \.self) { i in
-                Image(systemName: "triangle.fill").font(.system(size: d * 0.1))
-                    .rotationEffect(.degrees(Double(i) * 90))
-                    .offset(y: -d * 0.4).rotationEffect(.degrees(Double(i) * 90))
-                    .foregroundStyle(.white.opacity(0.5))
-            }
-        }
-        .frame(width: d, height: d)
-        .position(x: b.spot.x * size.width, y: b.spot.y * size.height)
-    }
-
-    private func padBackdrop(center: CGPoint, _ size: CGSize) -> some View {
-        let d = min(size.width * 0.15, size.height * 0.36)
-        return RoundedRectangle(cornerRadius: d * 0.22, style: .continuous)
-            .stroke(Color.white.opacity(0.12), lineWidth: 2)
-            .frame(width: d, height: d).rotationEffect(.degrees(45))
-            .position(x: center.x * size.width, y: center.y * size.height)
-    }
-
-    @ViewBuilder
-    private func control(_ b: PadButton, map: ButtonLayout.Map, size: CGSize) -> some View {
-        let on = b == editor.focus
-        let target = ButtonLayout.target(b, in: map)
-        let changed = target != b.rawValue
-        let badge = PadButton(rawValue: target)?.short ?? "Off"
-        if b.isPill {
-            HStack(spacing: 8) {
-                Text(b.longLabel).lineLimit(1).minimumScaleFactor(0.7)
-                if changed {
-                    Text("→ \(badge)").font(.caption.weight(.bold))
-                        .foregroundStyle(on ? theme.accent.color : theme.accent.color.opacity(0.95))
-                }
-            }
-            .font(.headline.weight(.medium))
-            .foregroundStyle(on ? .black : .white)
-            .frame(width: min(size.width * (b == .view || b == .menu ? 0.13 : 0.2), 230), height: min(34, size.height * 0.1))
-            .background(on ? Color.white : Color.white.opacity(0.14), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .shadow(color: on ? theme.accent.color.opacity(0.9) : .clear, radius: 10)
-            .onTapGesture { editor.focus = b; editor.openPicker() }
-        } else {
-            let d = min(size.width * 0.048, size.height * 0.12) * (b == .ls || b == .rs ? 1.35 : 1)
-            ZStack(alignment: .bottomTrailing) {
-                Text(b.short)
-                    .font(.system(size: d * 0.42, weight: .bold))
-                    .foregroundStyle(on ? .black : .white)
-                    .frame(width: d, height: d)
-                    .background(on ? Color.white : Color.white.opacity(0.28), in: Circle())
-                    .overlay { if b == .ls || b == .rs { Circle().stroke(Color.white.opacity(0.5), lineWidth: 2).padding(4) } }
-                    .shadow(color: on ? theme.accent.color.opacity(0.9) : .clear, radius: 10)
-                if changed {
-                    Text(badge).font(.system(size: max(9, d * 0.26), weight: .heavy))
-                        .foregroundStyle(theme.accent.onAccent)
-                        .padding(.horizontal, 4).padding(.vertical, 1)
-                        .background(theme.accent.color, in: Capsule())
-                        .offset(x: d * 0.22, y: d * 0.12)
-                }
-            }
-            .onTapGesture { editor.focus = b; editor.openPicker() }
-        }
-    }
-
-    private var picker: some View {
-        let choices = editor.choices
-        let current = ButtonLayout.target(editor.focus, in: editor.map)
-        return ZStack {
-            Color.black.opacity(0.6).ignoresSafeArea().onTapGesture { editor.picking = false }
+    private func panel<Content: View>(_ title: String, @ViewBuilder content: () -> Content, cancel: @escaping () -> Void) -> some View {
+        ZStack {
+            Color.black.opacity(0.6).ignoresSafeArea().onTapGesture(perform: cancel)
             VStack(alignment: .leading, spacing: 8) {
-                Text("\(editor.focus.longLabel) does").font(.headline).foregroundStyle(.white.opacity(0.7))
-                ScrollViewReader { proxy in
-                    ScrollView(showsIndicators: false) {
-                        VStack(spacing: 2) {
-                            ForEach(choices.indices, id: \.self) { i in
-                                let on = i == editor.pickFocus
-                                HStack {
-                                    Text(editor.choiceLabel(choices[i])).font(.headline)
-                                    Spacer()
-                                    if choices[i] == current { Image(systemName: "checkmark").font(.headline) }
-                                }
-                                .foregroundStyle(on ? theme.accent.onAccent : .white)
-                                .padding(.horizontal, 14).padding(.vertical, 8)
-                                .background(on ? theme.accent.color : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                .contentShape(Rectangle())
-                                .onTapGesture { editor.choose(choices[i]) }
-                                .id(i)
-                            }
-                        }
-                    }
-                    .onAppear { proxy.scrollTo(editor.pickFocus, anchor: .center) }
-                    .onChange(of: editor.pickFocus) { _, i in withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(i, anchor: .center) } }
-                }
+                Text(title).font(.headline).foregroundStyle(.white.opacity(0.7))
+                content()
                 HStack(spacing: 18) {
                     ButtonHint(glyph: "a.circle.fill", label: "Choose")
-                    ButtonHint(glyph: "b.circle.fill", label: "Cancel").onTapGesture { editor.picking = false }
+                    ButtonHint(glyph: "b.circle.fill", label: "Back").onTapGesture(perform: cancel)
                 }
             }
             .padding(18)
-            .frame(width: 360)
-            .frame(maxHeight: .infinity)
+            .frame(width: 380)
             .padding(.vertical, 24)
             .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             .foregroundStyle(.white)
         }
+    }
+
+    private func row(_ title: String, value: String?, on: Bool, check: Bool = false, tap: @escaping () -> Void) -> some View {
+        HStack {
+            Text(title).font(.headline)
+            Spacer()
+            if let value { Text(value).font(.subheadline.weight(.semibold)) }
+            if check { Image(systemName: "checkmark").font(.headline) }
+        }
+        .foregroundStyle(on ? theme.accent.onAccent : .white)
+        .padding(.horizontal, 14).padding(.vertical, 8)
+        .background(on ? theme.accent.color : .clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: tap)
+    }
+
+    private func groupPanel(_ g: Int) -> some View {
+        let group = LayoutEditor.groups[g]
+        return panel(group.title.capitalized) {
+            VStack(spacing: 2) {
+                ForEach(group.buttons.indices, id: \.self) { i in
+                    let b = group.buttons[i]
+                    row(b.longLabel, value: editor.does(b), on: i == editor.groupFocus) { editor.groupFocus = i; editor.pick(b) }
+                }
+            }
+        } cancel: { editor.groupOpen = nil }
+    }
+
+    private func picker(_ b: PadButton) -> some View {
+        let choices = editor.choices(b)
+        let current = editor.target(b)
+        return panel("\(b.longLabel) does") {
+            ScrollViewReader { proxy in
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 2) {
+                        ForEach(choices.indices, id: \.self) { i in
+                            row(editor.choiceLabel(choices[i], for: b), value: nil, on: i == editor.pickFocus,
+                                check: choices[i] == current) { editor.pickFocus = i; editor.choose(choices[i]) }
+                                .id(i)
+                        }
+                    }
+                }
+                .onAppear { proxy.scrollTo(editor.pickFocus, anchor: .center) }
+                .onChange(of: editor.pickFocus) { _, i in withAnimation(.easeOut(duration: 0.12)) { proxy.scrollTo(i, anchor: .center) } }
+            }
+        } cancel: { editor.picking = nil }
     }
 }
