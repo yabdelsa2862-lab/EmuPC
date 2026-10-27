@@ -378,7 +378,7 @@ struct GOGInstaller {
         guard let items = builds["items"] as? [[String: Any]],
               let build = items.first(where: { ($0["branch"] as? String) == nil }) ?? items.first,
               let link = (build["link"] as? String).flatMap(URL.init(string:)) else {
-            throw GOGError.message("This game has no Galaxy download on GOG (only an older installer), which Rig can't use yet.")
+            throw GOGError.message("This game has no Galaxy download on GOG (only an older installer), which EmuPC can't use yet.")
         }
         let generation = (build["generation"] as? NSNumber)?.intValue ?? 2
         let (folder, folderName, need) = generation == 1
@@ -417,7 +417,7 @@ struct GOGInstaller {
                 .filter { $0.pathExtension.lowercased() == "exe" && !$0.lastPathComponent.lowercased().hasPrefix("unins") } ?? []
             program = exes.max { (($0.fileSize) ?? 0) < (($1.fileSize) ?? 0) }
         }
-        guard let program else { throw GOGError.message("Installed, but Rig could not find the game's program.") }
+        guard let program else { throw GOGError.message("Installed, but EmuPC could not find the game's program.") }
         let cover = await Self.fetchCover(game.id)
         return Result(program: program, arguments: arguments, workingDirectory: workingDirectory, bytes: need, cover: cover)
     }
@@ -880,7 +880,7 @@ struct GOGDownloadSection: View {
                 }
             }
         } footer: {
-            Text(gog.signedIn ? "GOG games have no DRM: they download straight from GOG and start without a launcher. Keep Rig open while they download."
+            Text(gog.signedIn ? "GOG games have no DRM: they download straight from GOG and start without a launcher. Keep EmuPC open while they download."
                               : "Sign in with your GOG account to download the games you own.")
         }
         .sheet(isPresented: $signIn) { GOGSignInView() }
@@ -1042,7 +1042,7 @@ enum GOGLaunchOverride {
 }
 
 
-/// MABD local: Yamagi Quake II for GOG's Quake II, set up by Rig. The game's own
+/// MABD local: Yamagi Quake II for GOG's Quake II, set up by EmuPC. The game's own
 /// quake2.exe cannot draw here (GOGLaunchOverride), so the first install or
 /// start fetches Yamagi Quake II (open source, GPL) from its official site,
 /// checks it against the SHA-256 of the release that was tested, and puts its
@@ -1057,7 +1057,7 @@ enum YamagiSetup {
     static let files = ["yquake2.exe", "SDL3.dll", "curl.dll", "openal32.dll", "ref_soft.dll",
                         "baseq2/game.dll", "baseq2/footsteps.pkz", "ctf/game.dll", "rogue/game.dll", "xatrix/game.dll"]
     static let autoexec = """
-        // Rig: controller layout for Yamagi Quake II (Xbox names).
+        // EmuPC: controller layout for Yamagi Quake II (Xbox names).
         // Runs at every start; change it here or remove this file to use your own binds.
         set joy_labels 1
         bind TRIG_RIGHT +attack
@@ -1106,7 +1106,7 @@ enum YamagiSetup {
             let digest = hasher.finalize().map { String(format: "%02x", $0) }.joined()
             guard digest == sha256 else {
                 LogStore.shared.log("[yamagi] checksum mismatch \(digest): not installed")
-                throw GOGError.message("The Yamagi Quake II download did not match the tested release, so Rig did not install it.")
+                throw GOGError.message("The Yamagi Quake II download did not match the tested release, so EmuPC did not install it.")
             }
             let unpacked = work.appendingPathComponent("x", isDirectory: true)
             try fm.createDirectory(at: unpacked, withIntermediateDirectories: true)

@@ -83,7 +83,7 @@ import UserNotifications
         requestNotificationPermission()
         if #available(iOS 26.0, *), Self.continuedEnabled { submitContinued() }
         if #available(iOS 26.0, *), let task = continued as? BGContinuedProcessingTask {
-            task.updateTitle("Downloading \(name)", subtitle: "Steam download in Rig")
+            task.updateTitle("Downloading \(name)", subtitle: "Steam download in EmuPC")
         }
         if isBackground { beginGrace() }
     }
@@ -126,7 +126,7 @@ import UserNotifications
             registered = identifier
         }
         let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: "Downloading \(currentName)",
-                                                       subtitle: "Steam download in Rig")
+                                                       subtitle: "Steam download in EmuPC")
         request.strategy = .fail
         do {
             try BGTaskScheduler.shared.submit(request)
@@ -146,7 +146,7 @@ import UserNotifications
             DispatchQueue.main.async {
                 self?.log("continued-processing expired; pausing downloads")
                 self?.library?.pauseForBackground()
-                self?.notify("Download paused", body: "Open Rig to continue downloading.")
+                self?.notify("Download paused", body: "Open EmuPC to continue downloading.")
                 self?.finishContinued(success: false)
             }
         }
@@ -166,14 +166,14 @@ import UserNotifications
 
     private func beginGrace() {
         guard graceTask == .invalid, continued == nil, library?.hasActiveDownload == true else { return }
-        graceTask = UIApplication.shared.beginBackgroundTask(withName: "Rig Steam download") { [weak self] in
+        graceTask = UIApplication.shared.beginBackgroundTask(withName: "EmuPC Steam download") { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 // Continued processing keeps the app running; only pause without it.
                 if self.continued == nil {
                     self.log("background time over; pausing downloads")
                     self.library?.pauseForBackground()
-                    self.notify("Download paused", body: "Open Rig to continue downloading.")
+                    self.notify("Download paused", body: "Open EmuPC to continue downloading.")
                 }
                 self.endGrace()
             }

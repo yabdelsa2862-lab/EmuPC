@@ -306,19 +306,19 @@ struct OnboardingView: View {
             Image(systemName: "gamecontroller.fill").font(.system(size: 52)).foregroundStyle(.tint).accessibilityHidden(true)
             if model.since > 0 {
                 // After an update: only the pages added since this device last ran setup.
-                Text("New in Rig").font(.largeTitle.bold()).accessibilityAddTraits(.isHeader)
-                Text("Since you last ran setup, Rig has something new to set up:").font(.title3)
+                Text("New in EmuPC").font(.largeTitle.bold()).accessibilityAddTraits(.isHeader)
+                Text("Since you last ran setup, EmuPC has something new to set up:").font(.title3)
             } else {
-                Text("Welcome to Rig").font(.largeTitle.bold()).accessibilityAddTraits(.isHeader)
-                Text("Rig runs Windows games on your \(UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone").")
+                Text("Welcome to EmuPC").font(.largeTitle.bold()).accessibilityAddTraits(.isHeader)
+                Text("EmuPC runs Windows games on your \(UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone").")
                     .font(.title3)
                 Text("A few optional steps get you ready:").foregroundStyle(.secondary)
             }
             let pages = model.steps
             let offered: [LocalizedStringKey] =
-                (pages.contains(.localDevVPN) ? ["Install LocalDevVPN, which Rig enables JIT through."] : [])
-                + (pages.contains(.jit) ? ["Choose how Rig enables JIT."] : [])
-                + (pages.contains(.signIn) ? ["Sign in to Steam in Rig."] : [])
+                (pages.contains(.localDevVPN) ? ["Install LocalDevVPN, which EmuPC enables JIT through."] : [])
+                + (pages.contains(.jit) ? ["Choose how EmuPC enables JIT."] : [])
+                + (pages.contains(.signIn) ? ["Sign in to Steam in EmuPC."] : [])
                 + (pages.contains(.dockClient) ? ["Download Valve's Steam client components for Madeira Dock."] : [])
                 + (pages.contains(.wineMono) ? ["Download Wine Mono, for games built on .NET Framework."] : [])
             ForEach(offered.indices, id: \.self) { index in point(index + 1, offered[index]) }
@@ -333,7 +333,7 @@ struct OnboardingView: View {
     private var localDevVPNPage: some View {
         VStack(alignment: .leading, spacing: 18) {
             header("Install LocalDevVPN", symbol: "network")
-            Text("Rig enables JIT through LocalDevVPN, a free app that gives Rig a network path to this \(device). Install it from the App Store, then come back.")
+            Text("EmuPC enables JIT through LocalDevVPN, a free app that gives EmuPC a network path to this \(device). Install it from the App Store, then come back.")
                 .fixedSize(horizontal: false, vertical: true)
             if localDevVPNInstalled {
                 Label("LocalDevVPN is installed", systemImage: "checkmark.circle.fill")
@@ -367,12 +367,12 @@ struct OnboardingView: View {
     private var jitChoices: some View {
         VStack(alignment: .leading, spacing: 18) {
             header("Set up JIT", symbol: "bolt.fill")
-            Text("JIT lets Rig run Windows code. Choose how your \(device) gets it.")
+            Text("JIT lets EmuPC run Windows code. Choose how your \(device) gets it.")
             VStack(spacing: 12) {
                 jitChoice("In-app", symbol: "iphone.radiowaves.left.and.right",
                           detail: !OnDevicePairing.isSupported ? "Needs iOS 27 or later."
                               : pairedOnDevice ? "Paired on this \(device)."
-                              : "Pair this \(device) with Rig in Settings. No computer needed.",
+                              : "Pair this \(device) with EmuPC in Settings. No computer needed.",
                           done: pairedOnDevice, enabled: OnDevicePairing.isSupported) { choose(.onDevice) }
                 jitChoice("In-app with pairing file", symbol: "doc.badge.plus",
                           detail: fileImported ? "Pairing file imported." : "Use a pairing file made on a computer.",
@@ -393,7 +393,7 @@ struct OnboardingView: View {
                       done: pairing.phase != .idle || pairedOnDevice)
                 point(2, "Open Settings › Privacy & Security › Developer Mode, scroll down and tap **Pair with \(OnDevicePairing.hostName)**.",
                       done: pairing.isShowingPin || pairedOnDevice)
-                point(3, "Enter the code Rig shows. It's also in the banner at the top of the screen and in a notification.",
+                point(3, "Enter the code EmuPC shows. It's also in the banner at the top of the screen and in a notification.",
                       done: pairedOnDevice)
             }
             if pairedOnDevice {
@@ -444,7 +444,7 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 14) {
                 point(1, "Install [StikDebug](https://github.com/StikDebug/StikDebug/releases/latest) and import this \(device)'s pairing file into it.")
                 point(2, "Install and connect [LocalDevVPN](https://apps.apple.com/us/app/localdevvpn/id6755608044).")
-                point(3, "When you play, Rig opens StikDebug to enable JIT, then comes back.")
+                point(3, "When you play, EmuPC opens StikDebug to enable JIT, then comes back.")
             }
             primary("Use StikDebug", symbol: "arrow.right") {
                 jit.method = .stikDebug
@@ -463,7 +463,7 @@ struct OnboardingView: View {
 
     private var vpnNoteLabel: some View {
         Label {
-            Text("Before you play, connect [LocalDevVPN](https://apps.apple.com/us/app/localdevvpn/id6755608044). Rig enables JIT through it.")
+            Text("Before you play, connect [LocalDevVPN](https://apps.apple.com/us/app/localdevvpn/id6755608044). EmuPC enables JIT through it.")
         } icon: {
             Image(systemName: "network")
         }
@@ -577,8 +577,8 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 18) {
             header("Sign in to Steam", symbol: "person.crop.circle.badge.checkmark")
             Text(model.steps.contains(.dockClient)
-                 ? "When you start a game with Madeira Dock, Rig hands this sign-in to Valve's own Steam client, which signs in and checks your license."
-                 : "Rig keeps a Steam sign-in so it can start your Steam games with your own account.")
+                 ? "When you start a game with Madeira Dock, EmuPC hands this sign-in to Valve's own Steam client, which signs in and checks your license."
+                 : "EmuPC keeps a Steam sign-in so it can start your Steam games with your own account.")
             VStack(alignment: .leading, spacing: 10) {
                 Label("Your password goes only to Steam and is never saved.", systemImage: "lock.fill")
                 Label("The sign-in is kept in this device's Keychain until you sign out.", systemImage: "iphone")
@@ -600,7 +600,7 @@ struct OnboardingView: View {
     private var dockClientPage: some View {
         VStack(alignment: .leading, spacing: 18) {
             header("Prepare Madeira Dock", symbol: "shippingbox")
-            Text("Madeira Dock starts your installed Steam games through Valve's own Steam client, without the Steam desktop window. It needs the client's components, which Rig downloads from Valve.")
+            Text("Madeira Dock starts your installed Steam games through Valve's own Steam client, without the Steam desktop window. It needs the client's components, which EmuPC downloads from Valve.")
             if dock.clientInstalled {
                 Label("Valve's client components are installed.", systemImage: "checkmark.circle.fill")
                     .font(.headline).foregroundStyle(.green)
@@ -630,13 +630,13 @@ struct OnboardingView: View {
     private var wineMonoPage: some View {
         VStack(alignment: .leading, spacing: 18) {
             header("Add .NET Framework support", symbol: "shippingbox.and.arrow.backward")
-            Text("Some Windows games are built on Microsoft's .NET Framework. Rig runs them on Wine Mono, the Wine project's open-source .NET runtime.")
+            Text("Some Windows games are built on Microsoft's .NET Framework. EmuPC runs them on Wine Mono, the Wine project's open-source .NET runtime.")
             if mono.installed {
                 Label("Wine Mono is installed.", systemImage: "checkmark.circle.fill")
                     .font(.headline).foregroundStyle(.green)
                 primary("Continue", symbol: "arrow.right") { model.next() }
             } else {
-                Text("Rig downloads it from WineHQ: about 42 MB, about 130 MB once installed. Most games do not need it; you can also add it later in Settings.")
+                Text("EmuPC downloads it from WineHQ: about 42 MB, about 130 MB once installed. Most games do not need it; you can also add it later in Settings.")
                     .font(.subheadline).foregroundStyle(.secondary)
                 switch mono.phase {
                 case .downloading(let f), .installing(let f):
@@ -677,7 +677,7 @@ struct OnboardingView: View {
                 Text("You can change the JIT method or import a pairing file from Settings › JIT.")
             }
             if model.steps.contains(.dockClient) {
-                Text("Settings › Steam › Madeira Dock lists the Steam games installed in Rig's drive_c and starts them.")
+                Text("Settings › Steam › Madeira Dock lists the Steam games installed in EmuPC's drive_c and starts them.")
             }
             if model.steps.contains(.wineMono) {
                 Text("Settings › .NET Framework downloads or removes Wine Mono.")

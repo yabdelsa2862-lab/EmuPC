@@ -88,7 +88,7 @@ final class RemotePadServer: ObservableObject, @unchecked Sendable {
             startWatchdog()
             LogStore.shared.log("[remote-pad] listening reachable=\(address != nil ? 1 : 0)")
         } catch {
-            problem = "Rig couldn't open its controller port: \(error.localizedDescription)"
+            problem = "EmuPC couldn't open its controller port: \(error.localizedDescription)"
             LogStore.shared.log("[remote-pad] listen failed: \(error.localizedDescription)", level: .error)
         }
     }

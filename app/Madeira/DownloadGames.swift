@@ -198,7 +198,7 @@ final class GameImporter: ObservableObject {
             try fm.createDirectory(at: folder, withIntermediateDirectories: true)
             try fm.moveItem(at: file, to: folder.appendingPathComponent(file.lastPathComponent))
         } else {
-            throw LibraryError.message("Rig can install .zip archives, Windows programs (.exe) and game folders. \(ext.isEmpty ? "This file" : "A .\(ext) file") can't be installed. If it's a .rar or .7z, unpack it in the Files app first.")
+            throw LibraryError.message("EmuPC can install .zip archives, Windows programs (.exe) and game folders. \(ext.isEmpty ? "This file" : "A .\(ext) file") can't be installed. If it's a .rar or .7z, unpack it in the Files app first.")
         }
         progress(1)
         guard let program = bestProgram(in: folder) else {
@@ -321,7 +321,7 @@ enum ZipExtractor {
                 }
             }
         default:
-            throw LibraryError.message("\(e.name) uses a zip compression Rig can't unpack (method \(e.method)). Unpack it in the Files app first.")
+            throw LibraryError.message("\(e.name) uses a zip compression EmuPC can't unpack (method \(e.method)). Unpack it in the Files app first.")
         }
     }
 }
@@ -425,7 +425,7 @@ struct DownloadGamesView: View {
         } header: {
             Text("From a link or file")
         } footer: {
-            Text("A .zip, a Windows program (.exe) or a game folder, from a direct download link or the Files app (including Safari's downloads). Rig puts it in C:\\Games and adds it to your Library. DRM-free stores like GOG and itch.io work best.")
+            Text("A .zip, a Windows program (.exe) or a game folder, from a direct download link or the Files app (including Safari's downloads). EmuPC puts it in C:\\Games and adds it to your Library. DRM-free stores like GOG and itch.io work best.")
         }
     }
 
@@ -530,7 +530,7 @@ struct DownloadGamesView: View {
     @ViewBuilder private var steamSection: some View {
         Section {
             if !SteamOwnedLibrary.enabled {
-                Text(MadeiraDock.bundled ? "Steam downloads are turned off (env.MADEIRA_DOCK or MADEIRA_STEAM_LIBRARY in madeira.cfg)." : "Steam downloads need Madeira Dock, which this build of Rig doesn't include.").foregroundStyle(.secondary)
+                Text(MadeiraDock.bundled ? "Steam downloads are turned off (env.MADEIRA_DOCK or MADEIRA_STEAM_LIBRARY in madeira.cfg)." : "Steam downloads need Madeira Dock, which this build of EmuPC doesn't include.").foregroundStyle(.secondary)
             } else if !steam.signedIn {
                 SteamSignInCard { showSignIn = true }
                     .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
@@ -697,8 +697,8 @@ final class GameCompatibility: ObservableObject {
            let saved = try? JSONDecoder().decode([Int: Report].self, from: data) {
             // A week old is old enough to look again (requirements and anti-cheat change).
             reports = saved.filter { $0.value.checked > Date().addingTimeInterval(-7 * 86_400) }
-                // Reports saved before the app became Rig name it Madeira.
-                .mapValues { var r = $0; r.reasons = r.reasons.map { $0.replacingOccurrences(of: "Madeira", with: "Rig") }; return r }
+                // Reports saved before the app became EmuPC name it Madeira.
+                .mapValues { var r = $0; r.reasons = r.reasons.map { $0.replacingOccurrences(of: "Madeira", with: "EmuPC") }; return r }
         }
     }
 
@@ -713,7 +713,7 @@ final class GameCompatibility: ObservableObject {
     func request(_ appID: Int) {
         if Self.tested.contains(appID) {
             if reports[appID] == nil {
-                reports[appID] = Report(verdict: .tested, reasons: ["Runs in Rig (tested by the project)."], checked: Date())
+                reports[appID] = Report(verdict: .tested, reasons: ["Runs in EmuPC (tested by the project)."], checked: Date())
             }
             return
         }
@@ -827,10 +827,10 @@ final class GameCompatibility: ObservableObject {
             case "supported":
                 // Needs the anti-cheat's own Linux library, which has no iOS version.
                 worsen(.offlineOnly)
-                reasons.append("Online play needs \(names) support that only exists for Linux, not Rig. Single-player or offline modes may work.")
+                reasons.append("Online play needs \(names) support that only exists for Linux, not EmuPC. Single-player or offline modes may work.")
             default:
                 worsen(.blocked)
-                reasons.append("Uses \(names), which blocks the game outside Windows. It won't start in Rig.")
+                reasons.append("Uses \(names), which blocks the game outside Windows. It won't start in EmuPC.")
             }
         }
         if let r = requirements {
@@ -842,10 +842,10 @@ final class GameCompatibility: ObservableObject {
                 let game = max(0.5, gb - 2)
                 if game > budget {
                     worsen(.unlikely)
-                    reasons.append("Asks for a \(shown) GB PC; Rig gets about \(Int(budget)) GB on this iPhone.")
+                    reasons.append("Asks for a \(shown) GB PC; EmuPC gets about \(Int(budget)) GB on this iPhone.")
                 } else if game > budget * 0.7 {
                     worsen(.maybe)
-                    reasons.append("Asks for a \(shown) GB PC, close to the about \(Int(budget)) GB Rig gets on this iPhone.")
+                    reasons.append("Asks for a \(shown) GB PC, close to the about \(Int(budget)) GB EmuPC gets on this iPhone.")
                 } else {
                     reasons.append("Asks for a \(shown) GB PC: fits.")
                 }
@@ -853,14 +853,14 @@ final class GameCompatibility: ObservableObject {
             if let dx = r.directX {
                 if dx >= 12 {
                     worsen(.maybe)
-                    reasons.append("Requires DirectX 12, which is still experimental in Rig.")
+                    reasons.append("Requires DirectX 12, which is still experimental in EmuPC.")
                 } else {
-                    reasons.append("Uses DirectX \(dx), which Rig supports.")
+                    reasons.append("Uses DirectX \(dx), which EmuPC supports.")
                 }
             }
             if r.text.range(of: "vulkan", options: .caseInsensitive) != nil && (r.directX ?? 0) == 0 {
                 worsen(.maybe)
-                reasons.append("Mentions Vulkan, which Rig doesn't support yet.")
+                reasons.append("Mentions Vulkan, which EmuPC doesn't support yet.")
             }
         } else {
             reasons.append("Steam didn't list system requirements, so this is a guess.")

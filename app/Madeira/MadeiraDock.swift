@@ -180,7 +180,7 @@ enum MadeiraDock {
               secret.allSatisfy({ (65...90).contains($0) || (97...122).contains($0) || (48...57).contains($0) || [45, 46, 95].contains($0) }),
               steamID >> 56 == 1, (steamID >> 52) & 15 == 1, (steamID >> 32) & 0xfffff == 1,
               steamID & 0xffffffff != 0, validAppID(appID) else {
-            throw DockError.message("Your Steam sign-in cannot be handed to Dock. Sign in to Steam again in Rig.")
+            throw DockError.message("Your Steam sign-in cannot be handed to Dock. Sign in to Steam again in EmuPC.")
         }
         var data = Data("MDOCK001".utf8)
         func append(_ value: UInt64, bytes: Int) {
@@ -258,7 +258,7 @@ enum MadeiraDock {
                 case 0: return "Steam did not start preparing this game's executable. Verify the game's files with Steam, then try again."
                 case 10: return "Steam is busy with this game (updating or running). Try again in a moment."
                 case -4: return "Steam's Windows service manager could not be started, so Steam could not prepare this game's executable."
-                case -5: return "Steam's Windows service is not installed in Rig's Windows setup, so Steam could not prepare this game's executable."
+                case -5: return "Steam's Windows service is not installed in EmuPC's Windows setup, so Steam could not prepare this game's executable."
                 default: return "Steam could not prepare this game's executable for your account (code \(fields["ceg-result"] ?? "?"))."
                 }
             }
@@ -295,7 +295,7 @@ enum MadeiraDock {
             case 18: return "Steam does not see this game as installed."
             case 28: return "Steam could not find the game's executable."
             // Steam's CreateProcess for the game failed: Madeira could not load the program.
-            case 29: return "Steam started this game's program, but Rig could not load it (Steam reports an invalid platform). Export the log: it names the reason."
+            case 29: return "Steam started this game's program, but EmuPC could not load it (Steam reports an invalid platform). Export the log: it names the reason."
             case 22, 23, 24: return "Steam could not read this game's configuration. Try again."
             case 25: return "Steam says this game is not released yet."
             case 26: return "Steam says this game is not available in your region."
@@ -420,7 +420,7 @@ enum MadeiraDock {
         var values = URLResourceValues(); values.isExcludedFromBackup = true
         try folder.setResourceValues(values)
         let descriptor = open(url.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
-        guard descriptor >= 0 else { throw DockError.message("Rig could not create Dock's private sign-in transfer.") }
+        guard descriptor >= 0 else { throw DockError.message("EmuPC could not create Dock's private sign-in transfer.") }
         let file = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         do {
             try fm.setAttributes([.protectionKey: FileProtectionType.complete], ofItemAtPath: url.path)

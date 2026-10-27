@@ -16,13 +16,13 @@ enum StikJITHelper {
         var errorDescription: String? {
             switch self {
             case .scriptMissing:
-                return "Rig's JIT script is missing from this installation. Reinstall Rig."
+                return "EmuPC's JIT script is missing from this installation. Reinstall EmuPC."
             case .invalidRequest:
-                return "Rig could not create the StikDebug request."
+                return "EmuPC could not create the StikDebug request."
             case .unavailable:
                 return "StikDebug is not installed. Install it, or configure Built-in StikJIT."
             case .timedOut:
-                return "StikDebug did not attach to Rig within 90 seconds. Check its pairing file and LocalDevVPN, then try again."
+                return "StikDebug did not attach to EmuPC within 90 seconds. Check its pairing file and LocalDevVPN, then try again."
             }
         }
     }
@@ -114,9 +114,9 @@ enum StikJITHelper {
     /// Why the last allocatePool() returned nil, in words for the person playing
     /// (the library shows it); nil after a success.
     private(set) static var poolFailure: String?
-    static let noDebuggerMessage = "JIT is switched on, but StikDebug is not attached to Rig, so the JIT memory cannot "
+    static let noDebuggerMessage = "JIT is switched on, but StikDebug is not attached to EmuPC, so the JIT memory cannot "
         + "be set up. This happens when JIT is enabled from StikDebug's own app list. Tap Enable JIT: StikDebug then "
-        + "reopens Rig with Rig's script, ready to play."
+        + "reopens EmuPC with EmuPC's script, ready to play."
 
     /// This app run's pool exists. The debugger detaches right after the pool is
     /// made, by design, so from then on "no debugger attached" is the normal state.
@@ -860,13 +860,13 @@ enum StikJITHelper {
                 // re-roll, so the app stays up and says what to do.
                 poolFailure = noDebuggerMessage
                 LogStore.shared.log("[jit-debugger] the pool request was not answered: no debugger is attached. "
-                    + "Enable JIT with Rig's Enable JIT button, so that StikDebug attaches with Rig's "
+                    + "Enable JIT with EmuPC's Enable JIT button, so that StikDebug attaches with EmuPC's "
                     + "script and stays attached until the game starts.", level: .error)
                 return nil
             }
             poolFailure = requestUnanswered
-                ? "The debugger could not allocate the JIT memory. Restart Rig, enable JIT and try again."
-                : "The JIT memory landed at an address Rig cannot use. Restart Rig, enable JIT and try again."
+                ? "The debugger could not allocate the JIT memory. Restart EmuPC, enable JIT and try again."
+                : "The JIT memory landed at an address EmuPC cannot use. Restart EmuPC, enable JIT and try again."
             LogStore.shared.log("BAD POOL: no valid placement after retries. Killing in 10s — please relaunch.", level: .error)
             DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + 10) {
                 LogStore.shared.log("BAD POOL — exiting now. Relaunch the app.", level: .error)
@@ -1248,7 +1248,7 @@ enum StikJITHelper {
 
         guard kr1 == KERN_SUCCESS else {
             LogStore.shared.log("vm_remap failed: \(kr1)", level: .error)
-            poolFailure = "Rig could not map its JIT memory (vm_remap error \(kr1)). Restart Rig and try again; "
+            poolFailure = "EmuPC could not map its JIT memory (vm_remap error \(kr1)). Restart EmuPC and try again; "
                 + "if it keeps happening, send the diagnostic log."
             return nil
         }
@@ -1267,7 +1267,7 @@ enum StikJITHelper {
         guard kr2 == KERN_SUCCESS else {
             LogStore.shared.log("vm_protect(RW) failed: \(kr2)", level: .error)
             vm_deallocate(mach_task_self_, rwAddr, vm_size_t(poolSize))
-            poolFailure = "Rig could not make its JIT memory writable (vm_protect error \(kr2)). Restart Rig and try again; "
+            poolFailure = "EmuPC could not make its JIT memory writable (vm_protect error \(kr2)). Restart EmuPC and try again; "
                 + "if it keeps happening, send the diagnostic log."
             return nil
         }

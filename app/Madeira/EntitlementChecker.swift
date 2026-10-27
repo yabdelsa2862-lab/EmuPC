@@ -73,8 +73,8 @@ struct SigningStatus {
         let known = jit_cs_status(&flags)
         return SigningStatus(known: known, flags: flags)
     }
-    static let notDebuggableMessage = "JIT cannot be enabled on this copy of Rig: it was signed without get-task-allow "
-        + "(a distribution or enterprise certificate), so no debugger can attach to it. Install Rig with a development "
+    static let notDebuggableMessage = "JIT cannot be enabled on this copy of EmuPC: it was signed without get-task-allow "
+        + "(a distribution or enterprise certificate), so no debugger can attach to it. Install EmuPC with a development "
         + "certificate (for example SideStore, AltStore or Xcode), then enable JIT again."
 }
 
@@ -157,11 +157,11 @@ enum DeviceDiagnostics {
         log.log("[device] signing: \(signing()) \(profile())")
         if !SigningStatus.current.debuggable {
             log.log("[device] this copy is signed without get-task-allow: no debugger can attach to it, so JIT cannot be "
-                + "enabled. Reinstall Rig with a development certificate.", level: .error)
+                + "enabled. Reinstall EmuPC with a development certificate.", level: .error)
         }
         if StikJITHelper.flaggedWithoutDebugger {
             log.log("[jit-debugger] CS_DEBUGGED is set but no debugger is attached at start-up: JIT was enabled "
-                + "outside Rig (StikDebug's app list attaches and leaves). Enable JIT in Rig before playing.",
+                + "outside EmuPC (StikDebug's app list attaches and leaves). Enable JIT in EmuPC before playing.",
                 level: .error)
         }
         let screen = UIScreen.main

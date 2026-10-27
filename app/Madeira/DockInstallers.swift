@@ -559,10 +559,10 @@ enum DockInstallers {
     /// session of their own also leaves madsync on for the game. One session runs per app run,
     /// so the game starts after a restart of Madeira.
     private(set) static var installsOnly = false
-    nonisolated static let restartWords = "To start the game, restart Rig: swipe it away in the app switcher, open it again and start the game."
+    nonisolated static let restartWords = "To start the game, restart EmuPC: swipe it away in the app switcher, open it again and start the game."
     /// What the starting screen says once the installs ended, until the session has closed (the
     /// wineserver writes the registry to disk as it stops; Madeira asks for the restart then).
-    nonisolated static let closingWords = "This session now closes. Rig asks you to restart it when it has; wait for that."
+    nonisolated static let closingWords = "This session now closes. EmuPC asks you to restart it when it has; wait for that."
     /// madeira-bcd: the game's lines a session of one-time installs runs without. Social Club's
     /// layout 2 (env.MADEIRA_SC_PA_POOLS) and RDR2's hold (env.MADEIRA_RDR2_VA_HOLD) take the
     /// 4 GB slots 32-bit programs run in, so the Visual C++ setups' second 32-bit process could
@@ -869,7 +869,7 @@ enum DockInstallers {
            let moved = DockReset.restoreStandIn(drive: drive, documents: prefix.deletingLastPathComponent(),
                                                 standIn: Bundle.main.resourceURL?.appendingPathComponent("arm64ec-windows/vulkan-1.dll")) {
             LogStore.shared.log("[dock-installers] C:\\" + moved.replacingOccurrences(of: "/", with: "\\") +
-                                " (an installer's Vulkan loader) moved to Documents/madeira-reset-backup; this session links Rig's stand-in")
+                                " (an installer's Vulkan loader) moved to Documents/madeira-reset-backup; this session links EmuPC's stand-in")
         }
         guard enabled else {
             LogStore.shared.log("[dock-installers] app=\(app) off (MADEIRA_DOCK_INSTALLERS=0)"); return
@@ -944,7 +944,7 @@ enum DockInstallers {
         } else {
             note = DockInstallScripts.note(items)
             if installsOnly {
-                note = (note.map { $0 + " " } ?? "") + "This start runs only them; afterwards restart Rig and start the game again."
+                note = (note.map { $0 + " " } ?? "") + "This start runs only them; afterwards restart EmuPC and start the game again."
             } else if serverSync && madsyncConfigured {
                 note = (note.map { $0 + " " } ?? "") + "This start uses Wine's standard synchronization instead of madsync; the next start uses madsync again."
             }
@@ -969,7 +969,7 @@ enum DockInstallers {
                             "services-step=\(script == nil ? "-" : services == .off ? "off" : "start") session-madsync-off=\(serverSync ? 1 : 0) " +
                             "installs-only=\(installsOnly ? 1 : 0)")
         if installsOnly {
-            LogStore.shared.log("[dock-installers] app=\(app) this session runs only the one-time installs; the game starts after Rig is restarted (MADEIRA_DOCK_INSTALL_SEPARATE=0: in the same session)")
+            LogStore.shared.log("[dock-installers] app=\(app) this session runs only the one-time installs; the game starts after EmuPC is restarted (MADEIRA_DOCK_INSTALL_SEPARATE=0: in the same session)")
         }
     }
 
@@ -1090,7 +1090,7 @@ enum DockInstallers {
     /// owner's words (2026-10-12): all succeeded, or the count and the failed programs. `ended`
     /// is poll's text, nil when the batch never ended.
     static func restartNotice(_ ended: String?) -> String {
-        if allSucceeded { return "One-time installs completed successfully. Close Rig and open it again to play the game." }
-        return (ended ?? "One-time installs ended.") + "\nClose Rig and open it again to play the game."
+        if allSucceeded { return "One-time installs completed successfully. Close EmuPC and open it again to play the game." }
+        return (ended ?? "One-time installs ended.") + "\nClose EmuPC and open it again to play the game."
     }
 }

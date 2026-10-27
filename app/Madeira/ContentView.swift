@@ -1299,7 +1299,7 @@ struct ContentView: View {
                     developerBody
                 }
             }
-            .navigationTitle("Rig")
+            .navigationTitle("EmuPC")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarBackground(.regularMaterial, for: .navigationBar)
             // The library keeps a material bar only before iOS 26. From iOS 26 the
@@ -1308,9 +1308,9 @@ struct ContentView: View {
             // progressive blur (as in the App Store), with no hard edge.
             .toolbarBackground(library.enabled && !Self.systemScrollEdge ? .visible : .automatic, for: .navigationBar)
             // A second session cannot start in this process; offer to close Madeira.
-            .alert("Restart Rig", isPresented: Binding(get: { library.restartNotice != nil },
+            .alert("Restart EmuPC", isPresented: Binding(get: { library.restartNotice != nil },
                                                             set: { if !$0 { library.restartNotice = nil } })) {
-                Button("Close Rig") {
+                Button("Close EmuPC") {
                     LogStore.shared.log("[session-once] closed by the user for a restart")
                     AppRelaunch.closeAndOffer("restart between games")
                 }
@@ -2156,10 +2156,10 @@ struct ContentView: View {
             }
             .padding()
         }
-        .alert("Restart Rig", isPresented: $showFrontendRestart) {
+        .alert("Restart EmuPC", isPresented: $showFrontendRestart) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Close Rig from the app switcher and open it again to use the new interface.")
+            Text("Close EmuPC from the app switcher and open it again to use the new interface.")
         }
         // One sheet for the strip, not one per button: a sheet attached to a
         // button closed again whenever this often-redrawn screen rebuilt it.
@@ -2381,7 +2381,7 @@ struct ContentView: View {
         if !SigningStatus.current.debuggable, MadeiraConfig.flag("MADEIRA_JIT_SIGNING_CHECK") {
             jitStatus = .unavailable
             logStore.log(String(format: "[jit-signing] get-task-allow is missing (cs-flags=0x%x): no debugger can attach to this copy, "
-                                + "so JIT cannot be enabled. Reinstall Rig with a development certificate.",
+                                + "so JIT cannot be enabled. Reinstall EmuPC with a development certificate.",
                                 SigningStatus.current.flags), level: .error)
             if library.enabled { library.error = SigningStatus.notDebuggableMessage }
             launchAfterJITEnded(started: false)
@@ -2444,7 +2444,7 @@ struct ContentView: View {
         }
         if StikJITHelper.flaggedWithoutDebugger {
             logStore.log("[jit-debugger] launch held: CS_DEBUGGED is set but no debugger is attached; "
-                         + "JIT has to be enabled again from Rig", level: .error)
+                         + "JIT has to be enabled again from EmuPC", level: .error)
             if inLibrary { library.jitNotice = StikJITHelper.noDebuggerMessage }
         } else {
             logStore.log("JIT not enabled. Press 'Enable JIT' first.", level: .error)
@@ -2475,7 +2475,7 @@ struct ContentView: View {
                          message: "\(name)'s saves are still being checked or downloaded. Starting now may leave you on older saves.")
         case .unchecked(let why):
             return .init(appID: appID, kind: .unchecked, title: "Steam Cloud could not be checked",
-                         message: "Rig does not know whether \(name)'s saves on this device are the latest."
+                         message: "EmuPC does not know whether \(name)'s saves on this device are the latest."
                             + (why.map { " (\($0))" } ?? "") + " If another device has newer saves, starting now means choosing between them later.")
         case .conflict(let count):
             return .init(appID: appID, kind: .conflict, title: "Saves differ from Steam Cloud",
@@ -3422,7 +3422,7 @@ struct ContentView: View {
                                 then: { startDock(game, compactPool: compactPool, profile: profile) }) else { return }
         guard cloudClear(game.id, name: game.name, retry: { startDock(game, compactPool: compactPool, profile: profile) }) else { return }
         guard wine_process_is_running() == 0, wineserver_is_running() == 0, !inLibrary || library.current == nil else {
-            logStore.log("[madeira-dock] a session already ran in this app run; restart Rig first", level: .error)
+            logStore.log("[madeira-dock] a session already ran in this app run; restart EmuPC first", level: .error)
             if inLibrary { library.error = "A session is already running." }
             return
         }
@@ -3441,7 +3441,7 @@ struct ContentView: View {
         do {
             try MadeiraDock.validate(game, drive: MadeiraDock.drive)
             try profile?.validate()
-            guard SteamSignIn.isSignedIn else { throw DockError.message("Sign in to Steam in Rig before starting Dock.") }
+            guard SteamSignIn.isSignedIn else { throw DockError.message("Sign in to Steam in EmuPC before starting Dock.") }
         } catch { fail(error); return }
         // Only one sign-in of the account may be online: the app's own Steam connection
         // (library, playtime, downloads) logs off and its socket closes before the sign-in
@@ -3475,7 +3475,7 @@ struct ContentView: View {
                     throw DockError.message("The launch state changed. Enable JIT and try again.")
                 }
                 guard let signIn = SteamSignIn.credentialsForDock() else {
-                    throw DockError.message("Sign in to Steam in Rig before starting Dock.")
+                    throw DockError.message("Sign in to Steam in EmuPC before starting Dock.")
                 }
                 try MadeiraDock.writeHandoff(account: signIn.accountName, token: signIn.refreshToken, appID: game.id)
             } catch { fail(error); return }
@@ -3745,7 +3745,7 @@ struct SetupGuideView: View {
                     guideRow(
                         icon: "cpu",
                         title: "JIT Compilation",
-                        detail: "Required for x86 code translation. On iOS 26, StikDebug must stay attached — assign the 'universal' or 'MeloNX' JIT script to Rig in StikDebug."
+                        detail: "Required for x86 code translation. On iOS 26, StikDebug must stay attached — assign the 'universal' or 'MeloNX' JIT script to EmuPC in StikDebug."
                     )
                     guideRow(
                         icon: "memorychip",
@@ -3760,15 +3760,15 @@ struct SetupGuideView: View {
                 }
 
                 Section("Setup Steps") {
-                    stepRow(number: 1, text: "Install Rig via SideStore or Xcode")
+                    stepRow(number: 1, text: "Install EmuPC via SideStore or Xcode")
                     stepRow(number: 2, text: "Install GetMoreRam and run it to inject memory entitlements into your App ID")
-                    stepRow(number: 3, text: "Reinstall Rig with the same IPA to apply injected entitlements")
-                    stepRow(number: 4, text: "In StikDebug, assign the 'universal' JIT script to Rig and launch it")
-                    stepRow(number: 5, text: "Launch Rig and tap 'Test JIT' to verify")
+                    stepRow(number: 3, text: "Reinstall EmuPC with the same IPA to apply injected entitlements")
+                    stepRow(number: 4, text: "In StikDebug, assign the 'universal' JIT script to EmuPC and launch it")
+                    stepRow(number: 5, text: "Launch EmuPC and tap 'Test JIT' to verify")
                 }
 
                 Section("About") {
-                    Text("Rig is a proof-of-concept for running x86 Windows games on iOS using FEX-Emu, Wine, and Metal-based graphics translation.")
+                    Text("EmuPC is a proof-of-concept for running x86 Windows games on iOS using FEX-Emu, Wine, and Metal-based graphics translation.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }

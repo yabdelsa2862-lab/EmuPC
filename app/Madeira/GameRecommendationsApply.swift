@@ -92,27 +92,27 @@ extension GameRecommendations {
 
     /// The line under Reset to Recommended. `desktop`: the Desktop entry's page.
     static func note(_ rec: GameRecommendation?, desktop: Bool = false) -> String {
-        guard let rec else { return "Rig has no recommended settings for this game yet; resetting empties this game's config." }
+        guard let rec else { return "EmuPC has no recommended settings for this game yet; resetting empties this game's config." }
         let lines = GameProfile.parse(rec.config).count
         if rec.id == standard.id {
-            return (desktop ? "Rig recommends its standard settings for the Desktop: "
-                            : "Rig has no list for this game yet, so it recommends its standard settings: ")
+            return (desktop ? "EmuPC recommends its standard settings for the Desktop: "
+                            : "EmuPC has no list for this game yet, so it recommends its standard settings: ")
                 + "\(lines) config line\(lines == 1 ? "" : "s") (the emulator's code-patch report off, without which many games "
                 + "close at start). Resetting replaces "
                 + (desktop ? "the Desktop's" : "this game's") + " config with them."
         }
         let summary = rec.switchSummary
         let switches = summary.isEmpty ? "" : "; " + summary
-        return "Rig's recommended settings for \(rec.title): \(lines) config lines\(switches). Resetting replaces this game's config and these switches with them."
+        return "EmuPC's recommended settings for \(rec.title): \(lines) config lines\(switches). Resetting replaces this game's config and these switches with them."
     }
 
     /// The question before a reset.
     static func question(_ rec: GameRecommendation?, desktop: Bool = false) -> String {
-        guard let rec else { return "Rig has no recommended settings for this game yet. Empty this game's config?" }
+        guard let rec else { return "EmuPC has no recommended settings for this game yet. Empty this game's config?" }
         if rec.id == standard.id {
-            return "Replace \(desktop ? "the Desktop's" : "this game's") config with Rig's standard settings? Changes you made to it are lost."
+            return "Replace \(desktop ? "the Desktop's" : "this game's") config with EmuPC's standard settings? Changes you made to it are lost."
         }
-        return "Replace this game's config and switches with Rig's recommended settings for \(rec.title)? Changes you made to them are lost."
+        return "Replace this game's config and switches with EmuPC's recommended settings for \(rec.title)? Changes you made to them are lost."
     }
 
     // MARK: -

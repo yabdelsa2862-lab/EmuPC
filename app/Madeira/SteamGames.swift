@@ -621,7 +621,7 @@ struct SteamSignInCard: View {
                 Image(systemName: "person.crop.circle.badge.plus").font(.system(size: 30)).foregroundStyle(.tint)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Sign in to Steam").font(.headline)
-                    Text("See your Steam games here and install them without leaving Rig.")
+                    Text("See your Steam games here and install them without leaving EmuPC.")
                         .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.leading)
                 }
                 Spacer(minLength: 0)
@@ -1032,7 +1032,7 @@ struct SteamGameSheet: View {
         }
     }
 
-    static let downloadNote = "Games download directly from Steam with your account into C:\\Program Files (x86)\\Steam\\steamapps\\common. You can leave Rig while it downloads: on iOS 26 and later iOS shows the download's progress and keeps it going; on earlier versions it pauses after a short while and continues when you return. A download pauses while a game is running and continues afterwards."
+    static let downloadNote = "Games download directly from Steam with your account into C:\\Program Files (x86)\\Steam\\steamapps\\common. You can leave EmuPC while it downloads: on iOS 26 and later iOS shows the download's progress and keeps it going; on earlier versions it pauses after a short while and continues when you return. A download pauses while a game is running and continues afterwards."
 
     @ViewBuilder private func primaryAction(_ item: SteamGamesRules.Item) -> some View {
         if let installed = item.installed {
@@ -1090,7 +1090,7 @@ struct SteamCloudQuitRow: View {
         Task {
             await steam.uploadForQuit(appID, replaceCloud: replaceCloud)
             guard case .done(let count) = steam.cloudQuit else { return }
-            LogStore.shared.log("[steam-cloud] app=\(appID) quit-upload done files=\(count): closing Rig")
+            LogStore.shared.log("[steam-cloud] app=\(appID) quit-upload done files=\(count): closing EmuPC")
             try? await Task.sleep(nanoseconds: 1_200_000_000)   // long enough to read the result
             AppRelaunch.closeAndOffer("Steam Cloud upload done")
         }
@@ -1099,7 +1099,7 @@ struct SteamCloudQuitRow: View {
     var body: some View {
         if SteamOwnedLibrary.cloudQuitEnabled, steam.signedIn {
             VStack(alignment: .leading, spacing: 8) {
-                Button("Upload saves and close Rig", systemImage: "icloud.and.arrow.up") { run(replaceCloud: false) }
+                Button("Upload saves and close EmuPC", systemImage: "icloud.and.arrow.up") { run(replaceCloud: false) }
                     .disabled(working)
                 switch steam.cloudQuit {
                 case .working(let text):
@@ -1108,7 +1108,7 @@ struct SteamCloudQuitRow: View {
                     Label(count == 0 ? "Steam Cloud is already up to date. Closing…" : "Uploaded \(count) save\(count == 1 ? "" : "s"). Closing…",
                           systemImage: "checkmark.circle.fill").font(.callout).foregroundStyle(.green)
                 case .failed(let message):
-                    Text("Not uploaded, Rig stays open: \(message)").font(.callout).foregroundStyle(.orange)
+                    Text("Not uploaded, EmuPC stays open: \(message)").font(.callout).foregroundStyle(.orange)
                 case .conflict(let count):
                     Text("Not uploaded: \(count) save\(count == 1 ? " was" : "s were") also changed in Steam Cloud, by another device or with no record of a sync here. Uploading would replace the cloud's \(count == 1 ? "copy" : "copies").")
                         .font(.callout).foregroundStyle(.orange)
@@ -1116,11 +1116,11 @@ struct SteamCloudQuitRow: View {
                         .confirmationDialog("Replace the Steam Cloud saves with this device's?", isPresented: $confirmReplace, titleVisibility: .visible) {
                             Button("Replace the cloud saves", role: .destructive) { run(replaceCloud: true) }
                             Button("Cancel", role: .cancel) { }
-                        } message: { Text("The saves in Steam Cloud are overwritten for every device. Their current copies are saved first, in Files › Rig › Steam Cloud Backups.") }
+                        } message: { Text("The saves in Steam Cloud are overwritten for every device. Their current copies are saved first, in Files › EmuPC › Steam Cloud Backups.") }
                 case nil:
                     EmptyView()
                 }
-                Text("Save in the game first. Uploads this game's saves to Steam Cloud, then closes Rig; Steam in this session is signed out when the upload starts.")
+                Text("Save in the game first. Uploads this game's saves to Steam Cloud, then closes EmuPC; Steam in this session is signed out when the upload starts.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -1163,7 +1163,7 @@ struct SteamCloudSection: View {
             } header: {
                 Text("Steam Cloud")
             } footer: {
-                Text("Syncs when Rig starts and when this page opens, not while you play. Use Upload saves when you stop. Replaced saves go to Files › Rig › Steam Cloud Backups.")
+                Text("Syncs when EmuPC starts and when this page opens, not while you play. Use Upload saves when you stop. Replaced saves go to Files › EmuPC › Steam Cloud Backups.")
             }
         }
     }
@@ -1218,13 +1218,13 @@ struct SteamCloudSection: View {
             Text("Nothing is changed until you choose which to keep.")
                 .font(.caption).foregroundStyle(.secondary)
             Button("Keep the Steam Cloud saves…") { confirmCloud = true }
-                .confirmationDialog("Use the Steam Cloud version of \(Self.saves(conflicts.count)) on this device? This device's copies are saved first, in Files › Rig › Steam Cloud Backups.",
+                .confirmationDialog("Use the Steam Cloud version of \(Self.saves(conflicts.count)) on this device? This device's copies are saved first, in Files › EmuPC › Steam Cloud Backups.",
                                     isPresented: $confirmCloud, titleVisibility: .visible) {
                     Button("Use the Steam Cloud saves", role: .destructive) { Task { await steam.resolveCloud(appID, useCloud: true) } }
                     Button("Cancel", role: .cancel) {}
                 }
             Button("Keep this device's saves…") { confirmDevice = true }
-                .confirmationDialog("Keep this device's version of \(Self.saves(conflicts.count))? Saves that differ replace Steam Cloud's for every device; the cloud's copies are saved first, in Files › Rig › Steam Cloud Backups. Saves missing on this device stay missing, and Steam Cloud keeps them.",
+                .confirmationDialog("Keep this device's version of \(Self.saves(conflicts.count))? Saves that differ replace Steam Cloud's for every device; the cloud's copies are saved first, in Files › EmuPC › Steam Cloud Backups. Saves missing on this device stay missing, and Steam Cloud keeps them.",
                                     isPresented: $confirmDevice, titleVisibility: .visible) {
                     Button("Keep this device's saves", role: .destructive) { Task { await steam.resolveCloud(appID, useCloud: false) } }
                     Button("Cancel", role: .cancel) {}

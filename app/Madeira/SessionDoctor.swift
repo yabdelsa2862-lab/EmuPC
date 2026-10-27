@@ -57,11 +57,11 @@ struct SessionReport: Identifiable {
         case .memory:
             return "\(peak) iOS closes an app that goes over its memory limit. Use less memory for this game: a lower resolution, 30 FPS, and memory swap."
         case .background:
-            return "\(peak) iOS can close a game while Rig is in the background. Keep Rig open while playing."
+            return "\(peak) iOS can close a game while EmuPC is in the background. Keep EmuPC open while playing."
         case .crash:
             return record.fastCPU
                 ? "\(peak) Fast CPU mode is on for this game and can make games crash. Turn it off and try again."
-                : "\(peak) Rig closed without running out of memory. The diagnostic log has the details."
+                : "\(peak) EmuPC closed without running out of memory. The diagnostic log has the details."
         }
     }
 }
@@ -364,8 +364,8 @@ enum AppRelaunch {
 
         private static func arm() {
             let content = UNMutableNotificationContent()
-            content.title = "Rig closed"
-            content.body = "Tap to open Rig again."
+            content.title = "EmuPC closed"
+            content.body = "Tap to open EmuPC again."
             content.sound = .default
             content.interruptionLevel = .timeSensitive
             // Same identifier: each arm replaces the last, so it fires only once the pushing stops.
@@ -384,8 +384,8 @@ enum AppRelaunch {
         center.requestAuthorization(options: [.alert, .sound]) { granted, _ in
             guard granted else { exit(0) }
             let content = UNMutableNotificationContent()
-            content.title = "Rig closed"
-            content.body = "Tap to open Rig again."
+            content.title = "EmuPC closed"
+            content.body = "Tap to open EmuPC again."
             content.sound = .default
             content.interruptionLevel = .timeSensitive
             let request = UNNotificationRequest(identifier: identifier, content: content,
@@ -417,8 +417,8 @@ enum AppRelaunch {
 /// "Did Madeira close by itself?" for Shortcuts: yes after a crash, a close by
 /// iOS while Madeira was in front, or a restart; no when the player left it.
 struct ClosedByItselfIntent: AppIntent {
-    static let title: LocalizedStringResource = "Did Rig close by itself?"
-    static let description = IntentDescription("Yes when Rig crashed, was closed by iOS while you were using it, or restarted itself. Use it in a \"When Rig is closed\" automation to open Rig again.")
+    static let title: LocalizedStringResource = "Did EmuPC close by itself?"
+    static let description = IntentDescription("Yes when EmuPC crashed, was closed by iOS while you were using it, or restarted itself. Use it in a \"When EmuPC is closed\" automation to open EmuPC again.")
     static let openAppWhenRun = false
 
     func perform() async throws -> some IntentResult & ReturnsValue<Bool> {
@@ -472,8 +472,8 @@ final class InGameGuide: ObservableObject {
                 controls.visible.toggle(); model.saveCurrentProfile()
             },
             Item(title: "All settings", value: nil, symbol: "slider.horizontal.3") { _ in self.fullMenu = true },
-            Item(title: "Restart Rig", value: nil, symbol: "arrow.clockwise") { _ in AppRelaunch.closeAndOffer("in-game guide") },
-            Item(title: "Close Rig", value: nil, symbol: "power") { _ in
+            Item(title: "Restart EmuPC", value: nil, symbol: "arrow.clockwise") { _ in AppRelaunch.closeAndOffer("in-game guide") },
+            Item(title: "Close EmuPC", value: nil, symbol: "power") { _ in
                 // Stop the game first so it gets its normal shutdown, then close.
                 model.menu = false; model.stopGame()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { AppRelaunch.close() }
@@ -612,7 +612,7 @@ struct StopLaunchPrompt: View {
 
 /// MABD local: the player's own music while they play. Game sound mixes with
 /// it (instead of stopping it), and the guides show Apple Music's song with
-/// play/pause and skip. iOS gives no other app's playback to Rig, so this is
+/// play/pause and skip. iOS gives no other app's playback to EmuPC, so this is
 /// the Music app only.
 @MainActor
 final class MusicNow: ObservableObject {
@@ -688,7 +688,7 @@ final class MusicNow: ObservableObject {
         guard ready else { return }
         guard allowed else {
             // iOS answers on a background queue: a closure that inherits the main
-            // actor traps there (and, with the JIT debugger attached, freezes Rig).
+            // actor traps there (and, with the JIT debugger attached, freezes EmuPC).
             let answered: @Sendable (MPMediaLibraryAuthorizationStatus) -> Void = { status in
                 DispatchQueue.main.async {
                     MainActor.assumeIsolated {

@@ -80,25 +80,25 @@ enum MadeiraBuiltInJIT {
             return
         }
         guard let identifier = helperIdentifier else {
-            fail(2, "Rig's JIT helper is missing from this installation. Reinstall Rig, and keep its app extensions if your sideloader asks.")
+            fail(2, "EmuPC's JIT helper is missing from this installation. Reinstall EmuPC, and keep its app extensions if your sideloader asks.")
             return
         }
         if NSClassFromString("NSExtension") == nil {
             dlopen("/System/Library/Frameworks/ExtensionFoundation.framework/ExtensionFoundation", RTLD_NOW)
         }
         guard let extensionClass = NSClassFromString("NSExtension") else {
-            fail(3, "iOS did not provide the extension API Rig's JIT helper needs.")
+            fail(3, "iOS did not provide the extension API EmuPC's JIT helper needs.")
             return
         }
         let factory = unsafeBitCast(extensionClass as AnyObject, to: NSExtensionClassShim.self)
         let found: AnyObject
         do { found = try factory.extension(withIdentifier: identifier) }
         catch {
-            fail(2, "Rig's JIT helper (\(identifier)) could not be found: \(error.localizedDescription) Reinstall Rig.")
+            fail(2, "EmuPC's JIT helper (\(identifier)) could not be found: \(error.localizedDescription) Reinstall EmuPC.")
             return
         }
         guard let data = try? JSONEncoder().encode(request) else {
-            fail(4, "The request for Rig's JIT helper could not be encoded.")
+            fail(4, "The request for EmuPC's JIT helper could not be encoded.")
             return
         }
         let helper = HelperRequest(extension: found, operation: request.operation.rawValue, completion: completion)
@@ -137,12 +137,12 @@ private final class HelperRequest {
         shim.setRequestCancellationBlock { [weak self] _, error in
             let message = error?.localizedDescription ?? "the request was cancelled"
             DispatchQueue.main.async { MainActor.assumeIsolated {
-                self?.end(.failure(Self.error(5, "Rig's JIT helper stopped: \(message)")))
+                self?.end(.failure(Self.error(5, "EmuPC's JIT helper stopped: \(message)")))
             } }
         }
         shim.setRequestInterruptionBlock { [weak self] _ in
             DispatchQueue.main.async { MainActor.assumeIsolated {
-                self?.end(.failure(Self.error(6, "Rig's JIT helper stopped unexpectedly. Try again.")))
+                self?.end(.failure(Self.error(6, "EmuPC's JIT helper stopped unexpectedly. Try again.")))
             } }
         }
         let item = NSExtensionItem()
@@ -151,7 +151,7 @@ private final class HelperRequest {
             DispatchQueue.main.async { MainActor.assumeIsolated {
                 guard let self else { return }
                 guard let uuid else {
-                    self.end(.failure(Self.error(7, "Rig's JIT helper did not start. Reinstall Rig, and keep its app extensions if your sideloader asks.")))
+                    self.end(.failure(Self.error(7, "EmuPC's JIT helper did not start. Reinstall EmuPC, and keep its app extensions if your sideloader asks.")))
                     return
                 }
                 LogStore.shared.log("[jit-helper] \(self.operation): started \(identifier) as pid \(self.shim.pid(forRequestIdentifier: uuid))")
@@ -162,7 +162,7 @@ private final class HelperRequest {
 
     private func returned(_ payload: Data?) {
         guard let payload, let response = try? JSONDecoder().decode(MadeiraJITRequest.Response.self, from: payload) else {
-            end(.failure(Self.error(8, "Rig's JIT helper finished without an answer.")))
+            end(.failure(Self.error(8, "EmuPC's JIT helper finished without an answer.")))
             return
         }
         LogStore.shared.log("[jit-helper] \(operation): finished success=\(response.success ? 1 : 0)")

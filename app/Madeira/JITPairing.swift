@@ -81,7 +81,7 @@ import UserNotifications
         guard Self.isSupported, !active, session == nil else { return }
         var error: UnsafeMutablePointer<CChar>?
         guard let session = madeira_rppairing_new(Self.hostName, &error) else {
-            fail(Self.take(error) ?? "Rig could not open its pairing port.")
+            fail(Self.take(error) ?? "EmuPC could not open its pairing port.")
             return
         }
         self.session = session
@@ -133,11 +133,11 @@ import UserNotifications
         phase = .pin(pin)
         log("code shown")
         if #available(iOS 26.0, *), let task = continued as? BGContinuedProcessingTask {
-            task.updateTitle("Pairing code \(pin)", subtitle: "Enter it on this \(Self.deviceKind) to pair with Rig")
+            task.updateTitle("Pairing code \(pin)", subtitle: "Enter it on this \(Self.deviceKind) to pair with EmuPC")
             task.progress.completedUnitCount = 1
         }
         if UIApplication.shared.applicationState != .active {
-            notify("Rig pairing code: \(pin)", body: "Enter this code on your \(Self.deviceKind) to finish pairing.")
+            notify("EmuPC pairing code: \(pin)", body: "Enter this code on your \(Self.deviceKind) to finish pairing.")
         }
     }
 
@@ -155,11 +155,11 @@ import UserNotifications
                 phase = .paired(device: device ?? "this \(Self.deviceKind)")
                 log("paired")
                 if UIApplication.shared.applicationState != .active {
-                    notify("Paired with Rig", body: "Return to Rig to finish setting up JIT.")
+                    notify("Paired with EmuPC", body: "Return to EmuPC to finish setting up JIT.")
                 }
                 endBackground(success: true)
             } catch {
-                fail("Pairing finished, but Rig could not save the pairing file.")
+                fail("Pairing finished, but EmuPC could not save the pairing file.")
             }
         case 2:
             endBackground(success: false)
@@ -218,8 +218,8 @@ import UserNotifications
         guard active else { return }
         log("advertising failed error=\(error)")
         fail(error == DNSServiceErrorType(kDNSServiceErr_PolicyDenied)
-             ? "Rig needs Local Network access to pair. Allow it in Settings › Apps › Rig, then try again."
-             : "Rig could not announce itself on the local network. Check that Wi-Fi is on, then try again.")
+             ? "EmuPC needs Local Network access to pair. Allow it in Settings › Apps › EmuPC, then try again."
+             : "EmuPC could not announce itself on the local network. Check that Wi-Fi is on, then try again.")
     }
 
     private func stopAdvertising() {
@@ -237,11 +237,11 @@ import UserNotifications
     }
 
     private func beginBackground() {
-        grace = UIApplication.shared.beginBackgroundTask(withName: "Rig pairing") {
+        grace = UIApplication.shared.beginBackgroundTask(withName: "EmuPC pairing") {
             MainActor.assumeIsolated {
                 let pairing = OnDevicePairing.shared
                 if pairing.continued == nil && pairing.active {
-                    pairing.cancel(reason: "iOS stopped Rig in the background before pairing finished. Try again, and pair from Settings straight away.")
+                    pairing.cancel(reason: "iOS stopped EmuPC in the background before pairing finished. Try again, and pair from Settings straight away.")
                 }
                 pairing.endGrace()
             }
@@ -260,7 +260,7 @@ import UserNotifications
             guard ok else { log("register refused"); backgroundLimited = true; return }
             registered = identifier
         }
-        let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: "Pairing with Rig",
+        let request = BGContinuedProcessingTaskRequest(identifier: identifier, title: "Pairing with EmuPC",
                                                        subtitle: "Settings › Privacy & Security › Developer Mode")
         request.strategy = .fail
         do {
@@ -278,7 +278,7 @@ import UserNotifications
         continued = task
         task.progress.totalUnitCount = 2
         if case .pin(let pin) = phase {
-            task.updateTitle("Pairing code \(pin)", subtitle: "Enter it on this \(Self.deviceKind) to pair with Rig")
+            task.updateTitle("Pairing code \(pin)", subtitle: "Enter it on this \(Self.deviceKind) to pair with EmuPC")
             task.progress.completedUnitCount = 1
         }
         task.expirationHandler = {

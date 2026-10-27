@@ -453,7 +453,7 @@ struct EpicManifest {
     static func parse(_ raw: Data, secrets: [String: String]) throws -> EpicManifest {
         var header = ByteReader(raw)
         guard try header.u32() == 0x44BEC00C else {
-            throw EpicError.message("This game uses an older Epic manifest that Rig can't read yet.")
+            throw EpicError.message("This game uses an older Epic manifest that EmuPC can't read yet.")
         }
         let headerSize = Int(try header.u32())
         let sizeUncompressed = Int(try header.u32())
@@ -978,7 +978,7 @@ struct EpicDownloadSection: View {
                 }
             }
         } footer: {
-            Text(epic.signedIn ? "Games download straight from Epic. Each start signs the game in to Epic for you. Games with anti-cheat in online modes won't play online. Keep Rig open while they download."
+            Text(epic.signedIn ? "Games download straight from Epic. Each start signs the game in to Epic for you. Games with anti-cheat in online modes won't play online. Keep EmuPC open while they download."
                                : "Sign in with your Epic account to download the games you own, free ones included.")
         }
         .sheet(isPresented: $signIn) { EpicSignInView() }

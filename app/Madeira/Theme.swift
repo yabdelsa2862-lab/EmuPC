@@ -223,7 +223,7 @@ struct StartupAnimation: View {
                         .scaleEffect(mark ? 1 : 0.4)
                         .opacity(mark ? 1 : 0)
                 }
-                Text("RIG")
+                Text("EMUPC")
                     .font(.system(size: 30, weight: .heavy, design: .rounded))
                     .tracking(title ? 12 : 2)
                     .foregroundStyle(.white)
@@ -239,7 +239,7 @@ struct StartupAnimation: View {
             withAnimation(.easeIn(duration: 0.45).delay(1.9)) { fade = true }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.4) { finished() }
         }
-        .accessibilityLabel("Rig")
+        .accessibilityLabel("EmuPC")
     }
 }
 
@@ -267,7 +267,7 @@ struct ThemeSettingsSection: View {
             }
             Toggle("Startup animation", isOn: $theme.startup)
         } header: { Text("Theme") } footer: {
-            Text("The controller home's colours and background, and the animation when Rig opens with a controller. With Game art, a game without art (or no games yet) shows Waves.")
+            Text("The controller home's colours and background, and the animation when EmuPC opens with a controller. With Game art, a game without art (or no games yet) shows Waves.")
         }
     }
 }

@@ -1123,7 +1123,7 @@ struct ControllerHome: View {
         let engine = SyncEngine.current, eco = MadeiraConfig.bool("eco", default: false)
         let memory = SettingsCategory(title: "Memory & speed", symbol: "memorychip.fill", items: [
             Setting(title: "JIT pool", value: mb(pool, zero: "Standard (896 MB)"),
-                    note: "Memory reserved for translated game code. Applies after restarting Rig.") { d in
+                    note: "Memory reserved for translated game code. Applies after restarting EmuPC.") { d in
                 let v = cycle(RuntimeMemorySyncSettings.poolChoices, pool, d); setConfig("pool", v > 0 ? String(v) : nil)
             },
             Setting(title: "Video memory", value: mb(vram, zero: "Automatic"),
@@ -1192,7 +1192,7 @@ struct ControllerHome: View {
             Setting(title: "Background", value: theme.background.label,
                     note: "Behind the home: the focused game's art, a moving aurora, a glow in your accent colour, or plain dark.") { d in theme.cycleBackground(d) },
             Setting(title: "Startup animation", value: theme.startup ? "On" : "Off",
-                    note: "Plays when Rig opens with a controller.") { _ in theme.startup.toggle() },
+                    note: "Plays when EmuPC opens with a controller.") { _ in theme.startup.toggle() },
         ])
         // MABD local: the global controller layout (GameTuning.swift ButtonLayout).
         let layout = ButtonLayout.global
@@ -1301,8 +1301,8 @@ struct ControllerHome: View {
          GuideItem(title: "Music", symbol: "music.note", music: true) { MusicNow.shared.toggle() },
          GuideItem(title: "Touch library", symbol: "hand.tap.fill") { openLibrary() },
          GuideItem(title: pads.running ? "Wi-Fi controllers: on" : "Wi-Fi controllers: off", symbol: "iphone.radiowaves.left.and.right") { pads.setEnabled(!pads.running) },
-         GuideItem(title: "Restart Rig", symbol: "arrow.clockwise") { AppRelaunch.closeAndOffer("guide") },
-         GuideItem(title: "Close Rig", symbol: "power") { AppRelaunch.close() }]
+         GuideItem(title: "Restart EmuPC", symbol: "arrow.clockwise") { AppRelaunch.closeAndOffer("guide") },
+         GuideItem(title: "Close EmuPC", symbol: "power") { AppRelaunch.close() }]
     }
 
     /// The guide, sliding in from the left like a console's.

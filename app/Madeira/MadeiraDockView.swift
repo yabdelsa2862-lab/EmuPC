@@ -143,7 +143,7 @@ final class MadeiraDockModel: ObservableObject {
                         // wineserver has stopped by now, so the registry is on disk.
                         let ended = DockInstallers.poll(drive: MadeiraDock.drive) ?? "One-time installs ended."
                         status = ended + "\n" + DockInstallers.restartWords
-                        LogStore.shared.log("[dock-installers] the installs-only session ended; the game starts after Rig is restarted")
+                        LogStore.shared.log("[dock-installers] the installs-only session ended; the game starts after EmuPC is restarted")
                         LibraryModel.shared.restartNotice = DockInstallers.restartNotice(DockInstallers.poll(drive: MadeiraDock.drive))
                     } else {
                         status = "Madeira Dock stopped before reporting a result. Export the log."
@@ -274,7 +274,7 @@ struct DockInstallRequestRows: View {
             Button("Record as done") { dock.setInstallRequest(appID, .record) }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("For an installer that finished its work but never closed, so Rig never saw it end. At the next start the game's own install-script programs are recorded as done, as a finished run would be, and are not run again. Nothing is installed or removed.")
+            Text("For an installer that finished its work but never closed, so EmuPC never saw it end. At the next start the game's own install-script programs are recorded as done, as a finished run would be, and are not run again. Nothing is installed or removed.")
         }
         // madeira-bcd: a reset removes what the installers put in (DockReset.swift), into a backup.
         .confirmationDialog("Reset \(name)'s one-time installs?", isPresented: $confirmReset, titleVisibility: .visible) {
@@ -282,7 +282,7 @@ struct DockInstallRequestRows: View {
             Button("Reset and sign out of Rockstar", role: .destructive) { dock.setInstallRequest(appID, .resetSignOut) }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("At the next start Rig removes what the one-time installs put into Wine: the Rockstar Games Launcher, Social Club, the Visual C++ 2015-2022 runtimes (x86 and x64) and the Vulkan runtime. That start then runs only the installers again, as on a new device; after it, restart Rig and start the game. Games sharing these installs (GTA V, Red Dead Redemption 2) install them again at their next start too. The game files and saves stay. Everything removed is kept in the madeira-reset-backup folder in Rig's Documents. Sign out also removes the Rockstar sign-in.")
+            Text("At the next start EmuPC removes what the one-time installs put into Wine: the Rockstar Games Launcher, Social Club, the Visual C++ 2015-2022 runtimes (x86 and x64) and the Vulkan runtime. That start then runs only the installers again, as on a new device; after it, restart EmuPC and start the game. Games sharing these installs (GTA V, Red Dead Redemption 2) install them again at their next start too. The game files and saves stay. Everything removed is kept in the madeira-reset-backup folder in EmuPC's Documents. Sign out also removes the Rockstar sign-in.")
         }
     }
 }

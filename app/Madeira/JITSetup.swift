@@ -138,7 +138,7 @@ final class JITCoordinator: ObservableObject {
             switch self {
             case .setupRequired(let message): return message
             case .pairingMissing: return "Pair this device or import its pairing file first."
-            case .scriptMissing: return "Rig's JIT script is missing from this installation. Reinstall Rig."
+            case .scriptMissing: return "EmuPC's JIT script is missing from this installation. Reinstall EmuPC."
             }
         }
     }
@@ -167,9 +167,9 @@ final class JITCoordinator: ObservableObject {
         var message: String {
             switch self {
             case .vpn:
-                return "Rig couldn't reach this device. Connect LocalDevVPN, then try again."
+                return "EmuPC couldn't reach this device. Connect LocalDevVPN, then try again."
             case .pairing:
-                return "This device closed the connection, which usually means it no longer accepts Rig's pairing. Pair again, and check that LocalDevVPN is connected."
+                return "This device closed the connection, which usually means it no longer accepts EmuPC's pairing. Pair again, and check that LocalDevVPN is connected."
             }
         }
     }
@@ -202,8 +202,8 @@ final class JITCoordinator: ObservableObject {
 
     var automaticDescription: String {
         StikJITHelper.isAvailable
-            ? "StikDebug is installed, so Rig will open it directly."
-            : "StikDebug was not detected, so Rig will use its built-in helper."
+            ? "StikDebug is installed, so EmuPC will open it directly."
+            : "StikDebug was not detected, so EmuPC will use its built-in helper."
     }
 
     func refreshPairingStatus() {
@@ -357,7 +357,7 @@ final class JITCoordinator: ObservableObject {
         try JITPairingFileStore.store(data, source: .onDevice)
         refreshPairingStatus()
         method = .builtIn
-        status = "Paired in Rig."
+        status = "Paired in EmuPC."
         error = nil
     }
 
@@ -415,14 +415,14 @@ final class JITCoordinator: ObservableObject {
 
         busy = true
         error = nil
-        status = "Starting Rig's JIT helper…"
+        status = "Starting EmuPC's JIT helper…"
         var readinessTimer: Timer?
         var readinessFinished = false
         MadeiraBuiltInJIT.send(
             .enable(targetPID: getpid(), pairingData: pairing,
                     scriptBase64: script.base64EncodedString()),
             started: { [weak self] in
-                self?.status = "Waiting for Rig's JIT helper to attach…"
+                self?.status = "Waiting for EmuPC's JIT helper to attach…"
                 readinessTimer = StikJITHelper.waitForDebugger { [weak self] result in
                     guard !readinessFinished else { return }
                     readinessFinished = true
@@ -513,7 +513,7 @@ extension JITCoordinator {
             if let p = mmap(nil, control << 20, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0), p != MAP_FAILED {
                 let before = MemoryProbe.footprint()
                 MemoryProbe.touch(p, bytes: control << 20, seed: 1)
-                note("control \(control) MB in Rig: footprint \(delta(before, MemoryProbe.footprint()))")
+                note("control \(control) MB in EmuPC: footprint \(delta(before, MemoryProbe.footprint()))")
                 munmap(p, control << 20)
             }
 
@@ -536,7 +536,7 @@ extension JITCoordinator {
                 guard response.success else { note("\(size) MB: \(response.message)"); break }
                 let before = MemoryProbe.footprint()
                 guard let p = MemoryProbe.map(name, bytes: size << 20, create: false) else {
-                    note("\(size) MB: Rig could not map the helper's memory (errno \(errno))")
+                    note("\(size) MB: EmuPC could not map the helper's memory (errno \(errno))")
                     break
                 }
                 let bad = MemoryProbe.mismatches(p, bytes: size << 20, seed: 0x4D41_4445)
@@ -547,7 +547,7 @@ extension JITCoordinator {
                 let later = MemoryProbe.footprint()
                 MemoryProbe.held.append(p)   // kept for the next, larger step
                 note("\(size) MB from helper (helper footprint \(mb(response.footprint ?? 0)), \(bad) bad pages): "
-                     + "Rig read \(delta(before, afterRead)), write \(delta(afterRead, afterWrite)), "
+                     + "EmuPC read \(delta(before, afterRead)), write \(delta(afterRead, afterWrite)), "
                      + "3 s later \(delta(before, later)); available \(delta(availBefore, UInt64(os_proc_available_memory())))")
             }
             note("end: footprint \(mb(MemoryProbe.footprint())), available \(mb(UInt64(os_proc_available_memory())))")
@@ -656,7 +656,7 @@ struct JITSetupView: View {
 
     private var pairingLabel: String {
         switch coordinator.pairingSource {
-        case .onDevice: return "Paired in Rig"
+        case .onDevice: return "Paired in EmuPC"
         case .imported: return "File imported"
         case nil: return "Not set up"
         }
@@ -682,14 +682,14 @@ struct JITSetupView: View {
                 } header: {
                     Text("JIT method")
                 } footer: {
-                    Text("Automatic uses StikDebug when it is installed. Rig does not silently change methods after a failure.")
+                    Text("Automatic uses StikDebug when it is installed. EmuPC does not silently change methods after a failure.")
                 }
 
                 if coordinator.method != .stikDebug {
                     Section {
                         LabeledContent("Pairing", value: pairingLabel)
                         if OnDevicePairing.isSupported {
-                            Button(coordinator.pairingSource == .onDevice ? "Pair in Rig again" : "Pair in Rig") {
+                            Button(coordinator.pairingSource == .onDevice ? "Pair in EmuPC again" : "Pair in EmuPC") {
                                 pairing.start()
                             }
                             .disabled(pairing.active)
@@ -703,8 +703,8 @@ struct JITSetupView: View {
                         Text("Built-in StikJIT")
                     } footer: {
                         Text(OnDevicePairing.isSupported
-                             ? "Pair in Rig or import a pairing file made on a computer, connect LocalDevVPN, then check setup. The pairing file is kept in this device's Keychain."
-                             : "Import this device's pairing file, connect LocalDevVPN, then check setup. The pairing file is kept in this device's Keychain. Pairing in Rig needs iOS 27 or later.")
+                             ? "Pair in EmuPC or import a pairing file made on a computer, connect LocalDevVPN, then check setup. The pairing file is kept in this device's Keychain."
+                             : "Import this device's pairing file, connect LocalDevVPN, then check setup. The pairing file is kept in this device's Keychain. Pairing in EmuPC needs iOS 27 or later.")
                     }
 
                     Section {
@@ -725,7 +725,7 @@ struct JITSetupView: View {
                                  destination: URL(string: "https://github.com/StikDebug/StikDebug/releases/latest")!)
                         }
                     } footer: {
-                        Text("StikDebug needs a pairing file and an active LocalDevVPN connection. Rig sends its own script automatically.")
+                        Text("StikDebug needs a pairing file and an active LocalDevVPN connection. EmuPC sends its own script automatically.")
                     }
                 }
 
@@ -733,7 +733,7 @@ struct JITSetupView: View {
                     Button("Run memory experiment") { coordinator.runMemoryProbe() }
                         .disabled(coordinator.busy)
                 } footer: {
-                    Text("Tests whether memory held by Rig's helper process counts against Rig's own memory limit. Close games first; the results appear below and in the log.")
+                    Text("Tests whether memory held by EmuPC's helper process counts against EmuPC's own memory limit. Close games first; the results appear below and in the log.")
                 }
 
                 if coordinator.busy {

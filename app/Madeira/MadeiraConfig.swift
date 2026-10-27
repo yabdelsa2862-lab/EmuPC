@@ -217,7 +217,7 @@ enum MadeiraConfig {
     @discardableResult
     static func migrateLegacy(log: (String) -> Void) -> [String] {
         guard let d = documents, let u = url, !present else { return [] }
-        var lines = ["# Rig configuration (ml1095): one file for every switch.",
+        var lines = ["# EmuPC configuration (ml1095): one file for every switch.",
                      "# key = value; lines starting with # are comments; the last line wins.",
                      "# Keys are the old file names without 'madeira-' and '.txt'.",
                      "# Environment exports: env.NAME = value. DXMT options: dxmt = a=b;c=d.",

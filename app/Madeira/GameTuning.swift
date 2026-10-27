@@ -172,7 +172,7 @@ final class GameDeletion: ObservableObject {
         case .steam, .folder:
             return "\(entry.title)\(size) is deleted from this iPhone and the space comes back. Saves are kept."
         case .entryOnly:
-            return "\(entry.title) leaves the library. Its files were not installed by Rig, so they stay on drive C:."
+            return "\(entry.title) leaves the library. Its files were not installed by EmuPC, so they stay on drive C:."
         }
     }
 
@@ -241,7 +241,7 @@ struct GameDeleteDialog: ViewModifier {
 
 /// MABD local: controller remapping, one global layout and an optional one per
 /// game. Applied to the pad state the game sees (GamepadInput), never to what
-/// Rig's own menus read, so the guide and its chords keep working. A layout maps
+/// EmuPC's own menus read, so the guide and its chords keep working. A layout maps
 /// each physical button to the button the game gets, or to nothing.
 enum PadButton: String, CaseIterable, Codable {
     case a, b, x, y, lb, rb, lt, rt, view, menu, ls, rs, up, down, left, right
@@ -352,7 +352,7 @@ struct ButtonLayoutSettingsSection: View {
                 Button("Reset to default") { map = [:] }.disabled(map.isEmpty)
             }
         } header: { Text("Controller buttons") } footer: {
-            Text("What each controller button does in games. A game can have its own layout in its details. Rig's guide (Xbox button) always works.")
+            Text("What each controller button does in games. A game can have its own layout in its details. EmuPC's guide (Xbox button) always works.")
         }
         .onChange(of: map) { _, m in ButtonLayout.global = m }
     }
@@ -783,7 +783,7 @@ struct LayoutEditorView: View {
 
     private var header: some View {
         HStack {
-            Text("\(editor.game?.title ?? "Rig") Controller Settings")
+            Text("\(editor.game?.title ?? "EmuPC") Controller Settings")
                 .font(.title3.weight(.semibold)).lineLimit(1)
             Spacer()
         }

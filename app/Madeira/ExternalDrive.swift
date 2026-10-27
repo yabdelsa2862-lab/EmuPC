@@ -63,7 +63,7 @@ final class ExternalDrive: ObservableObject, @unchecked Sendable {
             UserDefaults.standard.set(data, forKey: Self.bookmarkKey)
         } catch {
             LogStore.shared.log("[external-drive] bookmark failed: \(error.localizedDescription)", level: .error)
-            set(nil, problem: "Rig couldn't keep access to that folder: \(error.localizedDescription)")
+            set(nil, problem: "EmuPC couldn't keep access to that folder: \(error.localizedDescription)")
             return
         }
         // Madeira writes games there: say so now rather than at the first install.
@@ -103,7 +103,7 @@ final class ExternalDrive: ObservableObject, @unchecked Sendable {
             return
         }
         guard FileManager.default.isWritableFile(atPath: url.path) else {
-            set(nil, problem: "Rig can read this drive but not write to it. It may be formatted as NTFS (read-only on iPhone) or locked: reformat it as exFAT or APFS on a computer.")
+            set(nil, problem: "EmuPC can read this drive but not write to it. It may be formatted as NTFS (read-only on iPhone) or locked: reformat it as exFAT or APFS on a computer.")
             LogStore.shared.log("[external-drive] not writable", level: .error)
             return
         }
