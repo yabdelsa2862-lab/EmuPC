@@ -666,12 +666,17 @@ final class MusicNow: ObservableObject {
     /// A: play or pause. Asks for access to the Music app once.
     func toggle() {
         guard allowed else {
-            MPMediaLibrary.requestAuthorization { status in
-                Task { @MainActor in
-                    self.allowed = status == .authorized
-                    self.refresh()
+            // iOS answers on a background queue: a closure that inherits the main
+            // actor traps there (and, with the JIT debugger attached, freezes Rig).
+            let answered: @Sendable (MPMediaLibraryAuthorizationStatus) -> Void = { status in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        MusicNow.shared.allowed = status == .authorized
+                        MusicNow.shared.refresh()
+                    }
                 }
             }
+            MPMediaLibrary.requestAuthorization(answered)
             return
         }
         if player.playbackState == .playing { player.pause() } else { player.play() }
