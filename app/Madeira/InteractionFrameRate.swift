@@ -177,10 +177,15 @@ struct InteractionFrameRateInstaller: UIViewRepresentable {
             detach()
             guard window != nil else { return }
             attachIfWanted()
-            defaultsObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated {
-                    guard let self else { return }
-                    if InteractionFrameRate.switchedOn { self.attachIfWanted() } else { self.detachObserver() }
+            // No queue: the poster never waits for the main thread. iOS frameworks
+            // change defaults on their own queues while the main thread waits on
+            // them (Apple Music's first use), which deadlocked with queue: .main.
+            defaultsObserver = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: nil) { [weak self] _ in
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        guard let self else { return }
+                        if InteractionFrameRate.switchedOn { self.attachIfWanted() } else { self.detachObserver() }
+                    }
                 }
             }
         }

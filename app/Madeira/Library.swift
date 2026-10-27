@@ -1916,12 +1916,16 @@ final class AmbientGlowSettings: ObservableObject {
     private var observer: NSObjectProtocol?
     private init() {
         var last = LibraryGridArm.enabled
-        observer = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            let now = LibraryGridArm.enabled
-            guard now != last else { return }
-            last = now
-            self?.objectWillChange.send()
-            NotificationCenter.default.post(name: Self.changed, object: nil)
+        // No queue (then a hop to main): a framework that changes defaults while
+        // the main thread waits on it must not wait for the main thread here.
+        observer = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: nil) { [weak self] _ in
+            DispatchQueue.main.async {
+                let now = LibraryGridArm.enabled
+                guard now != last else { return }
+                last = now
+                self?.objectWillChange.send()
+                NotificationCenter.default.post(name: Self.changed, object: nil)
+            }
         }
     }
 }

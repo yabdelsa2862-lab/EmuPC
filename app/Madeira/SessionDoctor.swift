@@ -625,8 +625,11 @@ final class MusicNow: ObservableObject {
     @Published private(set) var playing = false
     @Published private(set) var allowed = MPMediaLibrary.authorizationStatus() == .authorized
 
-    private let player = MPMusicPlayerController.systemMusicPlayer
+    private lazy var player = MPMusicPlayerController.systemMusicPlayer
     private var observers: [NSObjectProtocol] = []
+    /// The music frameworks set up their account state on first use; until that
+    /// has happened off the main thread, the player is left alone.
+    private var ready = false
 
     /// Game sound plays alongside the player's music (on by default).
     static var mix: Bool {
@@ -641,6 +644,17 @@ final class MusicNow: ObservableObject {
     }
 
     private init() {
+        // First use sets up iTunesCloud's account store, which posts defaults
+        // changes and waits for listeners. Done here on a background queue so
+        // the main thread is free; the main thread then never waits on it.
+        DispatchQueue.global(qos: .utility).async {
+            _ = MPMediaLibrary.default().lastModifiedDate
+            DispatchQueue.main.async { MainActor.assumeIsolated { MusicNow.shared.start() } }
+        }
+    }
+
+    private func start() {
+        ready = true
         player.beginGeneratingPlaybackNotifications()
         let center = NotificationCenter.default
         for name in [Notification.Name.MPMusicPlayerControllerNowPlayingItemDidChange,
@@ -652,12 +666,18 @@ final class MusicNow: ObservableObject {
         refresh()
     }
 
+    private var itemID: MPMediaEntityPersistentID?
+
     func refresh() {
-        playing = player.playbackState == .playing
-        guard allowed, let item = player.nowPlayingItem else { title = nil; artist = nil; artwork = nil; return }
-        title = item.title
-        artist = item.artist
-        artwork = item.artwork?.image(at: CGSize(width: 96, height: 96))
+        guard ready else { return }
+        let now = player.playbackState == .playing
+        if playing != now { playing = now }
+        let item = allowed ? player.nowPlayingItem : nil
+        guard item?.persistentID != itemID || (item == nil) != (title == nil) else { return }
+        itemID = item?.persistentID
+        title = item?.title
+        artist = item?.artist
+        artwork = item?.artwork?.image(at: CGSize(width: 96, height: 96))
     }
 
     /// The row's text: the song, or what A does.
@@ -665,6 +685,7 @@ final class MusicNow: ObservableObject {
 
     /// A: play or pause. Asks for access to the Music app once.
     func toggle() {
+        guard ready else { return }
         guard allowed else {
             // iOS answers on a background queue: a closure that inherits the main
             // actor traps there (and, with the JIT debugger attached, freezes Rig).
@@ -685,6 +706,7 @@ final class MusicNow: ObservableObject {
 
     /// Left: previous song (or the start of this one), right: next song.
     func skip(_ d: Int) {
+        guard ready else { return }
         guard allowed else { toggle(); return }
         if d < 0 {
             if player.currentPlaybackTime > 4 { player.skipToBeginning() } else { player.skipToPreviousItem() }
