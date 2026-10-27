@@ -181,4 +181,23 @@ It is built on [Wine](https://www.winehq.org/), [FEX-Emu](https://github.com/FEX
 and [idevice](https://github.com/jkcoxson/idevice). GOG and Epic support follows the
 approach of [Legendary](https://github.com/derrod/legendary) and the GOG Galaxy API.
 
-RIG is not affiliated with Microsoft, Xbox, Valve, GOG or Epic Games.
+## Legal
+
+- RIG is an independent, non-commercial project. It is not affiliated with,
+  endorsed by or sponsored by Microsoft, Xbox, Valve, Steam, GOG, Epic Games,
+  Apple, id Software, Bethesda or any game publisher. All product names, logos
+  and trademarks belong to their owners and are used only to describe what
+  RIG works with.
+- **No games are included.** RIG runs games you own, downloaded from your own
+  accounts. It does not bypass DRM, copy protection or anti-cheat, and it does
+  not include any Microsoft, Windows or game files (the Visual C++ runtime is
+  not included either).
+- Screenshots show games running on RIG for illustration only. The games and
+  their artwork belong to their respective owners.
+- For GOG's Quake II, RIG downloads [Yamagi Quake II](https://www.yamagi.org/quake2/)
+  (GPL-2.0) from its official site on your device; RIG does not redistribute it,
+  and the game data comes from your own GOG copy.
+- RIG is provided as is, without warranty (see [`LICENSE`](LICENSE)). The
+  source for every release is this repository at the release's tag.
+- Questions or a takedown request about anything here? Open an issue and it
+  will be dealt with promptly.

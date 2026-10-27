@@ -689,11 +689,9 @@ struct PadDrawing: View {
             body.addCurve(to: p(200, 50), control1: p(105, 50), control2: p(150, 48))
             ctx.stroke(body, with: .color(line), style: stroke)
 
-            // Xbox button.
+            // Home (guide) button: a plain ring, no maker's logo.
             ctx.stroke(circle(200, 78, 15), with: .color(faint), style: stroke)
-            var x = Path()
-            x.move(to: p(191, 69)); x.addLine(to: p(209, 87)); x.move(to: p(209, 69)); x.addLine(to: p(191, 87))
-            ctx.stroke(x, with: .color(faint), style: stroke)
+            ctx.stroke(circle(200, 78, 8), with: .color(faint), style: stroke)
 
             // Left stick (top left) and right stick (bottom right), as on an Xbox pad.
             for (b, cx, cy) in [(PadButton.ls, CGFloat(115), CGFloat(118)), (.rs, 252, 182)] {
