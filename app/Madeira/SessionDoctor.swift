@@ -2,6 +2,8 @@ import AppIntents
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Madeira Converter Exception: see LICENSE-EXCEPTION.md
 
+import AVFoundation
+import MediaPlayer
 import SwiftUI
 import UIKit
 import os
@@ -446,7 +448,8 @@ final class InGameGuide: ObservableObject {
     /// The full session menu instead of the guide.
     @Published var fullMenu = false
 
-    struct Item { let title: String; let value: String?; let symbol: String; let action: (Int) -> Void }
+    /// action gets -1 (left), 1 (right) or 0 (A or a tap).
+    struct Item { let title: String; let value: String?; let symbol: String; var music = false; let action: (Int) -> Void }
 
     func items(_ model: LibraryModel) -> [Item] {
         let fpsModes = [3, 4, 1, 0]
@@ -455,6 +458,9 @@ final class InGameGuide: ObservableObject {
         return [
             Item(title: "Resume", value: nil, symbol: "play.fill") { _ in model.menu = false },
             Item(title: "Quit game", value: nil, symbol: "xmark.circle.fill") { _ in model.menu = false; model.stopGame() },
+            Item(title: "Music", value: nil, symbol: "music.note", music: true) { d in
+                if d == 0 { MusicNow.shared.toggle() } else { MusicNow.shared.skip(d) }
+            },
             Item(title: "FPS limit", value: fpsNames[model.fpsMode] ?? "60", symbol: "speedometer") { d in
                 let i = fpsModes.firstIndex(of: model.fpsMode) ?? 2
                 model.setFPS(fpsModes[(i + (d < 0 ? fpsModes.count - 1 : 1)) % fpsModes.count])
@@ -484,7 +490,7 @@ final class InGameGuide: ObservableObject {
         case "down": focus = min(focus + 1, list.count - 1)
         case "left": list[focus].action(-1)
         case "right": list[focus].action(1)
-        case "accept": list[focus].action(1)
+        case "accept": list[focus].action(0)
         case "back", "menu": model.menu = false
         default: break
         }
@@ -520,6 +526,10 @@ struct InGameGuideView: View {
                     ForEach(items.indices, id: \.self) { i in
                         let item = items[i]
                         let on = i == guide.focus
+                        Group {
+                        if item.music {
+                            MusicGuideRow(focused: on)
+                        } else {
                         HStack {
                             Label(item.title, systemImage: item.symbol).font(.headline)
                             Spacer()
@@ -531,11 +541,13 @@ struct InGameGuideView: View {
                                 }
                             }
                         }
+                        }
+                        }
                         .foregroundStyle(on ? theme.accent.onAccent : .white)
                         .padding(.horizontal, 14).padding(.vertical, 8)
                         .background(on ? theme.accent.color : Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                         .contentShape(Rectangle())
-                        .onTapGesture { guide.focus = i; item.action(1) }
+                        .onTapGesture { guide.focus = i; item.action(0) }
                         .id(i)
                     }
                 }
@@ -593,5 +605,135 @@ struct StopLaunchPrompt: View {
                 .foregroundStyle(.white)
             }
         }
+    }
+}
+
+// MARK: - Music
+
+/// MABD local: the player's own music while they play. Game sound mixes with
+/// it (instead of stopping it), and the guides show Apple Music's song with
+/// play/pause and skip. iOS gives no other app's playback to Rig, so this is
+/// the Music app only.
+@MainActor
+final class MusicNow: ObservableObject {
+    static let shared = MusicNow()
+    static let mixKey = "madeiraMixMusic"
+
+    @Published private(set) var title: String?
+    @Published private(set) var artist: String?
+    @Published private(set) var artwork: UIImage?
+    @Published private(set) var playing = false
+    @Published private(set) var allowed = MPMediaLibrary.authorizationStatus() == .authorized
+
+    private let player = MPMusicPlayerController.systemMusicPlayer
+    private var observers: [NSObjectProtocol] = []
+
+    /// Game sound plays alongside the player's music (on by default).
+    static var mix: Bool {
+        get { UserDefaults.standard.object(forKey: mixKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: mixKey); applyMix() }
+    }
+
+    /// A game already running picks the change up straight away.
+    static func applyMix() {
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playback, options: mix ? [.mixWithOthers] : [])
+    }
+
+    private init() {
+        player.beginGeneratingPlaybackNotifications()
+        let center = NotificationCenter.default
+        for name in [Notification.Name.MPMusicPlayerControllerNowPlayingItemDidChange,
+                     .MPMusicPlayerControllerPlaybackStateDidChange] {
+            observers.append(center.addObserver(forName: name, object: player, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refresh() }
+            })
+        }
+        refresh()
+    }
+
+    func refresh() {
+        playing = player.playbackState == .playing
+        guard allowed, let item = player.nowPlayingItem else { title = nil; artist = nil; artwork = nil; return }
+        title = item.title
+        artist = item.artist
+        artwork = item.artwork?.image(at: CGSize(width: 96, height: 96))
+    }
+
+    /// The row's text: the song, or what A does.
+    var label: String { title ?? (allowed ? (playing ? "Music" : "Play music") : "Music (A to allow)") }
+
+    /// A: play or pause. Asks for access to the Music app once.
+    func toggle() {
+        guard allowed else {
+            MPMediaLibrary.requestAuthorization { status in
+                Task { @MainActor in
+                    self.allowed = status == .authorized
+                    self.refresh()
+                }
+            }
+            return
+        }
+        if player.playbackState == .playing { player.pause() } else { player.play() }
+        refresh()
+    }
+
+    /// Left: previous song (or the start of this one), right: next song.
+    func skip(_ d: Int) {
+        guard allowed else { toggle(); return }
+        if d < 0 {
+            if player.currentPlaybackTime > 4 { player.skipToBeginning() } else { player.skipToPreviousItem() }
+        } else {
+            player.skipToNextItem()
+        }
+        refresh()
+    }
+}
+
+/// The music row in the home and in-game guides.
+struct MusicGuideRow: View {
+    @ObservedObject private var music = MusicNow.shared
+    let focused: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Group {
+                if let art = music.artwork {
+                    Image(uiImage: art).resizable().scaledToFill()
+                } else {
+                    Image(systemName: "music.note").font(.headline)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .background(Color.white.opacity(0.12))
+                }
+            }
+            .frame(width: 32, height: 32)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            VStack(alignment: .leading, spacing: 0) {
+                Text(music.label).font(.headline).lineLimit(1)
+                if let artist = music.artist {
+                    Text(artist).font(.caption).opacity(0.75).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 4)
+            HStack(spacing: 8) {
+                if focused { Image(systemName: "backward.fill").font(.caption) }
+                Image(systemName: music.playing ? "pause.fill" : "play.fill").font(.subheadline)
+                if focused { Image(systemName: "forward.fill").font(.caption) }
+            }
+        }
+        .onAppear { music.refresh() }
+    }
+}
+
+/// Touch Settings › Music.
+struct MusicSettingsSection: View {
+    @State private var mix = MusicNow.mix
+    var body: some View {
+        Section {
+            Toggle("Keep my music playing", isOn: $mix)
+        } header: { Text("Music") } footer: {
+            Text("Game sound plays alongside music from other apps instead of stopping it. The controller guide (Xbox button) has play, pause and skip for Apple Music.")
+        }
+        .onChange(of: mix) { _, on in MusicNow.mix = on }
     }
 }

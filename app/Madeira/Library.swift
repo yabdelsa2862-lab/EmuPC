@@ -2962,6 +2962,9 @@ struct LibraryView: View {
             if settingsShow("heat guard", "thermal", "hot", "temperature", "FPS") {
                 HeatGuardSettingsSection()
             }
+            if settingsShow("music", "audio", "sound", "spotify", "apple music") {
+                MusicSettingsSection()
+            }
             if MadeiraConfig.flag("MADEIRA_RUNTIME_SETTINGS") {
                 if settingsShow("display", "refresh", "rate", "ProMotion", "120 Hz") { DisplayRateSettings() }
                 if settingsShow("memory", "JIT pool", "pool", "video memory", "VRAM", "swap", "coverage", "madsync", "sync", "eco", "all settings") {

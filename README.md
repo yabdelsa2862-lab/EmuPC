@@ -86,6 +86,9 @@ Madeira's Direct3D 12 runtime) and adds its own interface, stores and quality-of
 - **Low-memory profile** for 4 GB devices such as the iPad Air 4: a smaller JIT
   pool, a lighter video memory budget, a swap file and 30 FPS for new games,
   switched on by itself (Settings › General).
+- **Your music while you play**: game sound mixes with your music instead of
+  stopping it, and the guide shows the Apple Music song with play, pause and skip
+  on the controller.
 - **Wi-Fi controllers**: other phones on your network join as players 2–4.
 - **External display**: the game on a TV while the phone keeps the controls.
 - **External drive** support for game installs.

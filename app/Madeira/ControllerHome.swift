@@ -1111,6 +1111,10 @@ struct ControllerHome: View {
                     note: "Home, Store and Settings tabs, switched with LB and RB. Off: press the Xbox button (or View + Menu) for the guide.") { _ in
                 showTabs.toggle()
             },
+            Setting(title: "Keep my music playing", value: MusicNow.mix ? "On" : "Off",
+                    note: "Game sound plays alongside your music instead of stopping it. The guide (Xbox button) has play, pause and skip for Apple Music.") { _ in
+                MusicNow.mix.toggle(); settingsRevision += 1
+            },
             Setting(title: "Heat guard", value: thermalGuard ? "On" : "Off",
                     note: "When the phone gets hot, games run at 30 FPS until it cools down, instead of stuttering.") { _ in
                 thermalGuard.toggle()
@@ -1294,12 +1298,13 @@ struct ControllerHome: View {
         viewerURLs = urls
     }
 
-    private struct GuideItem { let title: String; let symbol: String; let action: () -> Void }
+    private struct GuideItem { let title: String; let symbol: String; var music = false; let action: () -> Void }
     private var guideItems: [GuideItem] {
         [GuideItem(title: "Profile", symbol: "person.crop.circle.fill") { profilePage = true },
          GuideItem(title: "Home", symbol: "house.fill") { section = .games; page = nil; downloadPage = nil },
          GuideItem(title: "Store", symbol: "bag.fill") { section = .download; page = nil; downloadPage = nil },
          GuideItem(title: "Settings", symbol: "gearshape.fill") { section = .settings; page = nil; downloadPage = nil },
+         GuideItem(title: "Music", symbol: "music.note", music: true) { MusicNow.shared.toggle() },
          GuideItem(title: "Touch library", symbol: "hand.tap.fill") { openLibrary() },
          GuideItem(title: pads.running ? "Wi-Fi controllers: on" : "Wi-Fi controllers: off", symbol: "iphone.radiowaves.left.and.right") { pads.setEnabled(!pads.running) },
          GuideItem(title: "Restart Rig", symbol: "arrow.clockwise") { AppRelaunch.closeAndOffer("guide") },
@@ -1330,14 +1335,16 @@ struct ControllerHome: View {
                         VStack(spacing: 2) {
                             ForEach(guideItems.indices, id: \.self) { i in
                                 let item = guideItems[i]
-                                Label(item.title, systemImage: item.symbol)
-                                    .font(.headline)
+                                Group {
+                                    if item.music { MusicGuideRow(focused: i == guideFocus) }
+                                    else { Label(item.title, systemImage: item.symbol).font(.headline) }
+                                }
                                     .foregroundStyle(i == guideFocus ? theme.accent.onAccent : .white)
                                     .padding(.horizontal, 14).padding(.vertical, 8)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .background(i == guideFocus ? theme.accent.color : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                                     .contentShape(Rectangle())
-                                    .onTapGesture { guideFocus = i; guide = false; item.action() }
+                                    .onTapGesture { guideFocus = i; if !item.music { guide = false }; item.action() }
                                     .id(i)
                             }
                         }
@@ -1381,6 +1388,9 @@ struct ControllerHome: View {
             switch command {
             case "up": guideFocus = max(guideFocus - 1, 0)
             case "down": guideFocus = min(guideFocus + 1, items.count - 1)
+            case "left", "right": if items[guideFocus].music { MusicNow.shared.skip(command == "left" ? -1 : 1) }
+            // Music plays or pauses and the guide stays open.
+            case "accept" where items[guideFocus].music: items[guideFocus].action()
             case "accept": withAnimation { guide = false }; items[guideFocus].action()
             case "back", "menu": withAnimation { guide = false }
             default: break

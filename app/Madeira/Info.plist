@@ -40,8 +40,6 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>GCSupportsGameMode</key>
 	<true/>
-	<key>LSSupportsGameMode</key>
-	<true/>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.games</string>
 	<key>LSApplicationQueriesSchemes</key>
@@ -52,8 +50,12 @@
 	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<key>LSSupportsGameMode</key>
+	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<key>NSAppleMusicUsageDescription</key>
+	<string>Rig shows the song playing in Apple Music in the guide, with play, pause and skip, so you can control your music without leaving your game.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_remotepairing-pairable-host._tcp</string>

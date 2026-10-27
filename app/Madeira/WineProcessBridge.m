@@ -1086,11 +1086,17 @@ static void *wine_process_thread(void *arg) {
 
         /* 2026-07-05 audio: activate the AVAudioSession before Wine boots
          * so the RemoteIO unit in the mmdevapi driver can start. Playback
-         * category = ignores silent switch (it's a game). */
+         * category = ignores silent switch (it's a game).
+         * MABD local: mixes with the player's own music unless they turned
+         * "Keep my music playing" off (madeiraMixMusic, SessionDoctor.swift). */
         {
             NSError *aerr = nil;
             AVAudioSession *session = [AVAudioSession sharedInstance];
-            [session setCategory:AVAudioSessionCategoryPlayback error:&aerr];
+            NSNumber *mixPref = [[NSUserDefaults standardUserDefaults] objectForKey:@"madeiraMixMusic"];
+            BOOL mix = mixPref ? mixPref.boolValue : YES;
+            [session setCategory:AVAudioSessionCategoryPlayback
+                     withOptions:mix ? AVAudioSessionCategoryOptionMixWithOthers : 0
+                           error:&aerr];
             if (aerr) LOG("AVAudioSession setCategory failed: %{public}s",
                           aerr.localizedDescription.UTF8String);
             aerr = nil;
