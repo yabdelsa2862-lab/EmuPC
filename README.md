@@ -30,6 +30,17 @@ Madeira's Direct3D 12 runtime) and adds its own interface, stores and quality-of
   <img src="docs/screenshots/touch-library.jpg" alt="The touch library" width="70%">
 </p>
 
+### In game
+
+<p align="center">
+  <img src="docs/screenshots/quake2.jpg" alt="Quake II from GOG running at 72 FPS with the performance overlay" width="49%">
+  <img src="docs/screenshots/quake2-action.jpg" alt="Quake II in a firefight" width="49%">
+</p>
+<p align="center">
+  <img src="docs/screenshots/mecha-chameleon.jpg" alt="Mecha Chameleon from Steam" width="49%">
+  <img src="docs/screenshots/launching.jpg" alt="Starting a game" width="49%">
+</p>
+
 | | |
 |---|---|
 | **Home** | Jump back in to your last game, with your library underneath. |
