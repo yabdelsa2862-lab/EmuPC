@@ -149,7 +149,10 @@ the JIT, Wine and FEX on iOS, Direct3D on Metal and Steam support. Thank you to
 **Will Faust** ([@willfaust](https://github.com/willfaust)) for creating it and
 sharing it as open source, and to everyone who built it with him, including
 125hz, Jfishin, JesseLovelace, danperks, bahacan16, spitefulowl, meshoklv and
-TheHadesc. If you like RIG, go star and support Madeira.
+TheHadesc.
+
+If you like RIG, please ⭐ star [RIG](https://github.com/yabdelsa2862-lab/RIG) and
+[Madeira](https://github.com/willfaust/Madeira) too. It helps both projects a lot.
 
 ## Credits
 
