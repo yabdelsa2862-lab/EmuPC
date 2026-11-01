@@ -573,6 +573,18 @@ struct ControllerHome: View {
             }
             // The focused tile's glow and shadow reach past the row; clipped, they drew a box.
             .scrollClipDisabled()
+            // Covers fade out at both edges instead of sliding under the Dynamic Island;
+            // the mask reaches past the row vertically so the glow is not cut.
+            .mask {
+                GeometryReader { g in
+                    let edge = min(side / g.size.width, 0.2)
+                    LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .clear, location: edge * 0.35),
+                                           .init(color: .black, location: edge), .init(color: .black, location: 1 - edge),
+                                           .init(color: .clear, location: 1 - edge * 0.35), .init(color: .clear, location: 1)],
+                                   startPoint: .leading, endPoint: .trailing)
+                }
+                .padding(.vertical, -60)
+            }
             .padding(.horizontal, -side)
             .frame(height: height * 1.2)
             .onAppear { if let focusedID { scroll(reader, to: focusedID, in: ids) } }
