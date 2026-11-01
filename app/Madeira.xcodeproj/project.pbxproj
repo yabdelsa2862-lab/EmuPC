@@ -152,6 +152,7 @@
 		A1000202 /* FPSOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000202 /* FPSOverlay.swift */; };
 		A1E0C001 /* TVCompanion.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E0C001 /* TVCompanion.swift */; };
 		A1E0C002 /* GameShortcuts.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E0C002 /* GameShortcuts.swift */; };
+		A1E0C0K1 /* ControllerKeyboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E0C0K1 /* ControllerKeyboard.swift */; };
 		A1E0C003 /* EpicCompat.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E0C003 /* EpicCompat.swift */; };
 		A1E0C005 /* SteamFriends.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E0C005 /* SteamFriends.swift */; };
 		A1E0C004 /* ExternalDrive.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2E0C004 /* ExternalDrive.swift */; };
@@ -396,6 +397,7 @@
 		A2000202 /* FPSOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FPSOverlay.swift; sourceTree = "<group>"; };
 		A2E0C001 /* TVCompanion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVCompanion.swift; sourceTree = "<group>"; };
 		A2E0C002 /* GameShortcuts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameShortcuts.swift; sourceTree = "<group>"; };
+		A2E0C0K1 /* ControllerKeyboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControllerKeyboard.swift; sourceTree = "<group>"; };
 		A2E0C003 /* EpicCompat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EpicCompat.swift; sourceTree = "<group>"; };
 		A2E0C005 /* SteamFriends.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SteamFriends.swift; sourceTree = "<group>"; };
 		A2E0C004 /* ExternalDrive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalDrive.swift; sourceTree = "<group>"; };
@@ -591,6 +593,7 @@
 				A2000202 /* FPSOverlay.swift */,
 				A2E0C001 /* TVCompanion.swift */,
 				A2E0C002 /* GameShortcuts.swift */,
+				A2E0C0K1 /* ControllerKeyboard.swift */,
 				A2E0C003 /* EpicCompat.swift */,
 				A2E0C005 /* SteamFriends.swift */,
 				A2E0C004 /* ExternalDrive.swift */,
@@ -980,6 +983,7 @@
 				A1000202 /* FPSOverlay.swift in Sources */,
 				A1E0C001 /* TVCompanion.swift in Sources */,
 				A1E0C002 /* GameShortcuts.swift in Sources */,
+				A1E0C0K1 /* ControllerKeyboard.swift in Sources */,
 				A1E0C003 /* EpicCompat.swift in Sources */,
 				A1E0C005 /* SteamFriends.swift in Sources */,
 				A1E0C004 /* ExternalDrive.swift in Sources */,

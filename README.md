@@ -67,6 +67,9 @@ stores and quality-of-life features on top.
   Home, Store, Settings, Wi-Fi controllers and Restart.
 - **In-game guide**: the same buttons during a game open Resume, **Quit game**,
   FPS limit, performance overlay and touch controls, all driven by the controller.
+- **Controller keyboard**: when a game asks for text, open *Keyboard* from the
+  in-game guide and type with the controller (A types, B deletes, Y space,
+  X Shift, Menu Enter). Without a controller the iOS keyboard opens instead.
 - **Battery at a glance**: your iPhone or iPad battery and your controller's,
   next to the clock and in the guides.
 - **Close EmuPC** from the guide, without reaching for the screen.
@@ -84,6 +87,8 @@ stores and quality-of-life features on top.
   the game straight into your friend's lobby.
 - **Overlay while playing**: open your friends from the in-game guide and join
   or accept invites without leaving the game, like the Steam overlay.
+- **Fully controller-driven**: move through invites and friends with the D-pad,
+  A to join, Y to invite, X to refresh, B to close.
 
 ### Stores
 - **Steam**, **GOG** and **Epic Games** in one store with filters (all, per
@@ -209,6 +214,13 @@ internal names still say Madeira, and the app shows as EmuPC. The native parts
 | [`docs/`](docs) | Documentation (inherited from Madeira) |
 | [`tests/`](tests), [`tools/`](tools) | Checks and helper scripts |
 
+## Terms
+
+By installing or using EmuPC you agree to the [**Terms of Use**](TERMS.md). In
+short: EmuPC includes no games, you only play games you own, it does not bypass
+DRM or anti-cheat, it is not affiliated with any store or publisher, and it
+comes without warranty. The app asks you to agree to them during setup.
+
 ## License
 
 EmuPC is licensed, like Madeira, under **GPL-3.0-or-later** ([`LICENSE`](LICENSE))
@@ -258,7 +270,8 @@ approach of [Legendary](https://github.com/derrod/legendary) and the GOG Galaxy 
 - For GOG's Quake II, EmuPC downloads [Yamagi Quake II](https://www.yamagi.org/quake2/)
   (GPL-2.0) from its official site on your device; EmuPC does not redistribute it,
   and the game data comes from your own GOG copy.
-- EmuPC is provided as is, without warranty (see [`LICENSE`](LICENSE)). The
+- EmuPC is provided as is, without warranty (see [`LICENSE`](LICENSE) and the
+  [Terms of Use](TERMS.md)). The
   source for every release is this repository at the release's tag.
 - Questions or a takedown request about anything here? Open an issue and it
   will be dealt with promptly.

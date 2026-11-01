@@ -853,152 +853,86 @@ struct SteamInviteBanner: View {
 
 // MARK: - The Steam Overlay Friends & Invites Sheet
 
+/// Whether the friends overlay is up: the screens under it leave the controller alone
+/// while it is (SteamFriendsView reads the pad itself).
+@MainActor enum SteamOverlayPad { static var open = false }
+
 struct SteamFriendsView: View {
     @ObservedObject private var model = SteamFriendsModel.shared
+    @ObservedObject private var pad = LibraryController.shared
     @Environment(\.dismiss) private var dismiss
     @State private var problem: String?
+    /// The focused row, for the controller.
+    @State private var focus = 0
+
+    /// One row of the overlay, in the order shown: invites, open lobbies, then friends.
+    private enum Row: Identifiable {
+        case invite(SteamGameInvite), lobby(SteamFriend), friend(SteamFriend)
+        var id: String {
+            switch self {
+            case .invite(let i): return "i" + i.id
+            case .lobby(let f): return "l\(f.id)"
+            case .friend(let f): return "f\(f.id)"
+            }
+        }
+    }
+
+    private var lobbies: [SteamFriend] {
+        model.joinableFriends.filter { friend in
+            !model.invites.contains(where: { $0.from == friend.id && Date().timeIntervalSince($0.time) < 1800 })
+        }
+    }
+
+    private var rows: [Row] {
+        model.invites.map(Row.invite) + lobbies.map(Row.lobby) + model.sortedFriends.map(Row.friend)
+    }
 
     var body: some View {
         NavigationStack {
-            List {
-                if let notice = model.statusNotice {
-                    Section {
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(spacing: 8) {
-                                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                                Text(notice).font(.subheadline)
-                                Spacer()
-                                Button {
-                                    model.statusNotice = nil
-                                } label: {
-                                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                                }
-                                .buttonStyle(.plain)
+            ScrollViewReader { scroller in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        if let notice = model.statusNotice { noticeCard(notice) }
+                        if let error = model.error {
+                            Text(error).font(.subheadline).foregroundStyle(.secondary)
+                                .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                                .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        }
+                        let all = rows
+                        section("Game invites & open lobbies") {
+                            if model.invites.isEmpty && lobbies.isEmpty {
+                                Text(model.loading ? "Looking for invites and joinable lobbies…" : "No game invites or joinable lobbies right now.")
+                                    .font(.subheadline).foregroundStyle(.secondary).padding(.vertical, 6)
                             }
-                            if let last = model.lastInGameJoinedInvite,
-                               let args = last.arguments,
-                               SteamOwnedLibrary.shared.gameSessionRunning {
-                                Button {
-                                    _ = model.join(
-                                        appID: last.appID,
-                                        arguments: args,
-                                        friendID: last.from,
-                                        lobbyID: last.lobbyID,
-                                        forceRestart: true
-                                    )
-                                } label: {
-                                    Label("Game didn't switch lobbies? Restart into Lobby", systemImage: "arrow.triangle.2.circlepath")
-                                        .font(.caption.weight(.semibold))
-                                }
-                                .buttonStyle(.bordered)
+                            ForEach(Array(all.enumerated()).filter { if case .friend = $0.element { return false }; return true }, id: \.element.id) { index, row in
+                                rowView(row, focused: pad.connected && focus == index).id(row.id)
+                                    .onTapGesture { focus = index; primary(row) }
                             }
                         }
+                        section("Friends · \(model.sortedFriends.filter(\.online).count) online") {
+                            ForEach(Array(all.enumerated()).filter { if case .friend = $0.element { return true }; return false }, id: \.element.id) { index, row in
+                                rowView(row, focused: pad.connected && focus == index).id(row.id)
+                                    .onTapGesture { focus = index }
+                            }
+                        }
+                        Text(SteamOwnedLibrary.shared.gameSessionRunning
+                             ? "Joining the game you are playing sends the lobby invite straight to it, without closing it."
+                             : "Join starts the game in EmuPC and connects you straight to your friend's lobby.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
+                    .padding(20)
+                    .frame(maxWidth: 720).frame(maxWidth: .infinity)
                 }
-
-                if let error = model.error {
-                    Section { Text(error).foregroundStyle(.secondary) }
-                }
-
-                Section {
-                    if model.invites.isEmpty && model.joinableFriends.isEmpty {
-                        Text(model.loading ? "Looking for invites and joinable lobbies…" : "No active game invites or joinable friend lobbies right now.")
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(model.invites) { invite in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(model.name(invite.from)).font(.headline)
-                                Text(gameName(invite.appID, from: invite.from)).font(.subheadline).foregroundStyle(.secondary)
-                                Text(invite.time.formatted(.relative(presentation: .named))).font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Button("Join") {
-                                join(invite.appID, invite.arguments, friendID: invite.from, lobbyID: invite.lobbyID)
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .tint(.green)
-                        }
-                    }
-                    ForEach(model.joinableFriends.filter { friend in
-                        !model.invites.contains(where: { $0.from == friend.id && Date().timeIntervalSince($0.time) < 1800 })
-                    }) { friend in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 6) {
-                                    Text(friend.name.isEmpty ? "A friend" : friend.name).font(.headline)
-                                    Text("OPEN LOBBY")
-                                        .font(.system(size: 9, weight: .bold))
-                                        .padding(.horizontal, 5)
-                                        .padding(.vertical, 2)
-                                        .background(Color.green.opacity(0.2), in: Capsule())
-                                        .foregroundStyle(.green)
-                                }
-                                Text(friend.gameName.isEmpty ? gameName(friend.appID, from: friend.id) : friend.gameName)
-                                    .font(.subheadline).foregroundStyle(.secondary)
-                                if let detail = friend.presenceDetail {
-                                    Text(detail).font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                            Spacer()
-                            if let connect = friend.connect {
-                                Button("Join Lobby") {
-                                    join(friend.appID, connect, friendID: friend.id, lobbyID: friend.joinableLobbyID)
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .tint(.green)
-                            }
-                        }
-                    }
-                } header: {
-                    Text("Game invites & open lobbies")
-                } footer: {
-                    Text(SteamOwnedLibrary.shared.gameSessionRunning
-                         ? "Joining while in the same game delivers the lobby invite directly to your running game without closing it."
-                         : "Join starts the game in EmuPC and connects you straight to your friend's lobby.")
-                }
-
-                Section("Friends (\(model.sortedFriends.filter(\.online).count) online)") {
-                    ForEach(model.sortedFriends) { friend in
-                        HStack(spacing: 10) {
-                            Circle()
-                                .fill(friend.inGame ? .green : friend.online ? .blue : .gray)
-                                .frame(width: 9, height: 9)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(friend.name.isEmpty ? "…" : friend.name)
-                                    .font(.body.weight(friend.inGame ? .semibold : .regular))
-                                if friend.inGame {
-                                    Text(friend.gameName.isEmpty ? gameName(friend.appID, from: friend.id) : friend.gameName)
-                                        .font(.caption).foregroundStyle(.green)
-                                    if let detail = friend.presenceDetail {
-                                        Text(detail).font(.caption2).foregroundStyle(.secondary)
-                                    }
-                                } else {
-                                    Text(friend.online ? "Online" : "Offline")
-                                        .font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                            Spacer()
-                            if friend.inGame, let connect = friend.connect {
-                                Button("Join game") {
-                                    join(friend.appID, connect, friendID: friend.id, lobbyID: friend.joinableLobbyID)
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .tint(.green)
-                                .controlSize(.small)
-                            }
-                            if friend.online, model.canSendInvite {
-                                Button("Invite") {
-                                    Task { await model.sendInvite(to: friend.id) }
-                                }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
-                            }
-                        }
-                    }
+                .onChange(of: focus) { _, index in
+                    let all = rows
+                    guard all.indices.contains(index) else { return }
+                    withAnimation(.easeOut(duration: 0.2)) { scroller.scrollTo(all[index].id, anchor: .center) }
                 }
             }
-            .navigationTitle("Steam Overlay — Friends").navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .bottom) { if pad.connected { hintBar } }
+            .background(LinearGradient(colors: [Color(red: 0.09, green: 0.12, blue: 0.18), Color(red: 0.04, green: 0.05, blue: 0.08)],
+                                       startPoint: .top, endPoint: .bottom).ignoresSafeArea())
+            .navigationTitle("Friends").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
                 ToolbarItem(placement: .topBarLeading) {
@@ -1016,21 +950,165 @@ struct SteamFriendsView: View {
                     }
                     return
                 }
-                // Fresh on open, then every 12 s while the overlay sheet is open in the library.
+                // Fresh on open, then every 12 s while the overlay is open in the library.
                 while !Task.isCancelled, !SteamOwnedLibrary.shared.gameSessionRunning {
                     await model.refresh()
                     try? await Task.sleep(nanoseconds: 12_000_000_000)
                 }
             }
+            .onAppear { SteamOverlayPad.open = true }
             .onDisappear {
+                SteamOverlayPad.open = false
                 if SteamOwnedLibrary.shared.gameSessionRunning {
                     Task { await model.chatSession.disconnectGracefully() }
                 }
             }
+            .onReceive(LibraryController.shared.commands) { command(_: $0) }
             .alert("Can't join", isPresented: Binding(get: { problem != nil }, set: { if !$0 { problem = nil } })) {
                 Button("OK", role: .cancel) {}
             } message: { Text(problem ?? "") }
         }
+        .environment(\.colorScheme, .dark)
+    }
+
+    // MARK: Controller
+
+    private func command(_ command: String) {
+        if problem != nil { if ["accept", "back"].contains(command) { problem = nil }; return }
+        let count = rows.count
+        switch command {
+        case "up": if focus > 0 { focus -= 1; tick() }
+        case "down": if focus < count - 1 { focus += 1; tick() }
+        case "tabBack": focus = 0; tick()
+        case "tab": focus = max(count - 1, 0); tick()
+        case "accept": if rows.indices.contains(focus) { primary(rows[focus]) }
+        case "add": if rows.indices.contains(focus), case .friend(let f) = rows[focus], f.online, model.canSendInvite {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            Task { await model.sendInvite(to: f.id) }
+        }
+        case "x": Task { await model.refresh() }
+        case "back", "guide", "menu": dismiss()
+        default: break
+        }
+    }
+
+    private func tick() { UISelectionFeedbackGenerator().selectionChanged() }
+
+    /// A: join what the row offers.
+    private func primary(_ row: Row) {
+        switch row {
+        case .invite(let i): join(i.appID, i.arguments, friendID: i.from, lobbyID: i.lobbyID)
+        case .lobby(let f), .friend(let f):
+            if f.inGame, let connect = f.connect { join(f.appID, connect, friendID: f.id, lobbyID: f.joinableLobbyID) }
+        }
+    }
+
+    // MARK: Pieces
+
+    private var hintBar: some View {
+        HStack(spacing: 18) {
+            ButtonHint(glyph: "a.circle.fill", label: "Join")
+            if model.canSendInvite { ButtonHint(glyph: "y.circle.fill", label: "Invite") }
+            ButtonHint(glyph: "x.circle.fill", label: "Refresh")
+            ButtonHint(glyph: "b.circle.fill", label: "Close")
+        }
+        .font(.subheadline)
+        .padding(.horizontal, 20).padding(.vertical, 10)
+        .background(.ultraThinMaterial, in: Capsule())
+        .padding(.bottom, 8)
+    }
+
+    private func section<Content: View>(_ title: String, @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.headline).foregroundStyle(.secondary).padding(.leading, 4)
+            content()
+        }
+    }
+
+    private func noticeCard(_ notice: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                Text(notice).font(.subheadline)
+                Spacer()
+                Button { model.statusNotice = nil } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }.buttonStyle(.plain)
+            }
+            if let last = model.lastInGameJoinedInvite, let args = last.arguments, SteamOwnedLibrary.shared.gameSessionRunning {
+                Button {
+                    _ = model.join(appID: last.appID, arguments: args, friendID: last.from, lobbyID: last.lobbyID, forceRestart: true)
+                } label: {
+                    Label("Game didn't switch lobbies? Restart into the lobby", systemImage: "arrow.triangle.2.circlepath")
+                        .font(.caption.weight(.semibold))
+                }.buttonStyle(.bordered)
+            }
+        }
+        .padding(14)
+        .background(.green.opacity(0.1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func rowView(_ row: Row, focused: Bool) -> some View {
+        let (friend, invite): (SteamFriend?, SteamGameInvite?) = {
+            switch row {
+            case .invite(let i): return (model.friends[i.from], i)
+            case .lobby(let f), .friend(let f): return (f, nil)
+            }
+        }()
+        let id = invite?.from ?? friend?.id ?? 0
+        let name = invite != nil ? model.name(id) : ((friend?.name.isEmpty ?? true) ? "A friend" : friend!.name)
+        let inGame = friend?.inGame ?? false
+        let dot: Color = invite != nil || inGame ? .green : (friend?.online ?? false) ? .blue : .gray
+        return HStack(spacing: 14) {
+            ZStack(alignment: .bottomTrailing) {
+                Circle().fill(.white.opacity(0.1)).frame(width: 44, height: 44)
+                    .overlay(Text(String(name.prefix(1)).uppercased()).font(.headline))
+                Circle().fill(dot).frame(width: 12, height: 12)
+                    .overlay(Circle().stroke(Color.black, lineWidth: 2))
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(name).font(.body.weight(.semibold)).lineLimit(1)
+                    if case .lobby = row { tag("OPEN LOBBY") }
+                    if invite != nil { tag("INVITE") }
+                }
+                Group {
+                    if let invite {
+                        Text("\(gameName(invite.appID, from: invite.from)) · \(invite.time.formatted(.relative(presentation: .named)))")
+                    } else if let friend, inGame {
+                        Text(friend.gameName.isEmpty ? gameName(friend.appID, from: friend.id) : friend.gameName).foregroundStyle(.green)
+                    } else {
+                        Text((friend?.online ?? false) ? "Online" : "Offline")
+                    }
+                }
+                .font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                if invite == nil, let detail = friend?.presenceDetail {
+                    Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+            }
+            Spacer(minLength: 8)
+            if invite != nil || (inGame && friend?.connect != nil) {
+                Button("Join") { primary(row) }.buttonStyle(.borderedProminent).tint(.green)
+            }
+            if case .friend(let f) = row, f.online, model.canSendInvite {
+                Button("Invite") { Task { await model.sendInvite(to: f.id) } }.buttonStyle(.bordered)
+            }
+        }
+        .padding(.horizontal, 14).padding(.vertical, 10)
+        .background(focused ? Color.white.opacity(0.16) : Color.white.opacity(0.05),
+                    in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .strokeBorder(focused ? Color.white.opacity(0.9) : .clear, lineWidth: 2))
+        .shadow(color: focused ? .white.opacity(0.18) : .clear, radius: 10)
+        .scaleEffect(focused ? 1.02 : 1)
+        .animation(.spring(response: 0.28, dampingFraction: 0.82), value: focused)
+        .contentShape(Rectangle())
+    }
+
+    private func tag(_ text: String) -> some View {
+        Text(text).font(.system(size: 9, weight: .bold))
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Color.green.opacity(0.2), in: Capsule()).foregroundStyle(.green)
     }
 
     private func gameName(_ appID: Int?, from friendID: UInt64 = 0) -> String {

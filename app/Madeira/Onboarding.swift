@@ -35,15 +35,20 @@ enum OnboardingRules {
     static let revisionKey = "madeiraOnboardingRevision"
     /// 1 was the first setup, stored as `madeiraOnboardingDone` (no longer read); 2 adds
     /// Install LocalDevVPN, on-device pairing and the Madeira JIT shortcut; 3 adds the
-    /// Wine Mono download.
-    static let revision = 4
+    /// Wine Mono download; 4 the profile; 5 the terms (credits, DRM, ownership).
+    static let revision = 5
+
+    /// The terms version this device agreed to; the terms page shows until it is `termsVersion`.
+    static let termsKey = "emupcTermsAccepted"
+    static let termsVersion = 1
+    static var termsAccepted: Bool { UserDefaults.standard.integer(forKey: termsKey) >= termsVersion }
 
     /// `env.MADEIRA_ONBOARDING = 0` (madeira.cfg or the environment) never opens
     /// setup and hides "Run setup again". On by default.
     static var enabled: Bool { MadeiraConfig.flag("MADEIRA_ONBOARDING") }
 
     enum Step: String, CaseIterable {
-        case welcome, profile, localDevVPN = "localdevvpn", jit, signIn = "sign-in", dockClient = "dock-client",
+        case welcome, terms, profile, localDevVPN = "localdevvpn", jit, signIn = "sign-in", dockClient = "dock-client",
              wineMono = "wine-mono", done
 
         /// The revision whose setup first had this page.
@@ -52,6 +57,7 @@ enum OnboardingRules {
             case .localDevVPN: return 2
             case .wineMono: return 3
             case .profile: return 4
+            case .terms: return 5
             default: return 1
             }
         }
@@ -65,7 +71,7 @@ enum OnboardingRules {
     /// this device last saw, after an update) only the pages added after it are offered.
     static func steps(signIn: Bool, dock: Bool, localDevVPN: Bool = false, wineMono: Bool = false,
                       since: Int = 0) -> [Step] {
-        var list: [Step] = [.welcome, .profile]
+        var list: [Step] = [.welcome, .terms, .profile]
         if localDevVPN { list.append(.localDevVPN) }
         list.append(.jit)
         if signIn || dock { list.append(.signIn) }
@@ -77,7 +83,7 @@ enum OnboardingRules {
 
     /// Whether there is anything to set up between the welcome and done pages.
     static func hasSetup(_ steps: [Step]) -> Bool {
-        steps.contains(.profile) || steps.contains(.jit) || steps.contains(.signIn) || steps.contains(.dockClient) || steps.contains(.wineMono)
+        steps.contains(.terms) || steps.contains(.profile) || steps.contains(.jit) || steps.contains(.signIn) || steps.contains(.dockClient) || steps.contains(.wineMono)
     }
 
     /// Whether setup opens by itself when the library appears.
@@ -151,6 +157,7 @@ enum OnboardingRules {
         offerLocalDevVPN = !LocalDevVPN.isInstalled
         offerWineMono = !WineMonoModel.available
         self.since = since
+        skipAfterTerms = false
         LogStore.shared.log("[onboarding] shown reason=\(reason) steps=\(steps.map(\.rawValue).joined(separator: ","))")
         go(.welcome)
         presented = true
@@ -166,8 +173,24 @@ enum OnboardingRules {
         go(following)
     }
 
-    /// "Skip setup" on the welcome page: done, and not shown again.
+    /// Set when "Skip setup" was pressed before the terms were agreed to: the terms page
+    /// still comes first, and agreeing then skips the rest.
+    @Published private(set) var skipAfterTerms = false
+
+    /// The terms page's "Agree": stored, then on to the next page (or skip).
+    func agreeToTerms() {
+        UserDefaults.standard.set(OnboardingRules.termsVersion, forKey: OnboardingRules.termsKey)
+        LogStore.shared.log("[onboarding] terms agreed v\(OnboardingRules.termsVersion)")
+        if skipAfterTerms { skipAfterTerms = false; skip() } else { next() }
+    }
+
+    /// "Skip setup" on the welcome page: done, and not shown again. The terms are never skipped.
     func skip() {
+        if !OnboardingRules.termsAccepted, steps.contains(.terms) {
+            skipAfterTerms = true
+            go(.terms)
+            return
+        }
         UserDefaults.standard.set(OnboardingRules.revision, forKey: OnboardingRules.revisionKey)
         LogStore.shared.log("[onboarding] skipped")
         close()
@@ -221,6 +244,7 @@ struct OnboardingView: View {
                     }
                     switch model.step {
                     case .welcome: welcome
+                    case .terms: termsPage
                     case .profile: profilePage
                     case .localDevVPN: localDevVPNPage
                     case .jit: jitPage
@@ -316,7 +340,8 @@ struct OnboardingView: View {
             }
             let pages = model.steps
             let offered: [LocalizedStringKey] =
-                (pages.contains(.localDevVPN) ? ["Install LocalDevVPN, which EmuPC enables JIT through."] : [])
+                (pages.contains(.terms) ? ["Read and agree to the terms: credits, DRM and your games."] : [])
+                + (pages.contains(.localDevVPN) ? ["Install LocalDevVPN, which EmuPC enables JIT through."] : [])
                 + (pages.contains(.jit) ? ["Choose how EmuPC enables JIT."] : [])
                 + (pages.contains(.signIn) ? ["Sign in to Steam in EmuPC."] : [])
                 + (pages.contains(.dockClient) ? ["Download Valve's Steam client components for Madeira Dock."] : [])
@@ -325,6 +350,42 @@ struct OnboardingView: View {
             primary("Get started", symbol: "arrow.right") { model.next() }.padding(.top, 8)
             secondary("Skip setup") { model.skip() }
         }
+    }
+
+    /// Terms, agreed to once (never skipped): credits, DRM and ownership, no affiliation.
+    private var termsPage: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            header("Before you play", symbol: "doc.text.fill")
+            Text("Please read and agree to these terms to use EmuPC.").foregroundStyle(.secondary)
+            termsSection("Your games, your copies", symbol: "person.crop.square") {
+                Text("EmuPC includes no games. Only play games you own, downloaded from your own Steam, GOG or Epic Games account.")
+            }
+            termsSection("DRM and anti-cheat", symbol: "lock.shield") {
+                Text("EmuPC does not bypass, remove or work around DRM, copy protection or anti-cheat. Games whose protection blocks emulation will not run, and EmuPC labels them. Don't use EmuPC to break a game's or store's terms.")
+            }
+            termsSection("Not affiliated", symbol: "building.2") {
+                Text("EmuPC is an independent, free, non-commercial project. It is not affiliated with or endorsed by Microsoft, Xbox, Valve, Steam, GOG, Epic Games, Apple or any game publisher. Their names and trademarks belong to their owners. No Microsoft or Windows files are included.")
+            }
+            termsSection("Credits", symbol: "heart") {
+                Text("EmuPC is built on **Madeira** by Will Faust and its contributors, which makes running Windows games on iOS possible. It also uses Wine, FEX-Emu, DXMT, gl4es, d3d8to9, rpmalloc, StikDebug, StikJIT and idevice. Thank you to everyone who made them.")
+            }
+            termsSection("No warranty", symbol: "exclamationmark.triangle") {
+                Text("EmuPC is open source under GPL-3.0-or-later and provided as is, without any warranty. Games may crash, run slowly or not start. Your sign-ins stay on this \(device) and go only to the stores themselves.")
+            }
+            Link(destination: URL(string: "https://github.com/yabdelsa2862-lab/EmuPC/blob/main/TERMS.md")!) {
+                Label("Read the full terms", systemImage: "safari")
+            }
+            primary("Agree and continue", symbol: "checkmark") { model.agreeToTerms() }.padding(.top, 4)
+        }
+    }
+
+    private func termsSection(_ title: LocalizedStringKey, symbol: String, @ViewBuilder _ text: () -> Text) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(title, systemImage: symbol).font(.headline)
+            text().foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16).frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     /// LocalDevVPN first, offered only when it was missing: every JIT way reaches this

@@ -466,6 +466,10 @@ final class InGameGuide: ObservableObject {
                 model.menu = false
                 self.steamOverlay = true
             },
+            Item(title: "Keyboard", value: nil, symbol: "keyboard.fill") { _ in
+                model.menu = false
+                ControllerKeyboard.openForSession()
+            },
             Item(title: "Quit game", value: nil, symbol: "xmark.circle.fill") { _ in model.menu = false; model.stopGame() },
             Item(title: "Music", value: nil, symbol: "music.note", music: true) { d in
                 if d == 0 { MusicNow.shared.toggle() } else { MusicNow.shared.skip(d) }

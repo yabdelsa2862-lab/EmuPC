@@ -126,7 +126,7 @@ final class LibraryController: ObservableObject, @unchecked Sendable {
         // EmuPC: the Xbox (Home) button opens the guide too, in menus and in games.
         else if pressed & 0x0400 != 0 { command = own ? "guide" : "menu" }
         else if own {
-            for (mask, name): (UInt16, String) in [(1, "up"), (2, "down"), (4, "left"), (8, "right"), (0x1000, "accept"), (0x2000, "back"), (0x8000, "add"), (0x10, "menu"), (0x100, "tabBack"), (0x200, "tab")] {
+            for (mask, name): (UInt16, String) in [(1, "up"), (2, "down"), (4, "left"), (8, "right"), (0x1000, "accept"), (0x2000, "back"), (0x8000, "add"), (0x4000, "x"), (0x10, "menu"), (0x100, "tabBack"), (0x200, "tab")] {
                 if pressed & mask != 0 { command = name; break }
             }
         }
@@ -4946,7 +4946,9 @@ struct LibraryHUD: View {
     /// The Session menu's Controller binds page (keyboard-and-mouse mode).
     @State private var bindsPage = false
     @ObservedObject private var guide = InGameGuide.shared
+    @ObservedObject private var padKeyboard = ControllerKeyboard.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var frontendOwnsPad: Bool { model.launching || model.menu || padKeyboard.open || guide.steamOverlay }
     var body: some View {
         GeometryReader { geo in
             ZStack(alignment: .topLeading) {
@@ -4979,6 +4981,11 @@ struct LibraryHUD: View {
                     }
                     .ignoresSafeArea()
                     .transition(.move(edge: .leading).combined(with: .opacity))
+                }
+                if !model.startingScreen {
+                    VStack { Spacer(); ControllerKeyboardView() }
+                        .frame(maxWidth: .infinity)
+                        .padding(.bottom, max(geo.safeAreaInsets.bottom, 12) + 8)
                 }
                 StopLaunchPrompt()
                 LowMemoryBanner()
@@ -5037,18 +5044,23 @@ struct LibraryHUD: View {
         }
         // The controller drives Madeira while the game starts (B stops it) and while
         // the menu is open; the game gets it the rest of the time.
-        .onAppear { LibraryController.shared.configure(enabled: model.enabled, ownsInput: model.launching || model.menu) }
+        .onAppear { LibraryController.shared.configure(enabled: model.enabled, ownsInput: frontendOwnsPad) }
         .onChange(of: model.launching) { _, launching in
-            LibraryController.shared.configure(enabled: model.enabled, ownsInput: launching || model.menu)
+            LibraryController.shared.configure(enabled: model.enabled, ownsInput: frontendOwnsPad)
             if !launching { model.confirmStop = false }
         }
         .onChange(of: model.menu) { _, open in
-            LibraryController.shared.configure(enabled: model.enabled, ownsInput: open || model.launching)
+            LibraryController.shared.configure(enabled: model.enabled, ownsInput: frontendOwnsPad)
             if !open { bindsPage = false; guide.fullMenu = false; guide.focus = 0 }
             if !open { model.saveCurrentProfile() }
             if open { eco = madeira_get_eco() != 0; fenceMode = FPSOverlayFenceMode.current }
         }
+        // The controller keyboard and the Steam overlay take the pad while they are up.
+        .onChange(of: padKeyboard.open) { _, _ in LibraryController.shared.configure(enabled: model.enabled, ownsInput: frontendOwnsPad) }
+        .onChange(of: guide.steamOverlay) { _, _ in LibraryController.shared.configure(enabled: model.enabled, ownsInput: frontendOwnsPad) }
         .onReceive(LibraryController.shared.commands) { command in
+            if guide.steamOverlay || SteamOverlayPad.open { return }   // SteamFriendsView reads the pad itself
+            if padKeyboard.open { padKeyboard.handle(command); return }
             if model.launching {
                 // B asks to stop; A confirms, B again keeps waiting.
                 if model.confirmStop {
@@ -5357,7 +5369,7 @@ struct LibraryHUD: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                Button("Keyboard", systemImage: "keyboard") { model.menu = false; LibraryKeyboard.show() }
+                Button("Keyboard", systemImage: "keyboard") { model.menu = false; ControllerKeyboard.openForSession() }
                 Divider()
                 FPSChoice(mode: Binding(get: { model.fpsMode }, set: { model.setFPS($0) }))
                 // Saved to the game with the rest of the session's profile.

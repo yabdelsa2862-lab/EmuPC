@@ -1525,6 +1525,8 @@ struct ControllerHome: View {
     private func handle(_ command: String) {
         // The photo picker is up: the pad would act on the page behind it.
         if PhotoPick.showing { return }
+        // The friends overlay reads the pad itself.
+        if SteamOverlayPad.open { return }
         // The layout editor has the pad while it is open (B closes it).
         if layoutEditor.open { layoutEditor.command(command); return }
         if command == "guide" {
