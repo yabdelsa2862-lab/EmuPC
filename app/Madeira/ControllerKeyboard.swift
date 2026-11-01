@@ -11,8 +11,10 @@ import UIKit
 //     guide (Keyboard) or the session menu when a controller is connected;
 //     without one the iOS keyboard opens instead.
 //   - D-pad or stick moves, A types the key, B deletes, Y is space, X is
-//     Shift, Menu is Enter, LB/RB move the game's cursor, the Xbox button
-//     (or Done) closes it. Keys can be tapped too.
+//     Shift, Menu is Enter, LB switches to symbols, RB types @, the Xbox
+//     button, L3 + R3 or Done closes it. Keys can be tapped too.
+//   - Full width and low, like a console keyboard: letters with numbers,
+//     @ . _ - on the first layer, every other symbol on the second (#+=).
 //   - Keys go to the game as key presses (winios_post_key), the same path the
 //     iOS keyboard uses.
 //
@@ -26,27 +28,43 @@ final class ControllerKeyboard: ObservableObject {
     @Published var row = 1
     @Published var column = 0
     @Published var shift = false
+    /// The symbols layer (#+=) instead of letters.
+    @Published var symbols = false
 
     /// A key: what it shows and what it does.
     enum Key: Hashable {
-        case char(Character), shift, space, backspace, enter, escape, tab, done
+        case char(Character), shift, space, backspace, enter, escape, tab, done, layer
 
+        /// In key widths; every row adds up to 11.
         var width: CGFloat {
             switch self {
             case .space: return 4
-            case .char: return 1
+            case .enter: return 2
+            case .char, .escape, .tab: return 1
             default: return 1.5
             }
         }
     }
 
-    let rows: [[Key]] = [
-        Array("1234567890").map { .char($0) },
-        Array("qwertyuiop").map { .char($0) },
-        Array("asdfghjkl'").map { .char($0) },
-        Array("zxcvbnm,.-").map { .char($0) },
-        [.escape, .tab, .shift, .space, .backspace, .enter, .done],
+    static let columns: CGFloat = 11
+
+    private static func chars(_ text: String) -> [Key] { text.map { .char($0) } }
+    private static let bottom: [Key] = [.layer, .escape, .tab, .space, .enter, .done]
+    private static let letters: [[Key]] = [
+        chars("1234567890-"),
+        chars("qwertyuiop@"),
+        chars("asdfghjkl._"),
+        [.shift] + chars("zxcvbnm,") + [.backspace],
+        bottom,
     ]
+    private static let symbolRows: [[Key]] = [
+        chars("!@#$%^&*()="),
+        chars("~`+[]{}\\|:;"),
+        chars("\"'<>?/-_.,!"),
+        [.shift] + chars("1234567.") + [.backspace],
+        bottom,
+    ]
+    var rows: [[Key]] { symbols ? Self.symbolRows : Self.letters }
 
     private init() {}
 
@@ -66,6 +84,7 @@ final class ControllerKeyboard: ObservableObject {
     func hide() {
         guard open else { return }
         if shift { shift = false }
+        symbols = false
         withAnimation(.spring(response: 0.32, dampingFraction: 0.9)) { open = false }
         LogStore.shared.log("[pad-keyboard] closed")
     }
@@ -82,8 +101,8 @@ final class ControllerKeyboard: ObservableObject {
         case "add": press(.space)
         case "x": press(.shift)
         case "menu": press(.enter)
-        case "tabBack": tap(0x25)   // VK_LEFT
-        case "tab": tap(0x27)       // VK_RIGHT
+        case "tabBack": press(.layer)
+        case "tab": press(.char("@"))
         case "guide", "keyboard": hide()
         default: break
         }
@@ -116,6 +135,7 @@ final class ControllerKeyboard: ObservableObject {
         case .escape: tap(0x1B)
         case .tab: tap(0x09)
         case .done: hide()
+        case .layer: symbols.toggle(); column = min(column, rows[row].count - 1)
         }
     }
 
@@ -125,35 +145,43 @@ final class ControllerKeyboard: ObservableObject {
     private func tick() { selection.selectionChanged() }
 }
 
-/// The keyboard panel along the bottom of the game.
+/// The keyboard panel along the bottom of the game: as wide as the screen allows, low.
 struct ControllerKeyboardView: View {
     @ObservedObject private var keyboard = ControllerKeyboard.shared
+    private let spacing: CGFloat = 6
+    private let keyHeight: CGFloat = 34
 
     var body: some View {
         if keyboard.open {
-            VStack(spacing: 10) {
+            let screen = UIScreen.main.bounds.width
+            let margins = IslandMargins.current()
+            let width = min(screen - margins.leading - margins.trailing, 980)
+            let unit = (width - 24 - spacing * (ControllerKeyboard.columns - 1)) / ControllerKeyboard.columns
+            VStack(spacing: spacing) {
                 ForEach(keyboard.rows.indices, id: \.self) { r in
-                    HStack(spacing: 6) {
+                    HStack(spacing: spacing) {
                         ForEach(keyboard.rows[r].indices, id: \.self) { c in
-                            keyView(keyboard.rows[r][c], focused: keyboard.row == r && keyboard.column == c)
-                                .onTapGesture { keyboard.row = r; keyboard.column = c; keyboard.press(keyboard.rows[r][c]) }
+                            let key = keyboard.rows[r][c]
+                            keyView(key, focused: keyboard.row == r && keyboard.column == c)
+                                .frame(width: unit * key.width + spacing * (key.width - 1), height: keyHeight)
+                                .onTapGesture { keyboard.row = r; keyboard.column = c; keyboard.press(key) }
                         }
                     }
                 }
-                HStack(spacing: 16) {
+                HStack(spacing: 14) {
                     ButtonHint(glyph: "a.circle.fill", label: "Type")
                     ButtonHint(glyph: "b.circle.fill", label: "Delete")
                     ButtonHint(glyph: "y.circle.fill", label: "Space")
                     ButtonHint(glyph: "x.circle.fill", label: "Shift")
                     ButtonHint(glyph: "line.3.horizontal.circle.fill", label: "Enter")
+                    Text("LB #+=   RB @").foregroundStyle(.white.opacity(0.7))
                 }
-                .font(.caption)
-                .padding(.top, 2)
+                .font(.caption2)
             }
-            .padding(16)
-            .frame(maxWidth: 640)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).strokeBorder(.white.opacity(0.14)))
+            .padding(12)
+            .frame(width: width)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(.white.opacity(0.14)))
             .shadow(color: .black.opacity(0.5), radius: 24, y: 10)
             .environment(\.colorScheme, .dark)
             .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -163,21 +191,28 @@ struct ControllerKeyboardView: View {
     private func keyView(_ key: ControllerKeyboard.Key, focused: Bool) -> some View {
         Group {
             switch key {
-            case .char(let c): Text(String(keyboard.shift ? Character(c.uppercased()) : c)).font(.title3.weight(.medium))
+            case .char(let c): Text(String(keyboard.shift ? Character(c.uppercased()) : c)).font(.body.weight(.medium))
             case .shift: Image(systemName: keyboard.shift ? "shift.fill" : "shift")
-            case .space: Text("space").font(.subheadline)
+            case .space: Text("space").font(.footnote)
             case .backspace: Image(systemName: "delete.left")
-            case .enter: Image(systemName: "return")
-            case .escape: Text("esc").font(.subheadline)
-            case .tab: Image(systemName: "arrow.right.to.line")
+            case .enter: Label("enter", systemImage: "return").font(.footnote)
+            case .escape: Text("esc").font(.footnote)
+            case .tab: Text("tab").font(.footnote)
             case .done: Image(systemName: "keyboard.chevron.compact.down")
+            case .layer: Text(keyboard.symbols ? "ABC" : "#+=").font(.footnote.weight(.semibold))
             }
         }
         .foregroundStyle(focused ? .black : .white)
-        .frame(width: 44 * key.width + 6 * (key.width - 1), height: 42)
-        .background(focused ? Color.white : Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .scaleEffect(focused ? 1.08 : 1)
-        .shadow(color: focused ? .white.opacity(0.35) : .clear, radius: 8)
-        .animation(.spring(response: 0.22, dampingFraction: 0.8), value: focused)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(focused ? Color.white : Color.white.opacity(isAction(key) ? 0.2 : 0.12),
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .scaleEffect(focused ? 1.06 : 1)
+        .shadow(color: focused ? .white.opacity(0.35) : .clear, radius: 6)
+        .animation(.spring(response: 0.2, dampingFraction: 0.8), value: focused)
+    }
+
+    private func isAction(_ key: ControllerKeyboard.Key) -> Bool {
+        if case .char = key { return false }
+        return true
     }
 }
