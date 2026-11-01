@@ -99,6 +99,60 @@ static os_log_t wine_proc_log(void) {
 
 #define LOG(fmt, ...) os_log(wine_proc_log(), "[WineProc] " fmt, ##__VA_ARGS__)
 
+/* EmuPC: the microphone (audio_null_ios.c calls this on a game's first capture
+ * start). The session records from then on, for the rest of the run: switching
+ * back and forth would interrupt the game's sound each time a voice chat
+ * opened or closed. Play-and-record keeps the speaker (not the earpiece) and
+ * lets AirPods and other headsets be the microphone. The first time, iOS asks
+ * for the microphone; until the player answers the game hears silence. */
+static int g_mic_session_on;
+int madeira_mic_session_active(void) { return g_mic_session_on; }
+
+static void madeira_mic_apply_category(void)
+{
+    NSError *err = nil;
+    AVAudioSession *session = [AVAudioSession sharedInstance];
+    NSNumber *mixPref = [[NSUserDefaults standardUserDefaults] objectForKey:@"madeiraMixMusic"];
+    BOOL mix = mixPref ? mixPref.boolValue : YES;
+    AVAudioSessionCategoryOptions opts = AVAudioSessionCategoryOptionDefaultToSpeaker
+        | AVAudioSessionCategoryOptionAllowBluetoothHFP | AVAudioSessionCategoryOptionAllowBluetoothA2DP;
+    if (mix) opts |= AVAudioSessionCategoryOptionMixWithOthers;
+    [session setCategory:AVAudioSessionCategoryPlayAndRecord mode:AVAudioSessionModeDefault options:opts error:&err];
+    if (err) fprintf(stderr, "[ios_mic] setCategory(playAndRecord) failed: %s\n", err.localizedDescription.UTF8String);
+    err = nil;
+    [session setActive:YES error:&err];
+    fprintf(stderr, "[ios_mic] session records now (input: %s)%s%s\n",
+            session.currentRoute.inputs.firstObject.portName.UTF8String ?: "none",
+            err ? " -- setActive failed: " : "", err ? err.localizedDescription.UTF8String : "");
+}
+
+void madeira_mic_session(int on)
+{
+    if (!on || g_mic_session_on) return;
+    g_mic_session_on = 1;
+    AVAudioApplication *app = [AVAudioApplication sharedInstance];
+    switch (app.recordPermission) {
+    case AVAudioApplicationRecordPermissionGranted:
+        madeira_mic_apply_category();
+        break;
+    case AVAudioApplicationRecordPermissionDenied:
+        fprintf(stderr, "[ios_mic] microphone access is off for EmuPC (Settings > Privacy > Microphone); the game hears silence\n");
+        break;
+    default: {
+        fprintf(stderr, "[ios_mic] asking for the microphone\n");
+        dispatch_semaphore_t done = dispatch_semaphore_create(0);
+        [AVAudioApplication requestRecordPermissionWithCompletionHandler:^(BOOL granted) {
+            fprintf(stderr, "[ios_mic] microphone %s\n", granted ? "allowed" : "not allowed");
+            if (granted) madeira_mic_apply_category();
+            dispatch_semaphore_signal(done);
+        }];
+        /* The prompt waits on the player; the game's audio thread waits at most 30 s. */
+        dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC));
+        break;
+    }
+    }
+}
+
 /* ---- ml581: undo the hand-made AppData skeleton ------------------------
  *
  * While chasing the Steam login window I hand-created

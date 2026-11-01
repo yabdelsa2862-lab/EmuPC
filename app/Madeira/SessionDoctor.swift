@@ -653,7 +653,14 @@ final class MusicNow: ObservableObject {
     /// A game already running picks the change up straight away.
     static func applyMix() {
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playback, options: mix ? [.mixWithOthers] : [])
+        // A game using the microphone keeps the session recording.
+        if madeira_mic_session_active() != 0 {
+            var options: AVAudioSession.CategoryOptions = [.defaultToSpeaker, .allowBluetoothHFP, .allowBluetoothA2DP]
+            if mix { options.insert(.mixWithOthers) }
+            try? session.setCategory(.playAndRecord, options: options)
+        } else {
+            try? session.setCategory(.playback, options: mix ? [.mixWithOthers] : [])
+        }
     }
 
     private init() {

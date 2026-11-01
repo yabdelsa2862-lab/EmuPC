@@ -25,6 +25,16 @@
  * If AudioUnit setup fails (no session, etc.) the driver degrades to the
  * Tier-1 wall-clock null behaviour so game timing never breaks.
  * AVAudioSession activation happens app-side (WineProcessBridge.m).
+ *
+ * EmuPC: a capture endpoint, the iPhone's microphone (or the headset's).
+ * One process-wide input AudioQueue, separate from the RemoteIO output so
+ * the render path is untouched, records 48 kHz mono float and converts into
+ * every started capture client's ring in that client's format (rate,
+ * channels, float/16/32/8-bit). WASAPI capture maps onto it the way render
+ * does: get_capture_buffer copies what is there into the client's scratch,
+ * release_capture_buffer advances the read position. The app switches the
+ * audio session to play-and-record (and asks for the microphone) on the
+ * first capture start: madeira_mic_session(1). Log tag: [ios_mic].
  */
 
 #include <stdint.h>
@@ -363,6 +373,11 @@ struct ios_stream {
     _Atomic uint32_t st_cbs;       /* render passes that mixed this stream */
     _Atomic uint32_t st_short_cbs; /* passes that ran short */
     _Atomic uint32_t st_cb_max;    /* largest render pass, device frames */
+    /* EmuPC: capture client (the microphone). write_pos counts frames the mic
+     * delivered, play_pos frames the client released. */
+    int capture;
+    double cap_phase;              /* resampler position, in mic samples */
+    float cap_last;                /* the mic's last sample, for interpolation */
 };
 
 /* ml739: one stream object per client, mirroring Wine's CoreAudio driver.
@@ -980,6 +995,158 @@ static int ios_stream_is_live(const struct ios_stream *s)
     return s->mixable && g_dev.au != NULL;
 }
 
+/* ------------------------------ microphone ------------------------------ */
+
+/* App side (WineProcessBridge.m): 1 = the session records (and the microphone
+ * is asked for, once). Weak, so a build without it still links. */
+extern void madeira_mic_session(int on) __attribute__((weak));
+
+#define IOS_MIC_RATE 48000.0
+#define IOS_MIC_BUFFERS 4
+#define IOS_MIC_BUFFER_FRAMES 480   /* 10 ms */
+
+static AudioQueueRef g_mic_q;
+static int g_mic_failed;
+/* g_mic_life: creating and disposing the queue. g_mic_lock: the client list,
+ * also taken by the queue's callback, so a client is never freed mid-write.
+ * The queue is disposed with g_mic_lock NOT held (dispose waits for the
+ * callback). */
+static pthread_mutex_t g_mic_life = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_mic_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct ios_stream *g_cap[IOS_MAX_STREAMS];
+static _Atomic int g_mic_running;
+
+static void ios_cap_store(struct ios_stream *s, BYTE *frame, float v)
+{
+    UINT32 c, ch = s->channels ? s->channels : 1, size = s->frame_bytes / ch;
+    if (v > 1.0f) v = 1.0f; else if (v < -1.0f) v = -1.0f;
+    for (c = 0; c < ch; c++) {
+        BYTE *d = frame + (size_t)c * size;
+        if (s->is_float && size == 4) *(float *)d = v;
+        else if (size == 2) *(int16_t *)d = (int16_t)(v * 32767.0f);
+        else if (size == 4) *(int32_t *)d = (int32_t)(v * 2147483647.0);
+        else if (size == 3) { int32_t x = (int32_t)(v * 8388607.0f); d[0] = x & 0xff; d[1] = (x >> 8) & 0xff; d[2] = (x >> 16) & 0xff; }
+        else if (size == 1) *d = (BYTE)(int)(v * 127.0f + 128.0f);
+    }
+}
+
+/* Mono float at 48 kHz from the queue into one client's ring, resampled
+ * (linear) to its rate. */
+static void ios_cap_write(struct ios_stream *s, const float *x, UInt32 n)
+{
+    double step = IOS_MIC_RATE / (double)(s->sample_rate ? s->sample_rate : 48000);
+    double phase = s->cap_phase;
+    uint64_t wr = atomic_load_explicit(&s->write_pos, memory_order_relaxed);
+    UINT32 cap = s->buffer_frames, fb = s->frame_bytes;
+    if (!n || !cap || !s->ring) return;
+    while (phase < n) {
+        UInt32 i = (UInt32)phase;
+        float t = (float)(phase - i);
+        float a = i ? x[i - 1] : s->cap_last;
+        ios_cap_store(s, s->ring + (size_t)(wr % cap) * fb, a + (x[i] - a) * t);
+        wr++;
+        phase += step;
+    }
+    s->cap_phase = phase - n;
+    s->cap_last = x[n - 1];
+    atomic_store_explicit(&s->write_pos, wr, memory_order_release);
+}
+
+static void ios_mic_cb(void *user, AudioQueueRef q, AudioQueueBufferRef buf,
+                       const AudioTimeStamp *ts, UInt32 npd, const AudioStreamPacketDescription *pd)
+{
+    static uint64_t frames, rep_frames; static float peak; static time_t last;
+    const float *x = buf->mAudioData;
+    UInt32 n = buf->mAudioDataByteSize / sizeof(float), i;
+    int k;
+    (void)user; (void)ts; (void)npd; (void)pd;
+    pthread_mutex_lock(&g_mic_lock);
+    for (k = 0; k < IOS_MAX_STREAMS; k++)
+        if (g_cap[k]) ios_cap_write(g_cap[k], x, n);
+    pthread_mutex_unlock(&g_mic_lock);
+    for (i = 0; i < n; i++) { float a = x[i] < 0 ? -x[i] : x[i]; if (a > peak) peak = a; }
+    frames += n;
+    if (time(NULL) - last >= 10) {   /* one line per ~10 s: is the mic delivering, and is it hearing anything */
+        fprintf(stderr, "[ios_mic] %.1f s of microphone audio in the last ~10 s, peak %.3f\n",
+                (double)(frames - rep_frames) / IOS_MIC_RATE, peak);
+        rep_frames = frames; peak = 0; last = time(NULL);
+    }
+    if (atomic_load(&g_mic_running)) AudioQueueEnqueueBuffer(q, buf, 0, NULL);
+}
+
+static void ios_mic_start_locked(void)
+{
+    AudioStreamBasicDescription f;
+    OSStatus st;
+    int i;
+    if (g_mic_q || g_mic_failed) return;
+    if (madeira_mic_session) madeira_mic_session(1);
+    memset(&f, 0, sizeof(f));
+    f.mSampleRate = IOS_MIC_RATE;
+    f.mFormatID = kAudioFormatLinearPCM;
+    f.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
+    f.mBytesPerPacket = f.mBytesPerFrame = sizeof(float);
+    f.mFramesPerPacket = 1;
+    f.mChannelsPerFrame = 1;
+    f.mBitsPerChannel = 32;
+    st = AudioQueueNewInput(&f, ios_mic_cb, NULL, NULL, NULL, 0, &g_mic_q);
+    if (st || !g_mic_q) {
+        fprintf(stderr, "[ios_mic] AudioQueueNewInput failed: %d -- the game hears silence\n", (int)st);
+        g_mic_q = NULL; g_mic_failed = 1; return;
+    }
+    atomic_store(&g_mic_running, 1);
+    for (i = 0; i < IOS_MIC_BUFFERS; i++) {
+        AudioQueueBufferRef b;
+        if (!AudioQueueAllocateBuffer(g_mic_q, IOS_MIC_BUFFER_FRAMES * sizeof(float), &b))
+            AudioQueueEnqueueBuffer(g_mic_q, b, 0, NULL);
+    }
+    st = AudioQueueStart(g_mic_q, NULL);
+    fprintf(stderr, "[ios_mic] microphone %s (status %d)\n", st ? "could not start" : "started", (int)st);
+    if (st) {
+        atomic_store(&g_mic_running, 0);
+        AudioQueueDispose(g_mic_q, true);
+        g_mic_q = NULL;
+        /* the session may still be switching to recording, or permission is
+         * pending: the next start tries again */
+    }
+}
+
+static void ios_mic_add(struct ios_stream *s)
+{
+    int k;
+    pthread_mutex_lock(&g_mic_life);
+    pthread_mutex_lock(&g_mic_lock);
+    s->cap_phase = 0; s->cap_last = 0;
+    for (k = 0; k < IOS_MAX_STREAMS; k++) if (g_cap[k] == s) break;
+    if (k == IOS_MAX_STREAMS)
+        for (k = 0; k < IOS_MAX_STREAMS; k++) if (!g_cap[k]) { g_cap[k] = s; break; }
+    pthread_mutex_unlock(&g_mic_lock);
+    ios_mic_start_locked();
+    pthread_mutex_unlock(&g_mic_life);
+}
+
+/* The client stops or goes away; the microphone stops with the last one. */
+static void ios_mic_remove(struct ios_stream *s)
+{
+    int k, any = 0;
+    AudioQueueRef q = NULL;
+    pthread_mutex_lock(&g_mic_life);
+    pthread_mutex_lock(&g_mic_lock);
+    for (k = 0; k < IOS_MAX_STREAMS; k++) {
+        if (g_cap[k] == s) g_cap[k] = NULL;
+        if (g_cap[k]) any = 1;
+    }
+    pthread_mutex_unlock(&g_mic_lock);
+    if (!any && g_mic_q) {
+        q = g_mic_q; g_mic_q = NULL;
+        atomic_store(&g_mic_running, 0);
+        AudioQueueStop(q, true);
+        AudioQueueDispose(q, true);
+        fprintf(stderr, "[ios_mic] microphone stopped (no client is recording)\n");
+    }
+    pthread_mutex_unlock(&g_mic_life);
+}
+
 /* ---------------------------------------------------------------- */
 
 /* Render-buffer ownership for 32-bit clients.
@@ -1078,22 +1245,28 @@ static NTSTATUS ios_main_loop(void *args) {
     return STATUS_SUCCESS;
 }
 
+static const char IOS_MIC_DEVICE_NAME[] = "ios-mic";
+
 static NTSTATUS ios_get_endpoint_ids(void *args) {
     LOG_FN_CALL(3, "get_endpoint_ids");
     struct get_endpoint_ids_params *p = args;
-    /* Only render endpoints; refuse capture entirely. */
-    if (p->flow != eRender) {
+    /* mmdevapi treats endpoint.name as WCHAR* (wide string, 2 bytes/char)
+     * and endpoint.device as char* (single-byte). Both stored as byte
+     * offsets from the endpoints buffer base. Render: the speaker; capture
+     * (EmuPC): the microphone. MADEIRA_MIC=0 offers no capture endpoint. */
+    static const WCHAR dev_name_w[] = { 'i','O','S',' ','N','u','l','l', 0 };
+    static const WCHAR mic_name_w[] = { 'M','i','c','r','o','p','h','o','n','e', 0 };
+    const char *mic_env = getenv("MADEIRA_MIC");
+    if (p->flow != eRender && (p->flow != eCapture || (mic_env && mic_env[0] == '0'))) {
         p->num = 0;
         p->default_idx = 0;
         p->result = S_OK;
         return STATUS_SUCCESS;
     }
-    /* mmdevapi treats endpoint.name as WCHAR* (wide string, 2 bytes/char)
-     * and endpoint.device as char* (single-byte). Both stored as byte
-     * offsets from the endpoints buffer base. */
-    static const WCHAR dev_name_w[] = { 'i','O','S',' ','N','u','l','l', 0 };
-    unsigned int name_bytes = sizeof(dev_name_w);
-    unsigned int device_bytes = sizeof(IOS_DEVICE_NAME);
+    const WCHAR *name_w = p->flow == eCapture ? mic_name_w : dev_name_w;
+    const char *device = p->flow == eCapture ? IOS_MIC_DEVICE_NAME : IOS_DEVICE_NAME;
+    unsigned int name_bytes = p->flow == eCapture ? sizeof(mic_name_w) : sizeof(dev_name_w);
+    unsigned int device_bytes = p->flow == eCapture ? sizeof(IOS_MIC_DEVICE_NAME) : sizeof(IOS_DEVICE_NAME);
     unsigned int needed = sizeof(struct endpoint) + name_bytes + device_bytes;
     if (p->size < needed) {
         p->num = 1;
@@ -1105,8 +1278,8 @@ static NTSTATUS ios_get_endpoint_ids(void *args) {
     unsigned int name_off = sizeof(struct endpoint);
     unsigned int device_off = name_off + name_bytes;
     char *buf = (char *)p->endpoints;
-    memcpy(buf + name_off, dev_name_w, name_bytes);
-    memcpy(buf + device_off, IOS_DEVICE_NAME, device_bytes);
+    memcpy(buf + name_off, name_w, name_bytes);
+    memcpy(buf + device_off, device, device_bytes);
     p->endpoints[0].name = name_off;
     p->endpoints[0].device = device_off;
     p->num = 1;
@@ -1149,6 +1322,8 @@ static NTSTATUS ios_create_stream(void *args) {
      * 100ms so a slow FEX-translated mixer has slack. */
     dur_frames = (uint64_t)(p->duration > 0 ? p->duration : 0) * s->sample_rate / 10000000ull;
     if (dur_frames < s->sample_rate / 10) dur_frames = s->sample_rate / 10;
+    /* the microphone: at least 250 ms, so a client that reads late loses nothing */
+    if (p->flow == eCapture && dur_frames < s->sample_rate / 4) dur_frames = s->sample_rate / 4;
     if (dur_frames > s->sample_rate * 4) dur_frames = s->sample_rate * 4;
     s->buffer_frames = (UINT32)dur_frames;
     free(s->ring);
@@ -1162,6 +1337,14 @@ static NTSTATUS ios_create_stream(void *args) {
 
     if (p->flow == eRender && s->ring)
         ios_dev_attach(s, p->fmt);   /* failure -> null-mode */
+    if (p->flow == eCapture) {
+        s->capture = 1;
+        s->is_float = ios_fmt_is_float(p->fmt);
+        s->sample_bits = p->fmt && p->fmt->wBitsPerSample ? p->fmt->wBitsPerSample : 32;
+        if (!p->fmt) s->is_float = 1;
+        fprintf(stderr, "[ios_mic] capture client: %u Hz, %u ch, %d-bit%s\n",
+                s->sample_rate, s->channels, s->sample_bits, s->is_float ? " float" : "");
+    }
 
     if (p->channel_count) *p->channel_count = s->channels;
     if (p->stream) *p->stream = (stream_handle)(uintptr_t)s;
@@ -1197,8 +1380,11 @@ static NTSTATUS ios_release_stream(void *args) {
         NtWaitForSingleObject(p->timer_thread, FALSE, NULL);
         NtClose(p->timer_thread);
     }
-    ios_dev_detach(s);
-    ios_dev_stop_if_idle();
+    if (s->capture) ios_mic_remove(s);
+    else {
+        ios_dev_detach(s);
+        ios_dev_stop_if_idle();
+    }
     stream_unregister(s);
     ios_audio_free_scratch(s->render_scratch, s->scratch_guest);
     free(s->ring);
@@ -1217,7 +1403,8 @@ static NTSTATUS ios_start(void *args) {
          * already sees this client. */
         s->start_mach = mach_absolute_time();
         s->started = 1;
-        ios_dev_start();
+        if (s->capture) ios_mic_add(s);
+        else ios_dev_start();
     }
     p->result = S_OK;
     return STATUS_SUCCESS;
@@ -1230,7 +1417,8 @@ static NTSTATUS ios_stop(void *args) {
     if (s->started) {
         s->accumulated_frames = elapsed_frames(s);
         s->started = 0;
-        ios_dev_stop_if_idle();
+        if (s->capture) ios_mic_remove(s);
+        else ios_dev_stop_if_idle();
     }
     p->result = S_OK;
     return STATUS_SUCCESS;
@@ -1519,17 +1707,65 @@ static NTSTATUS ios_release_render_buffer(void *args) {
     return STATUS_SUCCESS;
 }
 
+/* Frames the microphone has delivered that the client has not read. A client
+ * that fell more than a ring behind loses the oldest audio (flagged as a
+ * discontinuity on the next packet). */
+static uint64_t ios_cap_available(struct ios_stream *s, int *discontinuity)
+{
+    uint64_t rd = atomic_load_explicit(&s->play_pos, memory_order_acquire);
+    uint64_t wr = atomic_load_explicit(&s->write_pos, memory_order_acquire);
+    if (wr - rd > s->buffer_frames) {
+        rd = wr - s->buffer_frames;
+        atomic_store_explicit(&s->play_pos, rd, memory_order_release);
+        if (discontinuity) *discontinuity = 1;
+    }
+    return wr - rd;
+}
+
 static NTSTATUS ios_get_capture_buffer(void *args) {
     struct get_capture_buffer_params *p = args;
+    struct ios_stream *s = stream_from_handle(p->stream);
+    int disc = 0;
+    uint64_t avail, rd;
+    UINT32 n, i = 0, fb, cap;
+
     if (p->frames) *p->frames = 0;
     if (p->data) *p->data = NULL;
     if (p->flags) *p->flags = 0;
+    if (!s || !s->capture) { p->result = s ? S_OK : AUDCLNT_E_NOT_INITIALIZED; return STATUS_SUCCESS; }
+    avail = ios_cap_available(s, &disc);
+    n = (UINT32)(avail < s->scratch_frames ? avail : s->scratch_frames);
+    if (!n || !s->render_scratch) {
+        p->result = 0x08890001L; /* AUDCLNT_S_BUFFER_EMPTY */
+        return STATUS_SUCCESS;
+    }
+    fb = s->frame_bytes; cap = s->buffer_frames;
+    rd = atomic_load_explicit(&s->play_pos, memory_order_acquire);
+    while (i < n) {
+        UINT32 idx = (UINT32)((rd + i) % cap);
+        UINT32 chunk = cap - idx;
+        if (chunk > n - i) chunk = n - i;
+        memcpy(s->render_scratch + (size_t)i * fb, s->ring + (size_t)idx * fb, (size_t)chunk * fb);
+        i += chunk;
+    }
+    s->pending_frames = n;
+    if (p->data) *p->data = s->render_scratch;
+    if (p->frames) *p->frames = n;
+    if (p->flags) *p->flags = disc ? 0x1 /* AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY */ : 0;
+    if (p->devpos) *p->devpos = rd;
+    if (p->qpcpos) *p->qpcpos = mach_to_ns(mach_absolute_time()) / 100;
     p->result = S_OK;
     return STATUS_SUCCESS;
 }
 
 static NTSTATUS ios_release_capture_buffer(void *args) {
     struct release_capture_buffer_params *p = args;
+    struct ios_stream *s = stream_from_handle(p->stream);
+    if (s && s->capture && p->done) {
+        UINT32 done = p->done < s->pending_frames ? p->done : s->pending_frames;
+        atomic_fetch_add_explicit(&s->play_pos, done, memory_order_acq_rel);
+    }
+    if (s) s->pending_frames = 0;
     p->result = S_OK;
     return STATUS_SUCCESS;
 }
@@ -1633,7 +1869,10 @@ static NTSTATUS ios_get_current_padding(void *args) {
     struct get_current_padding_params *p = args;
     struct ios_stream *s = stream_from_handle(p->stream);
     if (!s) { if (p->padding) *p->padding = 0; p->result = AUDCLNT_E_NOT_INITIALIZED; return STATUS_SUCCESS; }
-    if (p->padding) {
+    if (p->padding && s->capture) {
+        uint64_t avail = ios_cap_available(s, NULL);
+        *p->padding = (UINT32)(avail > s->buffer_frames ? s->buffer_frames : avail);
+    } else if (p->padding) {
         if (ios_stream_is_live(s)) {
             uint64_t pad = atomic_load(&s->write_pos) - atomic_load(&s->play_pos);
             *p->padding = (UINT32)(pad > s->buffer_frames ? s->buffer_frames : pad);
@@ -1647,7 +1886,12 @@ static NTSTATUS ios_get_current_padding(void *args) {
 
 static NTSTATUS ios_get_next_packet_size(void *args) {
     struct get_next_packet_size_params *p = args;
+    struct ios_stream *s = stream_from_handle(p->stream);
     if (p->frames) *p->frames = 0;
+    if (s && s->capture && p->frames) {
+        uint64_t avail = ios_cap_available(s, NULL);
+        *p->frames = (UINT32)(avail < s->scratch_frames ? avail : s->scratch_frames);
+    }
     p->result = S_OK;
     return STATUS_SUCCESS;
 }
@@ -1670,7 +1914,9 @@ static NTSTATUS ios_get_position(void *args) {
     /* THIS is the function that drives FMOD's clock. Tier-2: frames the
      * RT callback actually consumed — the true hardware clock. Null-mode
      * fallback: wall-clock synthesis as before. */
-    if (p->pos) {
+    if (p->pos && s->capture) {
+        *p->pos = atomic_load(&s->write_pos);   /* frames the microphone delivered */
+    } else if (p->pos) {
         if (ios_stream_is_live(s))
             *p->pos = atomic_load(&s->play_pos);
         else

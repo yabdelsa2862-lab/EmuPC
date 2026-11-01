@@ -83,3 +83,7 @@ int madeira_d3d12_canary_run_log(const char *fixture_dir, const char *dylib_path
  * what was applied, for the [hwinput] log. */
 void madeira_phone_pointer_setup(void);
 const char *madeira_phone_pointer_status(void);
+
+/* WineProcessBridge.m: whether a game turned the microphone on this run (the
+ * session then records; SessionDoctor's music mix keeps that category). */
+int madeira_mic_session_active(void);

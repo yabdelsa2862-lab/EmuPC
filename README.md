@@ -131,6 +131,9 @@ stores and quality-of-life features on top.
 - **Low-memory profile** for 4 GB devices such as the iPad Air 4: a smaller JIT
   pool, a lighter video memory budget, a swap file and 30 FPS for new games,
   switched on by itself (Settings › General).
+- **Microphone in games**: voice chat in games that support it (Steam voice,
+  proximity chat) hears your iPhone's microphone or your headset's. iOS asks
+  for the microphone the first time a game listens.
 - **Your music while you play**: game sound mixes with your music instead of
   stopping it, and the guide shows the Apple Music song with play, pause and skip
   on the controller.
