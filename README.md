@@ -67,7 +67,7 @@ stores and quality-of-life features on top.
   Home, Store, Settings, Wi-Fi controllers and Restart.
 - **In-game guide**: the same buttons during a game open Resume, **Quit game**,
   FPS limit, performance overlay and touch controls, all driven by the controller.
-- **Controller keyboard**: when a game asks for text, open *Keyboard* from the
+- **Controller keyboard**: when a game asks for text, click both sticks (L3 + R3) or open *Keyboard* from the
   in-game guide and type with the controller (A types, B deletes, Y space,
   X Shift, Menu Enter). Without a controller the iOS keyboard opens instead.
 - **Battery at a glance**: your iPhone or iPad battery and your controller's,

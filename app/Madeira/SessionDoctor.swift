@@ -466,7 +466,7 @@ final class InGameGuide: ObservableObject {
                 model.menu = false
                 self.steamOverlay = true
             },
-            Item(title: "Keyboard", value: nil, symbol: "keyboard.fill") { _ in
+            Item(title: "Keyboard", value: LibraryController.shared.connected ? "L3 + R3" : nil, symbol: "keyboard.fill") { _ in
                 model.menu = false
                 ControllerKeyboard.openForSession()
             },

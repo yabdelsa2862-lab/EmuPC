@@ -125,6 +125,8 @@ final class LibraryController: ObservableObject, @unchecked Sendable {
         if own, buttons & 0x30 == 0x30, pressed & 0x30 != 0 { command = "guide" }
         // EmuPC: the Xbox (Home) button opens the guide too, in menus and in games.
         else if pressed & 0x0400 != 0 { command = own ? "guide" : "menu" }
+        // Both sticks clicked together (L3 + R3): the controller keyboard, in games and in it.
+        else if buttons & 0xC0 == 0xC0, pressed & 0xC0 != 0 { command = "keyboard" }
         else if own {
             for (mask, name): (UInt16, String) in [(1, "up"), (2, "down"), (4, "left"), (8, "right"), (0x1000, "accept"), (0x2000, "back"), (0x8000, "add"), (0x4000, "x"), (0x10, "menu"), (0x100, "tabBack"), (0x200, "tab")] {
                 if pressed & mask != 0 { command = name; break }
@@ -5060,6 +5062,10 @@ struct LibraryHUD: View {
         .onChange(of: guide.steamOverlay) { _, _ in LibraryController.shared.configure(enabled: model.enabled, ownsInput: frontendOwnsPad) }
         .onReceive(LibraryController.shared.commands) { command in
             if guide.steamOverlay || SteamOverlayPad.open { return }   // SteamFriendsView reads the pad itself
+            if command == "keyboard" {
+                if padKeyboard.open { padKeyboard.hide() } else if !model.launching { model.menu = false; padKeyboard.show() }
+                return
+            }
             if padKeyboard.open { padKeyboard.handle(command); return }
             if model.launching {
                 // B asks to stop; A confirms, B again keeps waiting.

@@ -7,8 +7,9 @@ import UIKit
 // EmuPC: a keyboard typed with the controller, for games that ask for a name,
 // a chat line or a server address while there is no touch keyboard at hand.
 //
-//   - Opened from the in-game guide (Keyboard) or the session menu when a
-//     controller is connected; without one the iOS keyboard opens instead.
+//   - Opened by clicking both sticks (L3 + R3) in a game, from the in-game
+//     guide (Keyboard) or the session menu when a controller is connected;
+//     without one the iOS keyboard opens instead.
 //   - D-pad or stick moves, A types the key, B deletes, Y is space, X is
 //     Shift, Menu is Enter, LB/RB move the game's cursor, the Xbox button
 //     (or Done) closes it. Keys can be tapped too.
@@ -83,7 +84,7 @@ final class ControllerKeyboard: ObservableObject {
         case "menu": press(.enter)
         case "tabBack": tap(0x25)   // VK_LEFT
         case "tab": tap(0x27)       // VK_RIGHT
-        case "guide": hide()
+        case "guide", "keyboard": hide()
         default: break
         }
     }
