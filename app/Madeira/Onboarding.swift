@@ -372,9 +372,7 @@ struct OnboardingView: View {
             termsSection("No warranty", symbol: "exclamationmark.triangle") {
                 Text("EmuPC is open source under GPL-3.0-or-later and provided as is, without any warranty. Games may crash, run slowly or not start. Your sign-ins stay on this \(device) and go only to the stores themselves.")
             }
-            Link(destination: URL(string: "https://github.com/yabdelsa2862-lab/EmuPC/blob/main/TERMS.md")!) {
-                Label("Read the full terms", systemImage: "safari")
-            }
+            Text("The full terms are in TERMS.md, next to EmuPC's source code.").font(.footnote).foregroundStyle(.secondary)
             primary("Agree and continue", symbol: "checkmark") { model.agreeToTerms() }.padding(.top, 4)
         }
     }
