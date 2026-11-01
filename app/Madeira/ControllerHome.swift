@@ -548,7 +548,12 @@ struct ControllerHome: View {
         let width = height * 2 / 3
         return ScrollViewReader { reader in
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 22) {
+                // A plain HStack: a lazy one estimated the wide "Jump back in" tile's
+                // width wrongly and scrolled the first game under the Dynamic Island.
+                HStack(spacing: 22) {
+                    // The row's start (the island margin) as a target: the first game
+                    // cannot be centred, so it scrolls here instead.
+                    Color.clear.frame(width: max(side - 22, 0), height: 1).id(Self.shelfStart)
                     ForEach(ids, id: \.self) { id in
                         let on = id == focusedID
                         art(id)
@@ -564,16 +569,26 @@ struct ControllerHome: View {
                             .onTapGesture { tapped(id) }
                     }
                 }
-                .padding(.horizontal, side).padding(.vertical, height * 0.1)
+                .padding(.trailing, side).padding(.vertical, height * 0.1)
             }
+            // The focused tile's glow and shadow reach past the row; clipped, they drew a box.
+            .scrollClipDisabled()
             .padding(.horizontal, -side)
             .frame(height: height * 1.2)
-            .onAppear { if let focusedID { reader.scrollTo(focusedID, anchor: .center) } }
+            .onAppear { if let focusedID { scroll(reader, to: focusedID, in: ids) } }
             .onChange(of: focusedID) { _, id in
                 guard let id else { return }
-                withAnimation(.easeInOut(duration: 0.25)) { reader.scrollTo(id, anchor: .center) }
+                withAnimation(.easeInOut(duration: 0.25)) { scroll(reader, to: id, in: ids) }
             }
         }
+    }
+
+    private static let shelfStart = "shelf-start"
+
+    /// The first game sits at the row's start; the others are centred.
+    private func scroll(_ reader: ScrollViewProxy, to id: AnyHashable, in ids: [AnyHashable]) {
+        if id == ids.first { reader.scrollTo(Self.shelfStart, anchor: .leading) }
+        else { reader.scrollTo(id, anchor: .center) }
     }
 
     // MARK: Game card
