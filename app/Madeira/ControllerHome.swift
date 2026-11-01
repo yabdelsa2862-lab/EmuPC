@@ -1897,8 +1897,10 @@ enum IslandMargins {
             .first { $0.activationState == .foregroundActive } ?? UIApplication.shared.connectedScenes.first as? UIWindowScene
         let insets = scene?.windows.first { $0.isKeyWindow }?.safeAreaInsets ?? scene?.windows.first?.safeAreaInsets ?? .zero
         switch scene?.interfaceOrientation {
-        case .landscapeRight?: return (max(insets.left, 16) + 4, 30)
-        case .landscapeLeft?: return (30, max(insets.right, 16) + 4)
+        // The safe area keeps ~18 pt more than the island needs; a full inset left a
+        // wide empty band on the island side.
+        case .landscapeRight?: return (max(insets.left - 18, 30), 30)
+        case .landscapeLeft?: return (30, max(insets.right - 18, 30))
         default: return (max(insets.left, 16), max(insets.right, 16))
         }
     }

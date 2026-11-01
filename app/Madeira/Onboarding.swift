@@ -70,8 +70,10 @@ enum OnboardingRules {
     /// Wine Mono only when this device has none (`wineMono`). With `since` (the revision
     /// this device last saw, after an update) only the pages added after it are offered.
     static func steps(signIn: Bool, dock: Bool, localDevVPN: Bool = false, wineMono: Bool = false,
-                      since: Int = 0) -> [Step] {
-        var list: [Step] = [.welcome, .terms, .profile]
+                      terms: Bool = true, profile: Bool = true, since: Int = 0) -> [Step] {
+        var list: [Step] = [.welcome]
+        if terms { list.append(.terms) }
+        if profile || since == 0 { list.append(.profile) }
         if localDevVPN { list.append(.localDevVPN) }
         list.append(.jit)
         if signIn || dock { list.append(.signIn) }
@@ -130,8 +132,10 @@ enum OnboardingRules {
     @Published private(set) var since = 0
     var steps: [Step] { steps(since: since) }
     private func steps(since: Int) -> [Step] {
+        // Terms once agreed, and a profile already made, never bring setup back after an update.
         OnboardingRules.steps(signIn: SteamSignIn.isEnabled, dock: MadeiraDock.enabled, localDevVPN: offerLocalDevVPN,
-                              wineMono: offerWineMono, since: since)
+                              wineMono: offerWineMono, terms: !OnboardingRules.termsAccepted,
+                              profile: (UserDefaults.standard.string(forKey: ProfileSettings.nameKey) ?? "").isEmpty, since: since)
     }
     /// Setup can be opened: enabled, and something to set up.
     var available: Bool { Self.enabled && OnboardingRules.hasSetup(steps(since: 0)) }
