@@ -1766,9 +1766,9 @@ struct DetailPanel<Art: View, Backdrop: View, Content: View>: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
             }
-            // Clear of the Dynamic Island on its side only, like the home.
-            .padding(.leading, IslandMargins.current().leading)
-            .padding(.trailing, IslandMargins.current().trailing)
+            // Clear of the Dynamic Island on its side only, trimmed to the island.
+            .padding(.leading, IslandMargins.current(tight: true).leading)
+            .padding(.trailing, IslandMargins.current(tight: true).trailing)
             .frame(width: geo.size.width, height: geo.size.height)
             .foregroundStyle(.white)
             .background {
@@ -1892,15 +1892,16 @@ struct InterfaceSettingsSection: View {
 /// the island is at the top of the phone, on the left with the interface in
 /// landscapeRight (home edge on the right) and on the right in landscapeLeft.
 enum IslandMargins {
-    static func current() -> (leading: CGFloat, trailing: CGFloat) {
+    /// tight: the island side trimmed to what the island needs (a game's details page,
+    /// where the full inset left a wide band beside the cover). The home keeps the full
+    /// inset: its focused tile grows and glows, and is clipped without the room.
+    static func current(tight: Bool = false) -> (leading: CGFloat, trailing: CGFloat) {
         let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
             .first { $0.activationState == .foregroundActive } ?? UIApplication.shared.connectedScenes.first as? UIWindowScene
         let insets = scene?.windows.first { $0.isKeyWindow }?.safeAreaInsets ?? scene?.windows.first?.safeAreaInsets ?? .zero
         switch scene?.interfaceOrientation {
-        // The safe area keeps ~18 pt more than the island needs; a full inset left a
-        // wide empty band on the island side.
-        case .landscapeRight?: return (max(insets.left - 18, 30), 30)
-        case .landscapeLeft?: return (30, max(insets.right - 18, 30))
+        case .landscapeRight?: return (tight ? max(insets.left - 18, 30) : max(insets.left, 16) + 4, 30)
+        case .landscapeLeft?: return (30, tight ? max(insets.right - 18, 30) : max(insets.right, 16) + 4)
         default: return (max(insets.left, 16), max(insets.right, 16))
         }
     }
