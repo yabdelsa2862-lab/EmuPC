@@ -57,8 +57,12 @@ stores and quality-of-life features on top.
 ## What EmuPC adds
 
 ### A console home screen
-- **Controller-first home** in the style of a games console: a "Jump back in"
-  tile, your library as large art tiles, and button hints along the bottom.
+- **Controller-first home** in the style of a games console: your games as a
+  centred cover carousel over the selected game's blurred art, glass top bar and
+  button hints, smooth spring animations and haptics as you move.
+- **Game card**: press A on a game and its cover opens into a card in place,
+  with the description, developer, last played and install size, and Play or
+  Settings right there.
 - **Guide**: press the **Xbox / Home button** (or View + Menu) for Profile,
   Home, Store, Settings, Wi-Fi controllers and Restart.
 - **In-game guide**: the same buttons during a game open Resume, **Quit game**,
@@ -73,6 +77,13 @@ stores and quality-of-life features on top.
 - **Profile**: name, a photo or built-in avatar, and a profile page with your
   games, installed size, last played and connected stores. Set up during onboarding.
 - Layout that fills the screen edge to edge and keeps clear of the Dynamic Island.
+
+### Steam friends and invites
+- **Friends list** with who is online and what they are playing.
+- **Game invites**: invites from your friends show up in EmuPC; **Join** starts
+  the game straight into your friend's lobby.
+- **Overlay while playing**: open your friends from the in-game guide and join
+  or accept invites without leaving the game, like the Steam overlay.
 
 ### Stores
 - **Steam**, **GOG** and **Epic Games** in one store with filters (all, per
@@ -104,6 +115,11 @@ stores and quality-of-life features on top.
 - **Reopen after a close**: if EmuPC closes or crashes, a notification brings it
   back. A Shortcuts action, *"Did EmuPC close by itself?"*, can reopen it
   automatically.
+- **Direct3D 8 games** run through [d3d8to9](https://github.com/crosire/d3d8to9).
+- **Euro Truck Simulator 2** and other games with tiny start-up windows now fill
+  the screen.
+- Fixes for games with anti-tamper protection and for Unity games that pause
+  their own threads.
 - Per-game **graphics presets**, an Unreal Engine fix, a fast CPU mode and known
   profiles for specific games.
 - **Easier game deletion** from the library and details page.
@@ -114,7 +130,10 @@ stores and quality-of-life features on top.
   stopping it, and the guide shows the Apple Music song with play, pause and skip
   on the controller.
 - **Wi-Fi controllers**: other phones on your network join as players 2–4.
-- **External display**: the game on a TV while the phone keeps the controls.
+- **TV mode**: play on a TV over AirPlay or a cable (iOS 27), with a TV home
+  screen; the phone becomes the controller or a performance monitor.
+- **Home Screen games**: an *Open Game* action in the Shortcuts app starts any
+  game from your library, with a ready-made icon for each game in EmuPC's folder.
 - **External drive** support for game installs.
 - **Button layouts**: a Steam-style editor shows the controller with every button
   around it; pick one and choose what it does, for all games (Settings ›
@@ -218,7 +237,7 @@ Fixes were also taken from the community forks of
 [kuscholar](https://github.com/kuscholar/Madeira).
 
 It is built on [Wine](https://www.winehq.org/), [FEX-Emu](https://github.com/FEX-Emu/FEX),
-[DXMT](https://github.com/3Shain/DXMT), [gl4es](https://github.com/ptitSeb/gl4es), [rpmalloc](https://github.com/mjansson/rpmalloc),
+[DXMT](https://github.com/3Shain/DXMT), [gl4es](https://github.com/ptitSeb/gl4es), [d3d8to9](https://github.com/crosire/d3d8to9), [rpmalloc](https://github.com/mjansson/rpmalloc),
 [StikDebug](https://github.com/StikDebug/StikDebug), [StikJIT](https://github.com/StikDebug/StikJIT)
 and [idevice](https://github.com/jkcoxson/idevice). GOG and Epic support follows the
 approach of [Legendary](https://github.com/derrod/legendary) and the GOG Galaxy API.

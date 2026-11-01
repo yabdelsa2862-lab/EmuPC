@@ -38,6 +38,8 @@ echo "=== building $NAME.exe (i386 PE, no CRT -- kernel32/user32/d3d9) ==="
     -o "$NAME.exe" "$NAME.c" \
     -lkernel32 -luser32 -ld3d8
 
+# No debug info: it would carry the build machine's folder paths into the IPA.
+"$TOOLCHAIN/llvm-strip" --strip-debug "$NAME.exe"
 ls -la "$NAME.exe"
 
 echo ""
