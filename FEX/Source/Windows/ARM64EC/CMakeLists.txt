@@ -1,8 +1,16 @@
+# MADEIRA: the iOS-host build exports more: libarm64ecfex_ios.def adds the symbols that only exist under
+# FEX_IOS_HOST, and a .def entry for a symbol that does not exist is a link error.
+if (FEX_IOS_HOST_BUILD)
+  set(ARM64ECFEX_DEF libarm64ecfex_ios.def)
+else()
+  set(ARM64ECFEX_DEF libarm64ecfex.def)
+endif()
+
 add_library(arm64ecfex SHARED
   Module.cpp
   Module.S
   IosJitAlias.cpp
-  libarm64ecfex.def
+  ${ARM64ECFEX_DEF}
   $<TARGET_OBJECTS:FEXCore_object>)
 
 patch_library_wine(arm64ecfex)
@@ -22,13 +30,12 @@ target_link_libraries(arm64ecfex PRIVATE
 
 # Upstream FEX uses `-static -nostdlib -nostartfiles -nodefaultlibs` to avoid
 # pulling in mingw's CRT, then re-adds libc++/libc++abi/libunwind manually.
-# This works on Linux-host arm64ec builds but FAILS on macOS-host llvm-mingw
-# 22.1.4: ld.lld can't reconcile EC-mangled defs in libc++abi.a against
-# non-EC-mangled refs from C++ frontend code, and segfaults on the link.
+# The non-iOS build keeps that line; it links with macOS-host llvm-mingw
+# 20260421 (LLVM 22.1.4).
 #
 # For our iOS-host build, fall through to the default mingw link rules —
 # they include the right startup files, CRT, and produce a clean arm64ec PE.
-# The resulting DLL is slightly larger but links cleanly.
+# The resulting DLL is slightly larger.
 if (FEX_IOS_HOST_BUILD)
   target_link_options(arm64ecfex PRIVATE -static)
 else()

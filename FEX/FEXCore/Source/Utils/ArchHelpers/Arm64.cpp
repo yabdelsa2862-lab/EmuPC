@@ -15,6 +15,10 @@
 #include <cstdint>
 #include <cstdlib>
 
+#if defined(FEX_IOS_HOST) && !defined(__APPLE__)
+extern "C" long NtFlushInstructionCache(void* Handle, const void* Addr, unsigned long long Size);
+#endif
+
 namespace FEXCore::ArchHelpers::Arm64 {
 constexpr uint32_t CASPAL_MASK = 0xBF'E0'FC'00;
 constexpr uint32_t CASPAL_INST = 0x08'60'FC'00;
@@ -121,100 +125,15 @@ static constexpr uint32_t GetRmReg(uint32_t Instr) {
   return (Instr >> RM_OFFSET) & REGISTER_MASK;
 }
 
+/* Backpatches can race another thread executing the same code block. On iOS,
+ * use the same kernel-coordinated RX-view flush as JIT.cpp after RW stores. */
 static void ClearICache(void* Begin, std::size_t Length) {
+#if defined(FEX_IOS_HOST) && !defined(__APPLE__)
+  NtFlushInstructionCache(reinterpret_cast<void*>(~0ull), Begin, Length);
+#else
   __builtin___clear_cache(static_cast<char*>(Begin), static_cast<char*>(Begin) + Length);
-}
-
-#ifdef FEX_IOS_HOST
-static uint64_t IosAtomicWritableAlias(uint64_t Addr, uint64_t Size);
-
-static bool HandleIOSPlainLoadStoreSIGBUS(uint32_t Instr, uint64_t* GPRs) {
-  const uint32_t BaseUnsigned = Instr & 0xFFC0'0000;
-  const uint32_t BaseUnscaled = Instr & 0xFFE0'0C00;
-
-  enum class OpType : uint8_t {
-    Load,
-    Store,
-  };
-
-  struct DecodeResult {
-    OpType Type;
-    uint8_t Size;
-    int64_t Offset;
-  };
-
-  std::optional<DecodeResult> Decoded;
-  switch (BaseUnsigned) {
-  case 0x3900'0000: Decoded = DecodeResult {OpType::Store, 1, static_cast<int64_t>((Instr >> 10) & 0xFFF)}; break; // STRB (imm)
-  case 0x3940'0000: Decoded = DecodeResult {OpType::Load, 1, static_cast<int64_t>((Instr >> 10) & 0xFFF)}; break;  // LDRB (imm)
-  case 0x7900'0000: Decoded = DecodeResult {OpType::Store, 2, static_cast<int64_t>(((Instr >> 10) & 0xFFF) << 1)}; break; // STRH (imm)
-  case 0x7940'0000: Decoded = DecodeResult {OpType::Load, 2, static_cast<int64_t>(((Instr >> 10) & 0xFFF) << 1)}; break;  // LDRH (imm)
-  case 0xB900'0000: Decoded = DecodeResult {OpType::Store, 4, static_cast<int64_t>(((Instr >> 10) & 0xFFF) << 2)}; break; // STR (imm)
-  case 0xB940'0000: Decoded = DecodeResult {OpType::Load, 4, static_cast<int64_t>(((Instr >> 10) & 0xFFF) << 2)}; break;  // LDR (imm)
-  case 0xF900'0000: Decoded = DecodeResult {OpType::Store, 8, static_cast<int64_t>(((Instr >> 10) & 0xFFF) << 3)}; break; // STR (imm, 64)
-  case 0xF940'0000: Decoded = DecodeResult {OpType::Load, 8, static_cast<int64_t>(((Instr >> 10) & 0xFFF) << 3)}; break;  // LDR (imm, 64)
-  default: break;
-  }
-
-  if (!Decoded) {
-    const int64_t Imm9 = static_cast<int32_t>(Instr << 11) >> 23;
-    switch (BaseUnscaled) {
-    case 0x3800'0000: Decoded = DecodeResult {OpType::Store, 1, Imm9}; break; // STURB
-    case 0x3840'0000: Decoded = DecodeResult {OpType::Load, 1, Imm9}; break;  // LDURB
-    case 0x7800'0000: Decoded = DecodeResult {OpType::Store, 2, Imm9}; break; // STURH
-    case 0x7840'0000: Decoded = DecodeResult {OpType::Load, 2, Imm9}; break;  // LDURH
-    case 0xB800'0000: Decoded = DecodeResult {OpType::Store, 4, Imm9}; break; // STUR
-    case 0xB840'0000: Decoded = DecodeResult {OpType::Load, 4, Imm9}; break;  // LDUR
-    case 0xF800'0000: Decoded = DecodeResult {OpType::Store, 8, Imm9}; break; // STUR (64)
-    case 0xF840'0000: Decoded = DecodeResult {OpType::Load, 8, Imm9}; break;  // LDUR (64)
-    default: break;
-    }
-  }
-
-  if (!Decoded) {
-    return false;
-  }
-
-  const uint32_t Rt = Instr & 0x1F;
-  const uint32_t Rn = (Instr >> 5) & 0x1F;
-
-  uint64_t Addr = GPRs[Rn] + static_cast<uint64_t>(Decoded->Offset);
-  if (Decoded->Type == OpType::Store) {
-    Addr = IosAtomicWritableAlias(Addr, Decoded->Size);
-    const uint64_t Value = Rt == 31 ? 0 : GPRs[Rt];
-    switch (Decoded->Size) {
-    case 1: *reinterpret_cast<uint8_t*>(Addr) = static_cast<uint8_t>(Value); break;
-    case 2: *reinterpret_cast<uint16_t*>(Addr) = static_cast<uint16_t>(Value); break;
-    case 4: *reinterpret_cast<uint32_t*>(Addr) = static_cast<uint32_t>(Value); break;
-    case 8: *reinterpret_cast<uint64_t*>(Addr) = Value; break;
-    default: return false;
-    }
-  } else {
-    uint64_t Value = 0;
-    switch (Decoded->Size) {
-    case 1: Value = *reinterpret_cast<uint8_t*>(Addr); break;
-    case 2: Value = *reinterpret_cast<uint16_t*>(Addr); break;
-    case 4: Value = *reinterpret_cast<uint32_t*>(Addr); break;
-    case 8: Value = *reinterpret_cast<uint64_t*>(Addr); break;
-    default: return false;
-    }
-
-    if (Rt != 31) {
-      GPRs[Rt] = Value;
-    }
-  }
-
-  static uint32_t Reports {};
-  if (Reports < 16) {
-    LogMan::Msg::EFmt("[ios-sigbus-ls] emulated {}{} PC-insn=0x{:08x} rn={} rt={} off={} addr=0x{:x}",
-                      Decoded->Type == OpType::Store ? "ST" : "LD", Decoded->Size * 8, Instr, Rn, Rt,
-                      Decoded->Offset, Addr);
-    ++Reports;
-  }
-
-  return true;
-}
 #endif
+}
 
 static __uint128_t LoadAcquire128(uint64_t Addr) {
   __uint128_t Result {};
@@ -471,33 +390,11 @@ static __uint128_t DoLoad128(uint64_t Addr) {
  * COVERAGE, not new atomic machinery. Size is passed so the resolver can reject
  * an access that would straddle the end of an alias. */
 extern "C" uint64_t IosMonoResolveRW(uint64_t GuestAddr, uint64_t Size);
-extern "C" uintptr_t ios_fex_jit_pool_rx;
-extern "C" uintptr_t ios_fex_jit_pool_end;
 
 static uint64_t IosAtomicWritableAlias(uint64_t Addr, uint64_t Size = 16) {
-  if (!Addr) {
+  const int64_t WriteOffset = FEXCore::DualMap::WriteOffset;
+  if (!WriteOffset || !Addr) {
     return Addr;
-  }
-
-  int64_t WriteOffset = FEXCore::DualMap::WriteOffset;
-  if (!WriteOffset) {
-    /* Some ARM64EC pseudo-processes can reach this helper before their local
-     * module copy publishes DualMap::WriteOffset. Recover the same offset from
-     * the app-exported pool env so pool aliases still resolve. */
-    static int64_t RecoveredOffset = INT64_MIN;
-    if (RecoveredOffset == INT64_MIN) {
-      const char* RwEnv = getenv("WINE_IOS_JIT_RW");
-      const char* RxEnv = getenv("WINE_IOS_JIT_RX");
-      const uint64_t Rw = RwEnv ? strtoull(RwEnv, nullptr, 16) : 0;
-      const uint64_t Rx = RxEnv ? strtoull(RxEnv, nullptr, 16) : 0;
-      RecoveredOffset = (Rw && Rx) ? static_cast<int64_t>(Rw - Rx) : 0;
-    }
-    WriteOffset = RecoveredOffset;
-
-    if (!WriteOffset) {
-      const uint64_t Rw = IosMonoResolveRW(Addr, Size ? Size : 16);
-      return Rw ? Rw : Addr;
-    }
   }
 
   /* ml276 CORRECTION: the first version used VirtualQuery to decide whether Addr was
@@ -513,16 +410,13 @@ static uint64_t IosAtomicWritableAlias(uint64_t Addr, uint64_t Size = 16) {
    * forwarded because they are WINE-prefixed). Read once. */
   static uint64_t RxBase = 0;
   static uint64_t RxSize = 0;
-  if (!RxBase || !RxSize) {
+  static bool Probed = false;
+  if (!Probed) {
+    Probed = true;
     const char* RxEnv = getenv("WINE_IOS_JIT_RX");
     const char* SzEnv = getenv("WINE_IOS_JIT_SIZE");
     RxBase = RxEnv ? strtoull(RxEnv, nullptr, 16) : 0;
     RxSize = SzEnv ? strtoull(SzEnv, nullptr, 16) : 0;
-
-    if ((!RxBase || !RxSize) && ios_fex_jit_pool_rx && ios_fex_jit_pool_end > ios_fex_jit_pool_rx) {
-      RxBase = ios_fex_jit_pool_rx;
-      RxSize = ios_fex_jit_pool_end - ios_fex_jit_pool_rx;
-    }
   }
   /* ml656: not the fixed pool -> try the anonymous alias table before giving up. */
   if (!RxBase || !RxSize || Addr < RxBase || Addr >= RxBase + RxSize) {
@@ -2438,20 +2332,16 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
   // Due to code buffer sharing between threads, code must be carefully backpatched from last to first.
   // Multiple threads can be attempting to handle the SIGBUS or even be executing the code being backpatched.
   // iOS-Madeira ml472 (#80): the lock word carries no owner and lives in the
-  // code buffer; the holder's backpatch stores fault through the Mach RX-alias
-  // emulator, so a holder that dies or is unwound there orphans the lock and
-  // every later unaligned-atomic thread WFE-spun here forever (ml470/ml471
-  // post-BrowserReady livelocks). Bounded acquire that stamps the holder's
-  // thread identity into the word (waiters only ever test zero/nonzero); on
-  // timeout, emulate this one access with the same helpers the !IsJIT path
-  // uses and leave the code unpatched.
-#if defined(FEX_IOS_HOST) && !defined(ARCHITECTURE_arm64ec)
-  /* The backpatch lock lives in the code buffer, which is execute-only on iOS: JITCodeTail is
-   * emitted after each block, so &SpinLockFutex is in the dual-mapped pool's RX view. The
-   * LDAXR/STLXR acquire below would take a permission fault on the store, inside this handler.
-   * Take the WHOLE lock through the writable alias (both views map the same physical page, so the
-   * exclusive pair is a genuine atomic, and every participant uses this one address). Scoped to
-   * the WOW64 module; the ARM64EC module is unchanged. */
+  // code buffer. A faulting backpatch store could previously orphan the lock
+  // and leave later unaligned-atomic threads WFE-spinning forever (ml470/ml471
+  // post-BrowserReady livelocks). Retain a bounded acquire with a holder stamp
+  // (waiters only test zero/nonzero); on timeout, emulate this one access with
+  // the same helpers the !IsJIT path uses and leave the code unpatched.
+#ifdef FEX_IOS_HOST
+  /* Both iOS FEX modules put JITCodeTail in the pool's RX view and initialize
+   * WriteOffset before JIT startup. Acquire, wait on, and release this lock
+   * through the same RW alias so hardware atomics keep their exclusive-store
+   * semantics without faulting inside the exception handler. */
   uint32_t* BPFutex = FEXCore::DualMap::WriteAddr(&InlineTail->SpinLockFutex);
 #else
   uint32_t* BPFutex = &InlineTail->SpinLockFutex;
@@ -2506,7 +2396,29 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
     LogMan::Msg::EFmt("Unhandled JIT SIGBUS under bp-lock timeout: PC: 0x{:x} Instruction: 0x{:08x}\n", ProgramCounter, PC[0]);
     return std::nullopt;
   }
+#ifdef FEX_IOS_HOST
+  /* Construct before the lock guard so this trace runs only after a successful
+   * acquire and after the guard has released the lock on every return path.
+   * If the logger allocates, it cannot leave the backpatch lock held. */
+  struct BPLockAliasTrace {
+    uintptr_t RX;
+    uintptr_t RW;
+    ~BPLockAliasTrace() {
+      static std::atomic<uint32_t> Logs {};
+      if (Logs.fetch_add(1, std::memory_order_relaxed) < 4) {
+        LogMan::Msg::EFmt("[bp-lock-alias] rx={:#x} rw={:#x} offset={:#x}", RX, RW, FEXCore::DualMap::WriteOffset);
+      }
+    }
+  } AliasTrace {reinterpret_cast<uintptr_t>(&InlineTail->SpinLockFutex), reinterpret_cast<uintptr_t>(BPFutex)};
+#endif
   FEXCore::Utils::SpinWaitLock::UniqueSpinMutex lk(BPFutex, FEXCore::Utils::SpinWaitLock::adopt_lock);
+#ifdef FEX_IOS_HOST
+  /* The PC remains the executable address for decoding, retry, and cache
+   * invalidation. Only the patch stores use the pool's writable view. */
+  uint32_t* PCWrite = FEXCore::DualMap::WriteAddr(PC);
+#else
+  uint32_t* PCWrite = PC;
+#endif
 
   if ((Instr & LDAXR_MASK) == LDAR_INST ||  // LDAR*
       (Instr & LDAXR_MASK) == LDAPR_INST) { // LDAPR*
@@ -2516,9 +2428,9 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
     LDR |= DataReg;
     if (HandleType != UnalignedHandlerType::NonAtomic) {
       // Ordering matters with cross-thread visibility!
-      std::atomic_ref<uint32_t>(PC[1]).store(DMB_LD, std::memory_order_release); // Back-patch the half-barrier.
+      std::atomic_ref<uint32_t>(PCWrite[1]).store(DMB_LD, std::memory_order_release); // Back-patch the half-barrier.
     }
-    std::atomic_ref<uint32_t>(PC[0]).store(LDR, std::memory_order_release);
+    std::atomic_ref<uint32_t>(PCWrite[0]).store(LDR, std::memory_order_release);
     ClearICache(&PC[0], 8);
     // With the instruction modified, now execute again.
     return 0;
@@ -2528,9 +2440,9 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
     STR |= AddrReg << 5;
     STR |= DataReg;
     if (HandleType != UnalignedHandlerType::NonAtomic) {
-      std::atomic_ref<uint32_t>(PC[-1]).store(DMB, std::memory_order_release); // Back-patch the half-barrier.
+      std::atomic_ref<uint32_t>(PCWrite[-1]).store(DMB, std::memory_order_release); // Back-patch the half-barrier.
     }
-    std::atomic_ref<uint32_t>(PC[0]).store(STR, std::memory_order_release);
+    std::atomic_ref<uint32_t>(PCWrite[0]).store(STR, std::memory_order_release);
     ClearICache(&PC[-1], 8);
     // Back up one instruction and have another go
     return -4;
@@ -2543,9 +2455,9 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
     LDUR |= Instr & (0b1'1111'1111 << 12);
     if (HandleType != UnalignedHandlerType::NonAtomic) {
       // Ordering matters with cross-thread visibility!
-      std::atomic_ref<uint32_t>(PC[1]).store(DMB_LD, std::memory_order_release); // Back-patch the half-barrier.
+      std::atomic_ref<uint32_t>(PCWrite[1]).store(DMB_LD, std::memory_order_release); // Back-patch the half-barrier.
     }
-    std::atomic_ref<uint32_t>(PC[0]).store(LDUR, std::memory_order_release);
+    std::atomic_ref<uint32_t>(PCWrite[0]).store(LDUR, std::memory_order_release);
     ClearICache(&PC[0], 8);
     // With the instruction modified, now execute again.
     return 0;
@@ -2556,9 +2468,9 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
     STUR |= DataReg;
     STUR |= Instr & (0b1'1111'1111 << 12);
     if (HandleType != UnalignedHandlerType::NonAtomic) {
-      std::atomic_ref<uint32_t>(PC[-1]).store(DMB, std::memory_order_release); // Back-patch the half-barrier.
+      std::atomic_ref<uint32_t>(PCWrite[-1]).store(DMB, std::memory_order_release); // Back-patch the half-barrier.
     }
-    std::atomic_ref<uint32_t>(PC[0]).store(STUR, std::memory_order_release);
+    std::atomic_ref<uint32_t>(PCWrite[0]).store(STUR, std::memory_order_release);
 
     ClearICache(&PC[-1], 8);
     // Back up one instruction and have another go
@@ -2606,20 +2518,6 @@ std::optional<int32_t> HandleUnalignedAccess(FEXCore::Core::InternalThreadState*
       return 0;
     }
   }
-
-#ifdef FEX_IOS_HOST
-  if (HandleIOSPlainLoadStoreSIGBUS(Instr, GPRs)) {
-    return 4;
-  }
-
-  // Concurrent backpatching can change PC[0] while we walk the slow-path logic
-  // above. Retry the iOS plain LD/ST emulation against the currently installed
-  // instruction before escalating to "Unhandled JIT SIGBUS".
-  const uint32_t CurrentInstr = std::atomic_ref<uint32_t>(PC[0]).load(std::memory_order_acquire);
-  if (CurrentInstr != Instr && HandleIOSPlainLoadStoreSIGBUS(CurrentInstr, GPRs)) {
-    return 4;
-  }
-#endif
 
   LogMan::Msg::EFmt("Unhandled JIT SIGBUS: PC: 0x{:x} Instruction: 0x{:08x}\n", ProgramCounter, PC[0]);
   return std::nullopt;

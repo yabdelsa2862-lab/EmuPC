@@ -9,6 +9,7 @@ since it is for internal use only
 #include "Metal.hpp"
 #include "config/config.hpp"   /* ml869 */
 #include <deque>   /* ml1256 */
+#include <string>
 #include "d3d11_annotation.hpp"
 #include "d3d11_context.hpp"
 #include "d3d11_device_child.hpp"
@@ -5562,7 +5563,7 @@ public:
 
 protected:
   MTLD3D11Device *device;
-  Com<ID3DDeviceContextState> context_state_; /* MABD local: current state object for SwapDeviceContextState */
+  Com<ID3DDeviceContextState> context_state_; /* EmuPC: current state object for SwapDeviceContextState */
   CommandBufferState cmdbuf_state = CommandBufferState::Idle;
   CommandBufferState previous_render_pipeline_state = CommandBufferState::Idle;
   ContextInternalState &ctx_state;
@@ -5848,6 +5849,18 @@ struct used_dynamic_lineartexture {
   bool latest;
 };
 
+inline bool
+cmdlistKeepBlock() {
+  static const bool on = [] {
+    const std::string v = env::getEnvVar("DXMT_CMDLIST_KEEP_BLOCK");
+    const bool r = !v.empty() && v != "0";
+    if (r)
+      ERR("[cmdlist-keep] DXMT_CMDLIST_KEEP_BLOCK=", v, " (command lists keep their first 2 MB CPU block)");
+    return r;
+  }();
+  return on;
+}
+
 class MTLD3D11CommandList : public ManagedDeviceChild<ID3D11CommandList> {
 public:
   MTLD3D11CommandList(MTLD3D11Device *pDevice, MTLD3D11CommandListPoolBase *pPool, UINT context_flag) :
@@ -5889,7 +5902,12 @@ public:
     issued_event_query.clear();
     list.reset();
     staging_allocator.free_blocks(~0uLL);
-    cpu_command_allocator.free_blocks(~0uLL);
+    /* DXMT_CMDLIST_KEEP_BLOCK=1 keeps this list's first 2 MB CPU command block
+     * across recycles (see RingBumpState::free_blocks_keep_first). Unset/0: as before. */
+    if (cmdlistKeepBlock())
+      cpu_command_allocator.free_blocks_keep_first();
+    else
+      cpu_command_allocator.free_blocks(~0uLL);
 
     promote_flush = false;
   };

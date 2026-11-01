@@ -1470,6 +1470,7 @@ BOOL WINAPI SetupCommitFileQueueW( HWND owner, HSPFILEQ handle, PSP_FILE_CALLBAC
                 for (;;)
                 {
                     SOURCE_MEDIA_W media;
+                    UINT media_result;   /* Madeira ml1310: what NEEDMEDIA answered */
                     media.Reserved = NULL;
                     media.Tagfile = op->media->tag;
                     media.Description = op->media->desc;
@@ -1479,6 +1480,7 @@ BOOL WINAPI SetupCommitFileQueueW( HWND owner, HSPFILEQ handle, PSP_FILE_CALLBAC
 
                     newpath[0] = 0;
                     op_result = handler( context, SPFILENOTIFY_NEEDMEDIA, (UINT_PTR)&media, (UINT_PTR)newpath );
+                    media_result = op_result;
 
                     if (op_result == FILEOP_ABORT)
                         goto done;
@@ -1513,7 +1515,20 @@ BOOL WINAPI SetupCommitFileQueueW( HWND owner, HSPFILEQ handle, PSP_FILE_CALLBAC
                     paths.Win32Error = GetLastError();
                     if (paths.Win32Error == ERROR_PATH_NOT_FOUND ||
                         paths.Win32Error == ERROR_FILE_NOT_FOUND)
-                        continue;
+                    {
+                        /* Madeira ml1310: ask for the media again only when the answer
+                         * named a new place to look. An unattended install's callback
+                         * (the default one included) answers "same place" forever, and
+                         * the loop never ended; report a copy error instead. Idea from
+                         * the published patch 0014 of another iOS port.
+                         * MADEIRA_SETUPAPI_MEDIA_FIX=0 asks again forever, as before. */
+                        WCHAR fix[4];
+                        if (media_result == FILEOP_NEWPATH ||
+                            (GetEnvironmentVariableW( L"MADEIRA_SETUPAPI_MEDIA_FIX", fix, ARRAY_SIZE(fix) ) && fix[0] == '0'))
+                            continue;
+                        ERR( "ml1310 %s not found after NEEDMEDIA answered %#x: reported as a copy error "
+                             "instead of asking for the media again\n", debugstr_w(paths.Source), media_result );
+                    }
 
                     newpath[0] = 0;
                     op_result = handler( context, SPFILENOTIFY_COPYERROR, (UINT_PTR)&paths, (UINT_PTR)newpath );

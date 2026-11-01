@@ -119,16 +119,57 @@ BOOL win32u_wow_session;
 extern int ios_wow_session_armed(void) __attribute__((weak));
 
 /* Should the session's GDI table be section-backed?  Only then can a 32-bit
- * process get a second view of it inside its guest window.  Default: only when
- * the session is armed for 32-bit code when win32u initialises, so a 64-bit
- * session keeps upstream's anonymous allocation.  MADEIRA_GDI_SHARED_SECTION=1
- * forces it (a 64-bit launcher that will start 32-bit children), =0 never. */
+ * process get a second view of it inside its guest window.
+ * MADEIRA_GDI_SHARED_SECTION=1 forces it, =0 never.
+ *
+ * ml1352: default ON in every session.  It used to be on only when the session
+ * was armed for 32-bit code when win32u initialised, so a 64-bit session kept
+ * upstream's anonymous allocation -- and any 32-bit program started LATER in
+ * such a session (a 64-bit launcher's 32-bit child, or the app's in-session
+ * launcher starting the 32-bit Steam client into an explorer desktop) kept the
+ * host table address cloned into its PEB.  32-bit gdi32 truncates that to its
+ * low 32 bits, which inside the guest window is unmapped memory: the first GDI
+ * handle lookup (objects.c get_gdi_client_ptr) faulted, first inside window
+ * callbacks (swallowed) and then fatally (device log 84: read of 24F50AEE at
+ * 7BB9FF61, table 0x7024f50000).  Dock sessions already force the section
+ * (ContentView.swift), so 64-bit processes on a section-backed table are the
+ * proven configuration.  MADEIRA_GDI_SECTION_ALWAYS=0 restores the old default
+ * (only when armed at win32u start). */
 static BOOL gdi_shared_use_section(void)
 {
     const char *env = getenv( "MADEIRA_GDI_SHARED_SECTION" );
+    const char *always = getenv( "MADEIRA_GDI_SECTION_ALWAYS" );
+    BOOL armed = ios_wow_session_armed && ios_wow_session_armed();
 
     if (env && env[0]) return env[0] != '0';
-    return ios_wow_session_armed && ios_wow_session_armed();
+    if (!(always && always[0] == '0'))
+    {
+        dprintf( 2, "[gdi-shared] ml1352 section-backed table by default (session armed for 32-bit "
+                 "code at win32u start: %d); env.MADEIRA_GDI_SECTION_ALWAYS=0 restores \"only when "
+                 "armed\"\n", armed );
+        return TRUE;
+    }
+    return armed;
+}
+
+/***********************************************************************
+ *           win32u_gdi_report_private
+ *
+ * ml1352: a 32-bit pseudo-process called into win32u while the session's GDI
+ * table is private host memory (MADEIRA_GDI_SHARED_SECTION=0, or
+ * MADEIRA_GDI_SECTION_ALWAYS=0 in a session not armed at start).  It cannot
+ * get a view of the table, and its gdi32 will fault on the first handle lookup;
+ * say so once per process instead of leaving only a page fault in gdi32.
+ */
+void win32u_gdi_report_private(void)
+{
+    if (!gdi_shared) return;   /* gdi_init() has not run yet */
+    win32u_gdi_published_peb = NtCurrentTeb()->Peb;
+    dprintf( 2, "[gdi-shared] ml1352 peb=%p pid=%04x: 32-bit process, but this session's GDI table %p is "
+             "private host memory (not section-backed): its gdi32 will read unmapped memory at the "
+             "table's low 32 bits; remove env.MADEIRA_GDI_SHARED_SECTION=0 / "
+             "env.MADEIRA_GDI_SECTION_ALWAYS=0\n", NtCurrentTeb()->Peb,
+             (int)HandleToULong( NtCurrentTeb()->ClientId.UniqueProcess ), gdi_shared );
 }
 
 /***********************************************************************

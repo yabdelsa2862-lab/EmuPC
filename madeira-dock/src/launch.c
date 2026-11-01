@@ -185,6 +185,28 @@ int sh_launch(HMODULE module, void *engine, void *client_user,
         return 45;
     }
     o->event("launch-option-index", (int32_t)launch_option);
+    // One launch's user arguments go directly to Valve's existing pszUserArgs
+    // parameter, with the selected launch option unchanged on every retry.
+    static wchar_t arguments_wide[SH_LAUNCH_ARGUMENTS_CAPACITY];
+    static char user_arguments[SH_LAUNCH_ARGUMENTS_CAPACITY];
+    user_arguments[0] = 0;
+    SetLastError(ERROR_SUCCESS);
+    DWORD arguments_length = GetEnvironmentVariableW(L"MADEIRA_STEAM_HOST_ARGUMENTS",
+                                                     arguments_wide, SH_LAUNCH_ARGUMENTS_CAPACITY);
+    if (arguments_length >= SH_LAUNCH_ARGUMENTS_CAPACITY ||
+        (!arguments_length && GetLastError() != ERROR_SUCCESS && GetLastError() != ERROR_ENVVAR_NOT_FOUND)) {
+        o->event("launch-user-arguments-invalid", 1);
+        return 54;
+    }
+    if (arguments_length) {
+        int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, arguments_wide, -1,
+                                       user_arguments, sizeof user_arguments, NULL, NULL);
+        if (!bytes || !sh_launch_arguments_valid(user_arguments, (size_t)bytes - 1)) {
+            o->event("launch-user-arguments-invalid", 1);
+            return 54;
+        }
+    }
+    o->event("launch-user-arguments-bytes", (int32_t)strlen(user_arguments));
     static char actual_utf8[32768];
     static wchar_t actual[32768], expected[32768], normalized[32768];
     DWORD length = GetEnvironmentVariableW(L"MADEIRA_STEAM_HOST_EXPECTED_INSTALL", expected, 32768);
@@ -238,18 +260,7 @@ int sh_launch(HMODULE module, void *engine, void *client_user,
     o->event("launch-client-discovery-published", 1);
     SetConsoleCtrlHandler(on_control, TRUE);
     uint64_t gameid = appid;
-    /* The game's launch options (Game details › Launch options in Madeira), passed
-     * to Valve's client as the user's arguments, the field desktop Steam's "Launch
-     * Options" box fills. Empty or unset: none, as before. */
-    static char user_args[4096];
-    static wchar_t user_args_w[4096];
-    user_args[0] = 0;
-    DWORD args_len = GetEnvironmentVariableW(L"MADEIRA_DOCK_ARGS", user_args_w, 4096);
-    if (args_len && args_len < 4096 &&
-        !WideCharToMultiByte(CP_UTF8, 0, user_args_w, -1, user_args, sizeof(user_args), NULL, NULL))
-        user_args[0] = 0;
-    o->event("launch-user-args", user_args[0] != 0);
-    uint64_t call = ((launch_fn)(*(void ***)manager)[2])(manager, &gameid, launch_option, 0, user_args);
+    uint64_t call = ((launch_fn)(*(void ***)manager)[2])(manager, &gameid, launch_option, 0, user_arguments);
     o->event("launch-request-submitted", call != 0);
     if (!call) { result = 43; goto done; }
     uint64_t begin = o->now_ms(), stopped_at = 0;
@@ -386,7 +397,7 @@ int sh_launch(HMODULE module, void *engine, void *client_user,
         }
         if (retry_at && !seen_running && o->now_ms() >= retry_at) {
             retry_at = 0;
-            call = ((launch_fn)(*(void ***)manager)[2])(manager, &gameid, launch_option, 0, user_args);
+            call = ((launch_fn)(*(void ***)manager)[2])(manager, &gameid, launch_option, 0, user_arguments);
             ++retries;
             if (retries <= 3 || retries % 60 == 0) o->event("launch-update-retry", (int32_t)retries);
             if (!call) { result = 43; goto done; }

@@ -1,20 +1,21 @@
 #!/bin/bash
-# Build the base libwineserver.a that build.sh patches in place.
-#
-# build.sh expects obj/libwineserver.a (or app/Madeira/libwineserver.a) to
-# already exist and only swaps the iOS-patched objects into it; the original
-# base archive was never committed. This compiles every wine/server/*.c with
-# the same flags build.sh uses, so a clean checkout can run build.sh after it.
-set -e
+# Build the base libwineserver.a that build.sh starts from, for a checkout that
+# has none (build.sh only patches an existing archive, and none is tracked).
+# Compiles every wine/server source with build.sh's flags into
+# obj/libwineserver.a; then run build.sh as usual.
+# Needs wine/build-macos (config.h and the generated headers), like build.sh.
+set -eu
 
 BUILD_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$BUILD_DIR/../.." && pwd)"
 WINE_SRC="$REPO_ROOT/wine"
 SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 SHIMS_DIR="$REPO_ROOT/build/ntdll-unix/shims"
-OBJ_DIR="$BUILD_DIR/obj/base"
-rm -rf "$OBJ_DIR" && mkdir -p "$OBJ_DIR"
+OBJ_DIR="$BUILD_DIR/obj"
+BASE_DIR="$OBJ_DIR/base"
+mkdir -p "$BASE_DIR"
 
+# Same flags as build.sh.
 CC_FLAGS=(
     -arch arm64 -isysroot "$SDK" -miphoneos-version-min=17.0 -O2
     -I"$WINE_SRC/include" -I"$WINE_SRC/include/wine"
@@ -32,15 +33,23 @@ CC_FLAGS=(
     -Wno-implicit-function-declaration
 )
 
+echo "=== Compiling wine/server sources ==="
 FAILED=""
-for src in "$WINE_SRC"/server/*.c; do
-    name=$(basename "$src" .c)
-    if ! xcrun -sdk iphoneos clang "${CC_FLAGS[@]}" -c "$src" -o "$OBJ_DIR/$name.o" 2>"$OBJ_DIR/$name.err"; then
+for src in $(sed -n '/^SOURCES/,/^$/p' "$WINE_SRC/server/Makefile.in" | tr -s ' \t\\' '\n' | grep '\.c$'); do
+    name=${src%.c}
+    echo -n "  $name... "
+    if xcrun -sdk iphoneos clang "${CC_FLAGS[@]}" -c "$WINE_SRC/server/$src" -o "$BASE_DIR/$name.o" 2>"$BASE_DIR/err-$name.txt"; then
+        echo "OK"
+    else
+        echo "FAILED (see $BASE_DIR/err-$name.txt)"
         FAILED="$FAILED $name"
     fi
 done
-[ -n "$FAILED" ] && echo "base objects that failed (build.sh replaces some of them):$FAILED"
+if [ -n "$FAILED" ]; then
+    echo "Failed:$FAILED"
+    exit 1
+fi
 
-rm -f "$BUILD_DIR/obj/libwineserver.a"
-ar rcs "$BUILD_DIR/obj/libwineserver.a" "$OBJ_DIR"/*.o
-echo "Base archive: $BUILD_DIR/obj/libwineserver.a ($(ls "$OBJ_DIR"/*.o | wc -l | tr -d ' ') objects)"
+rm -f "$OBJ_DIR/libwineserver.a"
+ar rcs "$OBJ_DIR/libwineserver.a" "$BASE_DIR"/*.o
+echo "Base archive: $OBJ_DIR/libwineserver.a. Now run build/wineserver/build.sh."

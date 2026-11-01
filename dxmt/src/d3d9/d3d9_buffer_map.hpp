@@ -52,6 +52,17 @@ namespace dxmt {
 // renames charged it per allocation in flight. Should a native or 64-bit guest
 // ever remove both premises, shared-storage direct mapping becomes the correct
 // answer again and this is the comment to re-examine.
+//
+// DIRECT MAPPING, the one exception: a 64-bit guest (the ARM64EC frontend,
+// d3d9_buffer.cpp directMapEnabled) removes both. It addresses Metal's own
+// allocation, so nothing is wrapped and the livelock's condition is absent. A
+// DEFAULT + DYNAMIC buffer there locks the allocation draws read, the way DXVK's
+// allowDirectBufferMapping arm does: DISCARD takes a GPU-idle allocation,
+// NOOVERWRITE keeps the current one, a plain lock renames and carries the
+// contents over. There is no mirror and no refresh, so the per-draw whole-buffer
+// copy is gone: Team Fortress 2's timedemo went from 42.8 to 83.7 fps on an
+// iPhone 15 Pro Max. A write outside the declared range or after Unlock reaches
+// the draw as it does on Windows. MADEIRA_D3D9_DIRECT_MAP=0 keeps the mirror.
 
 // Lock-flag sanitisation. The runtime silently drops flags that the
 // pool/usage/device combination does not honour before any of them take

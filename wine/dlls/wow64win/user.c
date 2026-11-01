@@ -1893,12 +1893,13 @@ NTSTATUS WINAPI wow64_NtUserCallTwoParam( UINT *args )
                                                    * to the 32-bit side -- not offset */
         return NtUserCallTwoParam( arg1, (ULONG_PTR)guest_ptr32( arg2 ), code );
 
-    /* arg2 is the guest's XINPUT_STATE / XINPUT_CAPABILITIES output
-     * buffer or XINPUT_VIBRATION input buffer; arg1 packs the user index and
-     * the NtUserGamepadOp_* selector and is a pure scalar. All payloads are
-     * pointer-free and laid out identically in 32-bit and 64-bit (16, 20 and
-     * 4 bytes, natural alignment), so the translation below is the WHOLE
-     * marshalling -- win32u accesses the guest buffer directly. */
+    /* arg2 is the guest's XINPUT_STATE / XINPUT_CAPABILITIES /
+     * XINPUT_BATTERY_INFORMATION output buffer or XINPUT_VIBRATION input
+     * buffer; arg1 packs the user index and the NtUserGamepadOp_* selector and
+     * is a pure scalar. All payloads are pointer-free and laid out identically
+     * in 32-bit and 64-bit (16, 20, 4 and 2 bytes, natural alignment), so the
+     * translation below is the WHOLE marshalling -- win32u accesses the guest
+     * buffer directly (the shipped wow64win.dll needs no rebuild for a new op). */
     case NtUserCallTwoParam_GetGamepadState:      /* XINPUT_STATE * / XINPUT_CAPABILITIES * (out), XINPUT_VIBRATION * (in) */
         return NtUserCallTwoParam( arg1, (ULONG_PTR)guest_ptr32( arg2 ), code );
 
@@ -2074,7 +2075,7 @@ NTSTATUS WINAPI wow64_NtUserCreateWindowEx( UINT *args )
     void *params = get_ptr( &args );
     DWORD flags = get_ulong( &args );
     HINSTANCE client_instance = get_ptr( &args );
-    const WCHAR *class = get_ptr( &args );
+    const WCHAR *class = get_str_or_atom( &args );
     BOOL ansi = get_ulong( &args );
 
     UNICODE_STRING class_name, version, window_name;

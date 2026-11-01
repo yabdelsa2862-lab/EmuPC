@@ -122,6 +122,7 @@ static inline void ascii_to_unicode( WCHAR *dst, const char *src, size_t len )
 extern TEB_FLS_DATA *fls_alloc_data(void);
 extern void heap_thread_detach(void);
 extern void heap_init_madeira_policy(void);
+extern void sync_init_madeira_lean(void);
 
 /* register context */
 
@@ -166,6 +167,7 @@ extern void heap_init_madeira_policy(void);
 extern NTSTATUS arm64ec_process_init_dispatchers( HMODULE module );
 extern NTSTATUS arm64ec_process_init( HMODULE module );
 extern NTSTATUS arm64ec_thread_init(void);
+extern void arm64ec_emulator_detach(void);
 extern IMAGE_ARM64EC_METADATA *arm64ec_get_module_metadata( HMODULE module );
 extern void *arm64ec_redirect_ptr( HMODULE module, void *ptr, const IMAGE_ARM64EC_METADATA *metadata );
 extern void arm64ec_update_hybrid_metadata( void *module, IMAGE_NT_HEADERS *nt,

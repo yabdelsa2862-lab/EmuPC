@@ -83,6 +83,11 @@ struct MadeiraHome: View {
                     .transition(.opacity)
             }
         }
+        .overlay(alignment: .topTrailing) {
+            SteamInviteBanner()
+                .padding(.top, 14)
+                .padding(.trailing, 16)
+        }
         .overlay {
             if booting && controllerHome && theme.startup {
                 StartupAnimation { booting = false; Self.startupPlayed = true }
@@ -91,6 +96,7 @@ struct MadeiraHome: View {
         }
         .onAppear {
             if !controllerHome || !theme.startup { booting = false; Self.startupPlayed = true }
+            SteamFriendsModel.shared.startMonitoring()
         }
         .animation(.easeInOut(duration: 0.25), value: controllerHome)
         .modifier(SessionDoctorAlert())
@@ -129,7 +135,7 @@ struct ControllerHome: View {
     @ObservedObject private var epic = EpicLibrary.shared
     @ObservedObject private var theme = ThemeSettings.shared
     @AppStorage(SessionDoctor.thermalKey) private var thermalGuard = true
-    /// MABD local: the Home / Store / Settings tabs across the top, switched with
+    /// EmuPC: the Home / Store / Settings tabs across the top, switched with
     /// the shoulder buttons. Off by default: the Xbox button's guide moves
     /// between them instead.
     @AppStorage("madeiraShowTabs") private var showTabs = false
@@ -153,6 +159,11 @@ struct ControllerHome: View {
     /// The game page (Y on a game): its entry and the focused row.
     @State private var page: LibraryEntry?
     @State private var pageFocus = 0
+    /// EmuPC: the game card that opens in place over the carousel (A), and its
+    /// focused button (0 Play, 1 Settings). The cover flies from the shelf into it.
+    @State private var card: LibraryEntry?
+    @State private var cardFocus = 0
+    @Namespace private var cardSpace
     /// The download page (Y on a game in Download) and its focused row.
     @State private var downloadPage: StoreItem?
     @State private var downloadPageFocus = 0
@@ -161,6 +172,7 @@ struct ControllerHome: View {
     @ObservedObject private var layoutEditor = LayoutEditor.shared
     /// The profile page (the avatar, or Profile in the guide).
     @State private var profilePage = false
+    @State private var steamFriendsPage = false
     @ObservedObject private var profile = ProfileSettings.shared
     @State private var guideFocus = 0
     @State private var pendingLibrary: UUID?
@@ -286,6 +298,9 @@ struct ControllerHome: View {
                 }
                 .padding(.leading, lead).padding(.trailing, trail)
                 .padding(.top, 10)
+                if let entry = card {
+                    gameCard(entry, size: geo.size).zIndex(3)
+                }
                 if let entry = page {
                     gamePage(entry).transition(.opacity)
                 }
@@ -331,6 +346,7 @@ struct ControllerHome: View {
         .onReceive(model.$entries) { _ in DispatchQueue.main.async { reload() } }
         .onReceive(steam.$games) { _ in DispatchQueue.main.async { reload() } }
         .onChange(of: model.current) { _, current in if current != nil { page = nil } }
+        .sheet(isPresented: $steamFriendsPage) { SteamFriendsView() }
     }
 
     // MARK: Chrome
@@ -341,7 +357,7 @@ struct ControllerHome: View {
                 || (section == .games && current == nil) || (section == .download && focusedStore == nil) {
                 ThemeBackdrop()
             } else if section == .games, let game = current {
-                LibraryArtwork(entry: game, backdrop: true).blur(radius: 2).id(game.id).transition(.opacity)
+                LibraryArtwork(entry: game, backdrop: true).blur(radius: 26).scaleEffect(1.12).id(game.id).transition(.opacity)
             } else if section == .download, let item = focusedStore {
                 switch item {
                 case .steam(let id):
@@ -355,9 +371,11 @@ struct ControllerHome: View {
                         .blur(radius: 4).id(item).transition(.opacity)
                 }
             }
-            LinearGradient(colors: [.black.opacity(0.3), .black.opacity(0.55), .black.opacity(0.92)],
+            // Dimmed and vignetted, so the art sets the mood and the covers carry the screen.
+            Color.black.opacity(section == .games ? 0.38 : 0.2)
+            LinearGradient(colors: [.black.opacity(0.35), .clear, .black.opacity(0.85)],
                            startPoint: .top, endPoint: .bottom)
-            LinearGradient(colors: [.black.opacity(0.75), .clear], startPoint: .leading, endPoint: .center)
+            RadialGradient(colors: [.clear, .black.opacity(0.7)], center: .center, startRadius: 160, endRadius: 900)
         }
         .animation(.easeInOut(duration: 0.35), value: current?.id)
         .animation(.easeInOut(duration: 0.35), value: downloadFocus)
@@ -373,56 +391,77 @@ struct ControllerHome: View {
         .foregroundStyle(.white)
     }
 
+    // Console-style chrome: everything sits in one kind of glass pill (HomeGlass).
     private func topBarContent(compact: Bool) -> some View {
-        HStack(spacing: compact ? 6 : 18) {
+        HStack(spacing: compact ? 6 : 12) {
             // The profile, as consoles show it.
-            ProfileAvatar(size: compact ? 30 : 38)
-                .onTapGesture { profilePage = true }
-            if !compact {
-                Text(ProfileSettings.shared.displayName).font(.headline).lineLimit(1).fixedSize()
-                    .onTapGesture { profilePage = true }
+            HStack(spacing: 10) {
+                ProfileAvatar(size: compact ? 28 : 32)
+                if !compact {
+                    Text(ProfileSettings.shared.displayName).font(.subheadline.weight(.semibold)).lineLimit(1).fixedSize()
+                }
             }
-            if showTabs && !compact {
-                Image(systemName: "l1.rectangle.roundedbottom").font(.title3).foregroundStyle(.white.opacity(0.6))
-            }
-            ForEach(showTabs ? Section.allCases : [], id: \.self) { item in
-                Text(item.title)
-                    .font((compact ? Font.subheadline : .title3).weight(item == section ? .heavy : .semibold))
-                    .lineLimit(1).fixedSize()
-                    .foregroundStyle(item == section ? theme.accent.onAccent : .white.opacity(0.7))
-                    .padding(.horizontal, compact ? 10 : 16).padding(.vertical, compact ? 6 : 7)
-                    .background(item == section ? theme.accent.color : Color.clear, in: Capsule())
-                    .onTapGesture { section = item }
-            }
-            if showTabs && !compact {
-                Image(systemName: "r1.rectangle.roundedbottom").font(.title3).foregroundStyle(.white.opacity(0.6))
-            }
-            if !showTabs && section != .games {
+            .padding(.leading, 4).padding(.trailing, compact ? 4 : 14).padding(.vertical, 4)
+            .homeGlass()
+            .onTapGesture { profilePage = true }
+            if showTabs {
+                HStack(spacing: 4) {
+                    if !compact { BumperKey(text: "LB") }
+                    ForEach(Section.allCases, id: \.self) { item in
+                        Text(item.title.uppercased())
+                            .font((compact ? Font.caption : .subheadline).weight(.heavy)).kerning(1.2)
+                            .lineLimit(1).fixedSize()
+                            .foregroundStyle(item == section ? .white : .white.opacity(0.5))
+                            .padding(.horizontal, compact ? 10 : 16).padding(.vertical, compact ? 6 : 8)
+                            .background(item == section ? Color.white.opacity(0.18) : Color.clear, in: Capsule())
+                            .onTapGesture { section = item }
+                    }
+                    if !compact { BumperKey(text: "RB") }
+                }
+                .padding(4)
+                .homeGlass()
+                .animation(.spring(response: 0.3, dampingFraction: 0.85), value: section)
+            } else if section != .games {
                 Text(section.title).font(.title3.weight(.heavy)).lineLimit(1).fixedSize().padding(.leading, 6)
             }
             Spacer(minLength: compact ? 6 : 12)
-            if !pads.players.isEmpty {
-                Label("\(pads.players.count + 1)", systemImage: "person.2.fill").font(.headline).lineLimit(1).fixedSize()
+            HStack(spacing: compact ? 8 : 12) {
+                if !pads.players.isEmpty {
+                    Label("\(pads.players.count + 1)", systemImage: "person.2.fill").font(.subheadline.weight(.semibold)).lineLimit(1).fixedSize()
+                }
+                Image(systemName: "gamecontroller.fill").font(.subheadline).foregroundStyle(.white.opacity(0.8))
+                BatteryIndicator(compact: true)
+                Rectangle().fill(.white.opacity(0.25)).frame(width: 1, height: 16)
+                Text(now.formatted(date: .omitted, time: .shortened))
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
+                    .lineLimit(1).fixedSize()
             }
-            BatteryIndicator(compact: compact)
-            Text(now.formatted(date: .omitted, time: .shortened))
-                .font((compact ? Font.subheadline : .headline).monospacedDigit())
-                .lineLimit(1).fixedSize()
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            .homeGlass()
         }
     }
 
     private var hints: some View {
-        ViewThatFits(in: .horizontal) {
-            hintsContent(compact: false)
-            hintsContent(compact: true)
+        HStack {
+            Spacer(minLength: 0)
+            ViewThatFits(in: .horizontal) {
+                hintsContent(compact: false)
+                hintsContent(compact: true)
+            }
+            .padding(.horizontal, 18).padding(.vertical, 9)
+            .homeGlass()
+            Spacer(minLength: 0)
         }
     }
 
     private func hintsContent(compact: Bool) -> some View {
-        HStack(spacing: compact ? 16 : 26) {
+        HStack(spacing: compact ? 14 : 22) {
             switch section {
+            case .games where card != nil:
+                ButtonHint(glyph: "a.circle.fill", label: cardFocus == 0 ? "Play" : "Settings")
+                ButtonHint(glyph: "b.circle.fill", label: "Back")
             case .games where current != nil:
-                ButtonHint(glyph: "a.circle.fill", label: "Play")
+                ButtonHint(glyph: "a.circle.fill", label: "Select")
                 ButtonHint(glyph: "y.circle.fill", label: compact ? "Options" : "Game options")
             case .download where focusedStore != nil:
                 ButtonHint(glyph: "a.circle.fill", label: "Details")
@@ -441,7 +480,6 @@ struct ControllerHome: View {
                 EmptyView()
             }
             if page != nil || downloadPage != nil { ButtonHint(glyph: "b.circle.fill", label: "Back") }
-            Spacer(minLength: 8)
             ButtonHint(glyph: "line.3.horizontal.circle.fill", label: compact ? "Touch" : "Touch library")
                 .onTapGesture { openLibrary() }
         }
@@ -452,19 +490,7 @@ struct ControllerHome: View {
     @ViewBuilder private func gamesSection(height: CGFloat) -> some View {
         Spacer(minLength: 8)
         if let game = current {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(game.title).font(.system(size: 44, weight: .heavy)).lineLimit(2).minimumScaleFactor(0.6)
-                    .foregroundStyle(.white).shadow(radius: 12)
-                HStack(spacing: 10) {
-                    Label(game.steamAppID != nil ? "Steam" : "PC game", systemImage: game.steamAppID != nil ? "cloud" : "desktopcomputer")
-                    if let played = game.lastPlayed { Text("Played \(played.formatted(.relative(presentation: .named)))") }
-                    if let bytes = game.folderBytes, bytes > 0 { Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) }
-                }
-                .font(.headline).foregroundStyle(.white.opacity(0.75))
-            }
-            .frame(maxWidth: 640, alignment: .leading)
-            Spacer(minLength: 12)
-            shelf(ids: games.map(\.id), focusedID: current?.id, height: min(height * 0.36, 250),
+            shelf(ids: games.map(\.id), focusedID: current?.id, height: min(height * 0.46, 300),
                   wideID: games.first?.lastPlayed != nil ? games.first.map { AnyHashable($0.id) } : nil) { id in
                 if let game = games.first(where: { AnyHashable($0.id) == id }) {
                     if game.id == games.first?.id, game.lastPlayed != nil {
@@ -481,12 +507,33 @@ struct ControllerHome: View {
                             }
                     } else {
                         LibraryArtwork(entry: game)
+                            .matchedGeometryEffect(id: game.id, in: cardSpace, isSource: card?.id != game.id)
+                            .opacity(card?.id == game.id ? 0 : 1)
                     }
                 }
             } tapped: { id in
                 guard let uuid = id.base as? UUID else { return }
-                if uuid == current?.id, let game = current { play(game) } else { focused = uuid }
+                if uuid == current?.id, let game = current { openCard(game) } else { focused = uuid }
             }
+            // The focused game's name and facts, centred under it.
+            VStack(spacing: 8) {
+                Text(game.title).font(.title2.weight(.bold)).lineLimit(1).minimumScaleFactor(0.7)
+                    .foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 8)
+                HStack(spacing: 10) {
+                    Text(game.steamAppID != nil ? "STEAM" : game.gogID != nil ? "GOG" : game.epicAppName != nil ? "EPIC" : "PC")
+                        .font(.caption2.weight(.heavy)).kerning(1)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(theme.accent.color.opacity(0.35), in: Capsule())
+                        .overlay(Capsule().stroke(theme.accent.color.opacity(0.7), lineWidth: 1))
+                    if let played = game.lastPlayed { Text("Played \(played.formatted(.relative(presentation: .named)))") }
+                    if let bytes = game.folderBytes, bytes > 0 { Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) }
+                }
+                .font(.subheadline).foregroundStyle(.white.opacity(0.75))
+            }
+            .frame(maxWidth: .infinity)
+            .id(game.id).transition(.opacity)
+            .animation(.easeInOut(duration: 0.2), value: game.id)
+            Spacer(minLength: 8)
         } else {
             message("No games installed yet", detail: "Press RB to go to Download and get one.", symbol: "gamecontroller")
             Spacer()
@@ -507,16 +554,17 @@ struct ControllerHome: View {
                         art(id)
                             .frame(width: id == wideID ? height * 16 / 9 : width, height: height)
                             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(theme.accent.color, lineWidth: on ? 4 : 0))
-                            .shadow(color: .black.opacity(on ? 0.6 : 0.3), radius: on ? 18 : 6, y: 8)
-                            .scaleEffect(on ? 1.08 : 0.94)
-                            .opacity(on ? 1 : 0.75)
+                            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(.white.opacity(on ? 0.95 : 0.08), lineWidth: on ? 3 : 1))
+                            .shadow(color: on ? .white.opacity(0.35) : .clear, radius: 16)
+                            .shadow(color: .black.opacity(on ? 0.6 : 0.35), radius: on ? 22 : 8, y: 10)
+                            .scaleEffect(on ? 1.1 : 0.86)
+                            .opacity(on ? 1 : 0.6)
                             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: on)
                             .id(id)
                             .onTapGesture { tapped(id) }
                     }
                 }
-                .padding(.horizontal, side).padding(.vertical, height * 0.08)
+                .padding(.horizontal, side).padding(.vertical, height * 0.1)
             }
             .padding(.horizontal, -side)
             .frame(height: height * 1.2)
@@ -526,6 +574,99 @@ struct ControllerHome: View {
                 withAnimation(.easeInOut(duration: 0.25)) { reader.scrollTo(id, anchor: .center) }
             }
         }
+    }
+
+    // MARK: Game card
+
+    private static let cardSpring = Animation.spring(response: 0.42, dampingFraction: 0.84)
+
+    private func openCard(_ game: LibraryEntry) {
+        if let id = game.steamAppID ?? game.steamID { StoreDetailsModel.shared.requestSteam(id) }
+        UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+        cardFocus = 0
+        withAnimation(Self.cardSpring) { card = game }
+    }
+
+    private func closeCard() {
+        withAnimation(Self.cardSpring) { card = nil }
+    }
+
+    private func cardAction(_ entry: LibraryEntry) {
+        if cardFocus == 0 { closeCard(); play(entry) }
+        else { closeCard(); pageFocus = 0; page = entry }
+    }
+
+    /// The focused game, grown into a glass card in place: cover, name, a short
+    /// description (Steam), developer, last played, size, then Play and Settings.
+    private func gameCard(_ entry: LibraryEntry, size: CGSize) -> some View {
+        let coverH = min(size.height * 0.5, 320)
+        let info = (entry.steamAppID ?? entry.steamID).flatMap { StoreDetailsModel.shared.info["steam:\($0)"] }
+        let store = entry.steamAppID != nil ? "STEAM" : entry.gogID != nil ? "GOG" : entry.epicAppName != nil ? "EPIC" : "PC"
+        return ZStack {
+            Color.black.opacity(0.45).ignoresSafeArea()
+                .onTapGesture { closeCard() }
+                .transition(.opacity)
+            HStack(alignment: .center, spacing: 24) {
+                LibraryArtwork(entry: entry)
+                    .matchedGeometryEffect(id: entry.id, in: cardSpace, isSource: card?.id == entry.id)
+                    .frame(width: coverH * 2 / 3, height: coverH)
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.2), lineWidth: 1))
+                    .shadow(color: .black.opacity(0.5), radius: 20, y: 10)
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(entry.title).font(.title.weight(.bold)).lineLimit(2).minimumScaleFactor(0.7)
+                    Text(store).font(.caption2.weight(.heavy)).kerning(1)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(theme.accent.color.opacity(0.35), in: Capsule())
+                        .overlay(Capsule().stroke(theme.accent.color.opacity(0.7), lineWidth: 1))
+                    if let text = info?.description, !text.isEmpty {
+                        Text(text).font(.subheadline).foregroundStyle(.white.opacity(0.75)).lineLimit(3)
+                    }
+                    HStack(alignment: .top, spacing: 22) {
+                        if let dev = info?.developer, !dev.isEmpty { cardFact("Developer", dev) }
+                        cardFact("Last played", entry.lastPlayed.map { $0.formatted(.relative(presentation: .named)) } ?? "Never")
+                        if let bytes = entry.folderBytes, bytes > 0 {
+                            cardFact("Installed", ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
+                        }
+                    }
+                    HStack(spacing: 12) {
+                        cardButton("Play", symbol: "play.fill", focused: cardFocus == 0) { cardFocus = 0; cardAction(entry) }
+                        cardButton("Settings", symbol: "gearshape.fill", focused: cardFocus == 1) { cardFocus = 1; cardAction(entry) }
+                    }
+                    .padding(.top, 4)
+                }
+                .frame(maxWidth: 380, alignment: .leading)
+                .transition(.opacity.combined(with: .move(edge: .trailing)))
+            }
+            .foregroundStyle(.white)
+            .padding(24)
+            .background {
+                RoundedRectangle(cornerRadius: 30, style: .continuous).fill(.clear)
+                    .homeCardGlass()
+            }
+            .padding(.horizontal, side)
+            .transition(.scale(scale: 0.92).combined(with: .opacity))
+        }
+    }
+
+    private func cardFact(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.caption).foregroundStyle(.white.opacity(0.55))
+            Text(value).font(.subheadline.weight(.semibold)).lineLimit(1)
+        }
+    }
+
+    private func cardButton(_ title: String, symbol: String, focused: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: symbol).font(.headline)
+                .frame(minWidth: 120).padding(.vertical, 12).padding(.horizontal, 18)
+                .background(focused ? Color.white.opacity(0.22) : Color.white.opacity(0.08), in: Capsule())
+                .overlay(Capsule().stroke(.white.opacity(focused ? 0.95 : 0.15), lineWidth: focused ? 2 : 1))
+                .shadow(color: focused ? .white.opacity(0.25) : .clear, radius: 10)
+                .scaleEffect(focused ? 1.04 : 1)
+        }
+        .buttonStyle(.plain)
+        .animation(.snappy(duration: 0.18), value: focused)
     }
 
     // MARK: Game page
@@ -574,7 +715,7 @@ struct ControllerHome: View {
         ]
     }
 
-    /// MABD local: games EmuPC can run through Direct3D or OpenGL (GOGLaunchOverride).
+    /// EmuPC: games EmuPC can run through Direct3D or OpenGL (GOGLaunchOverride).
     private func rendererRows(_ entry: LibraryEntry, update: @escaping ((inout LibraryEntry) -> Void) -> Void) -> [Row] {
         guard GOGLaunchOverride.hasRendererChoice(entry) else { return [] }
         return [Row(title: "Renderer", value: GOGLaunchOverride.wantsOpenGL(entry) ? "OpenGL" : "Direct3D 9") { _ in
@@ -587,7 +728,7 @@ struct ControllerHome: View {
         }]
     }
 
-    /// MABD local: the game's controller layout: the global one, or its own
+    /// EmuPC: the game's controller layout: the global one, or its own
     /// (starting from the global one), then one row per button while it is its own.
     private func buttonRows(_ entry: LibraryEntry, update: @escaping ((inout LibraryEntry) -> Void) -> Void) -> [Row] {
         [Row(title: "Controller layout", value: entry.buttonLayout == nil ? "Global" : "This game") { _ in
@@ -624,12 +765,16 @@ struct ControllerHome: View {
                     Text(value).font(.headline)
                     if focused { Image(systemName: "chevron.right").font(.caption.weight(.bold)) }
                 }
-                .foregroundStyle(focused ? theme.accent.onAccent.opacity(0.8) : .white.opacity(0.7))
+                .foregroundStyle(.white.opacity(focused ? 0.95 : 0.7))
             }
         }
-        .foregroundStyle(focused ? theme.accent.onAccent : .white)
-        .padding(.horizontal, 18).padding(.vertical, 9)
-        .background(focused ? theme.accent.color : Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 18).padding(.vertical, 10)
+        .background(focused ? Color.white.opacity(prominent ? 0.24 : 0.16) : Color.white.opacity(0.06),
+                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(.white.opacity(focused ? 0.9 : 0), lineWidth: 2))
+        .shadow(color: focused ? .white.opacity(0.18) : .clear, radius: 10)
+        .animation(.easeOut(duration: 0.15), value: focused)
         .contentShape(Rectangle())
     }
 
@@ -1207,7 +1352,7 @@ struct ControllerHome: View {
             Setting(title: "Startup animation", value: theme.startup ? "On" : "Off",
                     note: "Plays when EmuPC opens with a controller.") { _ in theme.startup.toggle() },
         ])
-        // MABD local: the global controller layout (GameTuning.swift ButtonLayout).
+        // EmuPC: the global controller layout (GameTuning.swift ButtonLayout).
         let layout = ButtonLayout.global
         let controls = SettingsCategory(title: "Controls", symbol: "gamecontroller.fill", items: [
             Setting(title: "Edit button layout", value: layout.isEmpty ? "Default" : "\(layout.count) changed",
@@ -1310,6 +1455,7 @@ struct ControllerHome: View {
         [GuideItem(title: "Profile", symbol: "person.crop.circle.fill") { profilePage = true },
          GuideItem(title: "Home", symbol: "house.fill") { section = .games; page = nil; downloadPage = nil },
          GuideItem(title: "Store", symbol: "bag.fill") { section = .download; page = nil; downloadPage = nil },
+         GuideItem(title: "Steam Friends & invites", symbol: "person.2.fill") { steamFriendsPage = true },
          GuideItem(title: "Settings", symbol: "gearshape.fill") { section = .settings; page = nil; downloadPage = nil },
          GuideItem(title: "Music", symbol: "music.note", music: true) { MusicNow.shared.toggle() },
          GuideItem(title: "Touch library", symbol: "hand.tap.fill") { openLibrary() },
@@ -1349,7 +1495,8 @@ struct ControllerHome: View {
                                     .foregroundStyle(i == guideFocus ? theme.accent.onAccent : .white)
                                     .padding(.horizontal, 14).padding(.vertical, 8)
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(i == guideFocus ? theme.accent.color : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                    .background(i == guideFocus ? Color.white.opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(.white.opacity(i == guideFocus ? 0.85 : 0), lineWidth: 1.5))
                                     .contentShape(Rectangle())
                                     .onTapGesture { guideFocus = i; if !item.music { guide = false }; item.action() }
                                     .id(i)
@@ -1457,6 +1604,16 @@ struct ControllerHome: View {
             }
             return
         }
+        if let entry = card {
+            switch command {
+            case "left", "right": withAnimation(.snappy(duration: 0.2)) { cardFocus = cardFocus == 0 ? 1 : 0 }
+            case "accept": cardAction(entry)
+            case "add": closeCard(); pageFocus = 0; page = entry
+            case "back": closeCard()
+            default: break
+            }
+            return
+        }
         if let entry = page {
             let rows = pageRows(entry)
             switch command {
@@ -1486,8 +1643,10 @@ struct ControllerHome: View {
             case "left", "right":
                 guard !games.isEmpty else { return }
                 let i = games.firstIndex { $0.id == current?.id } ?? 0
-                focused = games[command == "left" ? max(i - 1, 0) : min(i + 1, games.count - 1)].id
-            case "accept": if let game = current { play(game) }
+                let next = games[command == "left" ? max(i - 1, 0) : min(i + 1, games.count - 1)].id
+                if next != current?.id { UISelectionFeedbackGenerator().selectionChanged() }
+                focused = next
+            case "accept": if let game = current { openCard(game) }
             case "add": if let game = current { pageFocus = 0; page = game }
             default: break
             }
@@ -1581,6 +1740,7 @@ struct DetailPanel<Art: View, Backdrop: View, Content: View>: View {
                             art
                                 .frame(width: geo.size.height * 0.42, height: geo.size.height * 0.63)
                                 .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.18), lineWidth: 1))
                                 .shadow(color: .black.opacity(0.6), radius: 24, y: 10)
                             // Centred when it fits, scrolling when it is taller than the screen.
                             ScrollViewReader { reader in
@@ -1596,11 +1756,13 @@ struct DetailPanel<Art: View, Backdrop: View, Content: View>: View {
                     }
                 }
                 .frame(maxHeight: .infinity)
-                HStack(spacing: 26) {
+                HStack(spacing: 22) {
                     ForEach(hints.indices, id: \.self) { ButtonHint(glyph: hints[$0].0, label: hints[$0].1) }
-                    Spacer()
                 }
-                .padding(.vertical, 14)
+                .padding(.horizontal, 18).padding(.vertical, 9)
+                .homeGlass()
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
             }
             // Clear of the Dynamic Island on its side only, like the home.
             .padding(.leading, IslandMargins.current().leading)
@@ -1624,7 +1786,7 @@ struct DetailPanel<Art: View, Backdrop: View, Content: View>: View {
 }
 
 /// One controller button and what it does, as consoles show them.
-/// MABD local: the device's battery, and the controller's when it reports one,
+/// EmuPC: the device's battery, and the controller's when it reports one,
 /// console style (top bar and guides). Red at 20% and below; a bolt while charging.
 struct BatteryIndicator: View {
     var compact = false
@@ -1684,10 +1846,22 @@ struct BatteryIndicator: View {
 struct ButtonHint: View {
     let glyph: String
     let label: String
+    /// Xbox face-button colours, as the hint bar of a console shows them.
+    static func tint(_ glyph: String) -> Color {
+        switch glyph.prefix(2) {
+        case "a.": return Color(red: 0.36, green: 0.73, blue: 0.27)
+        case "b.": return Color(red: 0.86, green: 0.27, blue: 0.24)
+        case "x.": return Color(red: 0.2, green: 0.5, blue: 0.95)
+        case "y.": return Color(red: 0.95, green: 0.75, blue: 0.15)
+        default: return .white.opacity(0.35)
+        }
+    }
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: glyph).font(.title2)
-            Text(label).font(.headline).lineLimit(1).fixedSize()
+        HStack(spacing: 7) {
+            Image(systemName: glyph).font(.title3)
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.white, Self.tint(glyph))
+            Text(label).font(.subheadline.weight(.semibold)).lineLimit(1).fixedSize()
         }
         .foregroundStyle(.white)
         .accessibilityElement(children: .combine)
@@ -1710,7 +1884,7 @@ struct InterfaceSettingsSection: View {
     }
 }
 
-/// MABD local: horizontal margins that keep clear of the Dynamic Island on its
+/// EmuPC: horizontal margins that keep clear of the Dynamic Island on its
 /// side only. Read from the window: a view that ignores the safe area reports
 /// no insets of its own. iOS reports the same inset on both sides in landscape;
 /// the island is at the top of the phone, on the left with the interface in
@@ -1725,5 +1899,37 @@ enum IslandMargins {
         case .landscapeLeft?: return (30, max(insets.right, 16) + 4)
         default: return (max(insets.left, 16), max(insets.right, 16))
         }
+    }
+}
+
+// MARK: - Console chrome
+
+/// EmuPC: the controller home's one glass shape (top bar, hint bar): Liquid
+/// Glass on iOS 26, a thin material before it, both with a faint rim.
+private struct HomeGlass<S: Shape>: ViewModifier {
+    let shape: S
+    func body(content: Content) -> some View {
+        if #available(iOS 26, *) {
+            content.glassEffect(.regular, in: shape)
+        } else {
+            content.background(.ultraThinMaterial, in: shape)
+                .overlay(shape.stroke(.white.opacity(0.12), lineWidth: 1))
+        }
+    }
+}
+
+extension View {
+    func homeGlass() -> some View { modifier(HomeGlass(shape: Capsule())) }
+    /// The game card's larger rounded glass.
+    func homeCardGlass() -> some View { modifier(HomeGlass(shape: RoundedRectangle(cornerRadius: 30, style: .continuous))) }
+}
+
+/// A bumper's key label in the tab pill.
+private struct BumperKey: View {
+    let text: String
+    var body: some View {
+        Text(text).font(.caption2.weight(.heavy)).foregroundStyle(.white.opacity(0.75))
+            .padding(.horizontal, 6).padding(.vertical, 3)
+            .overlay(RoundedRectangle(cornerRadius: 5).stroke(.white.opacity(0.4), lineWidth: 1))
     }
 }

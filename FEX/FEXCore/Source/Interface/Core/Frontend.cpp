@@ -151,6 +151,9 @@ std::pair<uint64_t, bool> Decoder::ReadData(uint8_t Size) {
     ReadByte();
   }
 #else
+  if (InstructionSize + Size <= MAX_INST_SIZE) {
+    std::memcpy(&Instruction[InstructionSize], &Res, Size);
+  }
   SkipBytes(Size);
 #endif
 
@@ -673,6 +676,7 @@ Decoder::DecodedBlockStatus Decoder::NormalOp(const FEXCore::X86Tables::X86InstI
   LOGMAN_THROW_A_FMT(Bytes == 0, "Inst at 0x{:x}: 0x{:04x} '{}' Had an instruction of size {} with {} remaining", DecodeInst->PC,
                      DecodeInst->OP, DecodeInst->TableInfo->Name ?: "UND", InstructionSize, Bytes);
   DecodeInst->InstSize = InstructionSize;
+  std::memcpy(DecodeInst->InstBytes, Instruction.data(), InstructionSize);
   return DecodedBlockStatus::SUCCESS;
 }
 
@@ -1202,6 +1206,34 @@ void Decoder::BranchTargetInMultiblockRange() {
   }
 }
 
+bool Decoder::IsBranchToSelf() const {
+  // A relative branch to itself spins until another thread rewrites it. HotSpot parks the
+  // callers of a compiled method it is retiring on `jmp $` (EB FE) while it writes the final
+  // jump. Multiblock compiles the spin as a loop inside the block, and nothing in that loop
+  // rereads the guest code, so the spinning thread never sees the new jump. Recompiling it
+  // through the dispatcher instead re-protects the page and starves the writer, whose store
+  // has to be retried. Full SMC detection checks the instruction's bytes on every iteration
+  // without touching protections, and leaves the loop once the write lands.
+  if (!ExecutableRangeWritable) {
+    // Only code that can be written can be waited on
+    return false;
+  }
+
+  switch (DecodeInst->OP) {
+  case 0x70 ... 0x7F:
+  case 0x80 ... 0x8F:
+  case 0xE9:
+  case 0xEB: break;
+  default: return false;
+  }
+
+  uint64_t TargetRIP = DecodeInst->PC + DecodeInst->InstSize + DecodeInst->Src[0].Literal();
+  if (GetGPROpSize() == IR::OpSize::i32Bit) {
+    TargetRIP &= 0xFFFFFFFFU;
+  }
+  return TargetRIP == DecodeInst->PC;
+}
+
 bool Decoder::IsBranchMonoTailcall(uint64_t NumInstructions) const {
   // While the mono call backpatching block can easily be detected due it being the only one to contain SMC-faulting
   // atomics, that can't be said for the tailcall jump backpatcher which has changed several times across versions and
@@ -1313,12 +1345,16 @@ void Decoder::AddBranchTarget(uint64_t Target) {
 
       if (SplitAddr == Target) {
         // Split at the boundary
+        // The tail keeps the block's full SMC detection: a branch to itself (`jmp $`) is the
+        // block's last instruction and its own target, so it always lands in the tail, and the
+        // spin would otherwise never reread the code it waits on.
         DecodedBlocks SplitBlock {
           .Entry = SplitAddr,
           .Size = BlockIt->Size - SplitOffset,
           .NumInstructions = BlockIt->NumInstructions - SplitIdx,
           .DecodedInstructions = BlockIt->DecodedInstructions + SplitIdx,
           .BlockStatus = BlockIt->BlockStatus,
+          .ForceFullSMCDetection = BlockIt->ForceFullSMCDetection,
         };
 
         BlockIt->Size = SplitOffset;
@@ -1624,7 +1660,8 @@ void Decoder::DecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState* Thre
           // If the branch target is within our multiblock range then we can keep going on
           // We don't want to short circuit this since we want to calculate our ranges still
           // NOTE: This will invalidate BlockIt, this is fine as we immediately break from the loop and EraseBlock cannot be true
-          BlockIt->ForceFullSMCDetection = CTX->AreMonoHacksActive() && IsBranchMonoTailcall(BlockIt->NumInstructions);
+          BlockIt->ForceFullSMCDetection =
+            (CTX->AreMonoHacksActive() && IsBranchMonoTailcall(BlockIt->NumInstructions)) || IsBranchToSelf();
           BranchTargetInMultiblockRange();
         }
 

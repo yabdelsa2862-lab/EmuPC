@@ -333,10 +333,24 @@ static const char *ec_stack_window_step( ULONG_PTR frame, ULONG_PTR pc )
  * route callers to the raw syscall and skip pNotifyMemoryAlloc, and stale FEX
  * memory notifications are what caused the ml36 NOEXEC wall. Proceeding keeps
  * behaviour identical to every thread that does have a CPU area. */
+/* Set when the emulator module gets DLL_PROCESS_DETACH at process exit: its
+ * DllMain runs its C++ static destructors, so FEX's context is gone, and the
+ * DLLs detached after it (ucrtbase, ntdll's heap) still free memory. A free
+ * notified to FEX then called through the destroyed context's vtable (a
+ * null read at +0xf0 in InvalidateAlignedInterval) when Rocket League quit.
+ * From then on the hooks below make the plain syscalls. */
+static BOOL emulator_detached;
+
+void arm64ec_emulator_detach(void)
+{
+    emulator_detached = TRUE;
+}
+
 static inline BOOL enter_syscall_callback(void)
 {
     CHPE_V2_CPU_AREA_INFO *area = get_arm64ec_cpu_area();
 
+    if (emulator_detached) return FALSE;
     if (!area) return TRUE;
     if (area->InSyscallCallback) return FALSE;
     area->InSyscallCallback = 1;
@@ -4940,7 +4954,8 @@ static void __attribute__((naked)) arm64x_check_call(void)
          ".byte 0x0f, 0x05\n\t"             /* syscall */
          ".byte 0xc3\n\t"                   /* ret */
          ".byte 0xcd, 0x2e\n\t"             /* 1: int $0x2e */
-         ".byte 0xc3"                       /* ret */
+         ".byte 0xc3\n\t"                   /* ret */
+         ".byte 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00"
          :: "i" (__nb_syscalls) );
 }
 

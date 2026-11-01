@@ -892,9 +892,37 @@ struct ios_srw_ring_ent { const void *lock; ULONG tid_mode; };
 static struct ios_srw_ring_ent ios_srw_ring[512];
 static LONG ios_srw_ring_idx;
 static const char * const ios_srw_mode_name[4] = { "acqX", "relX", "acqS", "relS" };
+
+/* env.MADEIRA_SYNC_LEAN = 1 (off by default) drops the diagnostic bookkeeping on
+ * the SRW lock and WaitOnAddress hot paths: the SRW history ring above (one
+ * interlocked increment of a single process-wide counter per acquire/release)
+ * and the [xp-api] WaitOnAddress/wake1/wakeAll counters. A game releasing SRW
+ * locks ~190k times a second from 8 threads turns that into ~0.5M increments a
+ * second on a few shared cache lines. Costs: [srw] park dumps lose their holder
+ * history and [xp-api] shows WaitOnAddress/wake1/wakeAll as 0. Locking itself is
+ * unchanged. Read once by the loader, before application threads run. */
+static BOOL ios_sync_lean;
+
+void sync_init_madeira_lean(void)
+{
+    UNICODE_STRING name, value;
+    WCHAR buffer[2];
+
+    RtlInitUnicodeString( &name, L"MADEIRA_SYNC_LEAN" );
+    value.Buffer = buffer;
+    value.MaximumLength = sizeof(buffer);
+    if (RtlQueryEnvironmentVariable_U( NULL, &name, &value ) ||
+        value.Length != sizeof(WCHAR) || buffer[0] != '1') return;
+    ios_sync_lean = TRUE;
+    ERR( "[sync-lean] MADEIRA_SYNC_LEAN=1: SRW history ring and WaitOnAddress counters off\n" );
+}
+
 static void ios_srw_note( const void *lock, unsigned int mode )
 {
-    ULONG i = (ULONG)InterlockedIncrement( &ios_srw_ring_idx );
+    ULONG i;
+
+    if (ios_sync_lean) return;
+    i = (ULONG)InterlockedIncrement( &ios_srw_ring_idx );
     ios_srw_ring[i & 511].lock = lock;
     ios_srw_ring[i & 511].tid_mode =
         (HandleToULong( NtCurrentTeb()->ClientId.UniqueThread ) << 2) | mode;
@@ -1358,7 +1386,7 @@ NTSTATUS WINAPI RtlWaitOnAddress( const void *addr, const void *cmp, SIZE_T size
     NTSTATUS ret;
 
     TRACE("addr %p cmp %p size %#Ix timeout %s\n", addr, cmp, size, debugstr_timeout( timeout ));
-    InterlockedIncrement64( &ios_xp_nt.woa_waits );   /* ml1131 */
+    if (!ios_sync_lean) InterlockedIncrement64( &ios_xp_nt.woa_waits );   /* ml1131 */
 
     if (size != 1 && size != 2 && size != 4 && size != 8)
         return STATUS_INVALID_PARAMETER;
@@ -1435,7 +1463,7 @@ void WINAPI RtlWakeAddressAll( const void *addr )
     unsigned int count = 0;
     HANDLE tids[256];
 
-    InterlockedIncrement64( &ios_xp_nt.woa_wake_all );   /* ml1131 */
+    if (!ios_sync_lean) InterlockedIncrement64( &ios_xp_nt.woa_wake_all );   /* ml1131 */
 
     TRACE("%p\n", addr);
 
@@ -1478,7 +1506,7 @@ void WINAPI RtlWakeAddressSingle( const void *addr )
     struct futex_entry *entry;
     DWORD tid = 0;
 
-    InterlockedIncrement64( &ios_xp_nt.woa_wake_single );   /* ml1131 */
+    if (!ios_sync_lean) InterlockedIncrement64( &ios_xp_nt.woa_wake_single );   /* ml1131 */
 
     TRACE("%p\n", addr);
 

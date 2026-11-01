@@ -471,3 +471,13 @@ seals and source/login/Valve-DLL exclusions pass. Only Madeira, Dock EXE,
 Info.plist and CodeResources changed from ml1860; no entries removed.
 Dock imports resolve against bundled Wine exports. Existing unrelated compiler
 warnings remain. No commit/push performed. Device verification is outstanding.
+
+## Combined launch arguments and ownership timing (2026-10-27)
+
+The host passes bounded UTF-8 arguments to the original LaunchApp entry on the
+first request and retries. Invalid arguments return 54; 50 keeps its offline
+logon meaning. Escaped quotes use Windows backslash parity. Ownership requests
+start after 500 ms by default; MADEIRA_DOCK_LICENCE_WAIT_MS accepts 0..30000.
+The existing strict integer parser rejects signs, spaces and overflow. Positive
+ownership from Valve remains required. Native sanitizer checks pass; this
+combined change has not been tested with a live client or a device.

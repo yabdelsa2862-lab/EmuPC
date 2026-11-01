@@ -257,7 +257,7 @@ struct d2d_dc_render_target
     LONG refcount;
 
     IDXGISurface1 *dxgi_surface;
-    /* MABD local: the target texture when it has no IDXGISurface1 (DXMT's
+    /* EmuPC: the target texture when it has no IDXGISurface1 (DXMT's
      * textures do not), presented by reading it back instead of GetDC. */
     ID3D11Resource *readback_resource;
     ID3D10Device1 *d3d_device;

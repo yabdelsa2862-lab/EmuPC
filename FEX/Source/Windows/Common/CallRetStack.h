@@ -133,9 +133,13 @@ bool InitializeThread(FEXCore::Core::InternalThreadState* Thread) {
      * meant base + one guard page = 0x1000, dereferenced at once, and the
      * fault recursed until the stack was gone -- with the thread still owning
      * the loader lock. */
+#ifdef FEX_IOS_HOST
     LogMan::Msg::EFmt("[callret] RESERVE FAILED: {:#x} bytes in band [{:#x},{:#x}] -- thread cannot start",
                       (unsigned long long)CallRetStackAllocSize,
                       (unsigned long long)ios_fex_band_base, (unsigned long long)ios_fex_band_end);
+#else
+    LogMan::Msg::EFmt("[callret] RESERVE FAILED: {:#x} bytes -- thread cannot start", (unsigned long long)CallRetStackAllocSize);
+#endif
     return false;
   }
 

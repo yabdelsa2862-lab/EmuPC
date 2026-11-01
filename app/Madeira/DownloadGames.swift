@@ -345,7 +345,7 @@ struct DownloadGamesView: View {
     @FocusState private var linkFocused: Bool
 
     private var steamItems: [SteamGamesRules.Item] {
-        // MABD local: a game Steam has a record for but has not finished installing
+        // EmuPC: a game Steam has a record for but has not finished installing
         // (an interrupted or paused download) belongs here too, as on the controller
         // home's Store: only fully installed games leave the download page.
         let items = SteamGamesRules.items(installed: games.games.filter(\.installed), owned: steam.owned, search: search)
@@ -353,7 +353,7 @@ struct DownloadGamesView: View {
         return groups.downloading + groups.notInstalled
     }
 
-    /// MABD local: one store at a time, picked at the top, instead of every
+    /// EmuPC: one store at a time, picked at the top, instead of every
     /// store stacked down the page.
     private enum Source: String, CaseIterable { case steam, gog, epic, own
         var label: String { ["Steam", "GOG", "Epic", "Your own"][Self.allCases.firstIndex(of: self)!] }
@@ -374,7 +374,7 @@ struct DownloadGamesView: View {
             switch source {
             case .steam: steamSection
             case .gog: GOGDownloadSection(search: search)
-            case .epic: EpicDownloadSection(search: search)
+            case .epic: EpicGamesSection(search: search, open: { _ in })   // upstream's Epic list: install from each game's sheet
             case .own: linkSection
             }
             installToSection
@@ -637,7 +637,7 @@ final class GameCompatibility: ObservableObject {
     static let shared = GameCompatibility()
 
     enum Verdict: String, Codable {
-        // MABD local: offlineOnly and blocked tell anti-cheat cases apart.
+        // EmuPC: offlineOnly and blocked tell anti-cheat cases apart.
         case tested, likely, maybe, offlineOnly, unlikely, blocked
         var title: String {
             switch self {
@@ -708,7 +708,7 @@ final class GameCompatibility: ObservableObject {
     /// Device memory a game can realistically use: the increased-memory-limit
     /// entitlement leaves about all but 2 GB of the phone's RAM to one app.
     nonisolated static var memoryBudgetGB: Double {
-        // MABD local: a floor of 2, so a 4 GB iPad is judged by its 2 GB.
+        // EmuPC: a floor of 2, so a 4 GB iPad is judged by its 2 GB.
         max(2, Double(ProcessInfo.processInfo.physicalMemory) / 1_073_741_824 - 2)
     }
 
@@ -821,7 +821,7 @@ final class GameCompatibility: ObservableObject {
         let anticheats = anticheats.filter { $0.caseInsensitiveCompare("VAC") != .orderedSame }
         if !anticheats.isEmpty {
             let names = anticheats.joined(separator: " and ")
-            // MABD local: by how the anti-cheat behaves outside Windows (AreWeAntiCheatYet).
+            // EmuPC: by how the anti-cheat behaves outside Windows (AreWeAntiCheatYet).
             switch status?.lowercased() {
             case "running":
                 // It lets the game run without its Windows driver (Linux and Steam Deck).

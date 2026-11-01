@@ -1242,10 +1242,23 @@ enum
     NtUserGamepadOp_State,   /* buffer: XINPUT_STATE        (16 bytes, out) */
     NtUserGamepadOp_Caps,    /* buffer: XINPUT_CAPABILITIES (20 bytes, out) */
     NtUserGamepadOp_SetVibration, /* buffer: XINPUT_VIBRATION (4 bytes, in) */
+    /* Madeira (ml2115): = 3, index ignored. TRUE when a game's XInputEnable(FALSE)
+     * is to be taken as stale: MADEIRA_XINPUT_ENABLE_FOREGROUND is not 0 and
+     * the calling process owns the foreground window. buffer: DWORD (out),
+     * NtUserGamepadForeground_* bits. A win32u without this op answers 0 and
+     * leaves the buffer alone. Same number and ABI as the pre-2026-10-01
+     * fork's, whose xinput DLLs are still in use. */
+    NtUserGamepadOp_Foreground,
+    NtUserGamepadOp_Battery, /* ml2170, = 4. buffer: XINPUT_BATTERY_INFORMATION (2 bytes, out); 0 = not published */
 };
 
+#define NtUserGamepadForeground_Rule  0x1   /* the switch is on */
+#define NtUserGamepadForeground_Owner 0x2   /* the caller owns the foreground window */
+
 /* Returns TRUE when a pad is connected in `index` and `buffer` was filled
- * (read, for NtUserGamepadOp_SetVibration). One syscall into a host snapshot read, no
+ * (read, for NtUserGamepadOp_SetVibration; NtUserGamepadOp_Foreground: see above;
+ * NtUserGamepadOp_Battery: FALSE also when the app published no battery).
+ * One syscall into a host snapshot read, no
  * allocation or server round trip — games poll this at up to 1 kHz. */
 static inline BOOL NtUserGetGamepadState( UINT index, UINT op, void *buffer )
 {

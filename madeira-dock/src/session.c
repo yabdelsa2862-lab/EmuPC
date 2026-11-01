@@ -234,6 +234,14 @@ int sh_session(HMODULE module, void *engine, const struct sh_api *api,
     uint64_t begin = o->now_ms(), online_at = 0, last_probe = 0, last_list = 0, offline_since = 0;
     bool was_online = false, offline_reported = false;
     unsigned logged_callbacks = 0, online_callbacks = 0, blips = 0, lost = 0, connect_failures = 0;
+    /* How long after sign-in before ownership is first asked. The answer is only
+     * ever taken when it is yes, so asking early costs nothing: this used to be a
+     * fixed 5 s in which a client that already had the licence list sat idle.
+     * MADEIRA_DOCK_LICENCE_WAIT_MS sets it (0..30000). */
+    uint64_t licence_wait = 500;
+    const char *wait_setting = getenv("MADEIRA_DOCK_LICENCE_WAIT_MS");
+    uint32_t value;
+    if (sh_parse_launch_option(wait_setting, &value) && value <= 30000) licence_wait = value;
     result = 34;
     for (unsigned tick = 0; tick < 4500 && o->now_ms() - begin < 90000; ++tick) {
         for (unsigned batch = 0; batch < 64; ++batch) {
@@ -302,7 +310,7 @@ int sh_session(HMODULE module, void *engine, const struct sh_api *api,
         /* Allow the real licence/app-info callbacks to arrive after logon.
          * A true subscription is required; timeout never permits launch.
          */
-        if (was_online && !offline_since && now - online_at >= 5000) {
+        if (was_online && !offline_since && now - online_at >= licence_wait) {
             bool entitled = ((subscribed_fn)v[181])(client_user, (uint32_t)app);
             if (!entitled && now - last_probe >= 10000) {
                 /* Not yet, every 10 s: how many apps the account's licences give the
@@ -325,7 +333,7 @@ int sh_session(HMODULE module, void *engine, const struct sh_api *api,
              * whole time. Unless MADEIRA_DOCK_LIST_ENTITLEMENT=0, an app in that
              * list counts as owned (once a second while the query says no); the
              * client's own launch path still decides for itself. */
-            if (entitled || (use_list && now - last_list >= 1000)) {
+            if (entitled || (use_list && now - last_list >= 250)) {
                 uint32_t *apps = calloc(65536, sizeof(uint32_t));
                 if (!apps) { result = 36; break; }
                 int32_t count = ((subscriptions_fn)v[182])(client_user, apps, 65536, true);

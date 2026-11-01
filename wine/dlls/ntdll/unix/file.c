@@ -1350,6 +1350,395 @@ static BOOLEAN get_dir_case_sensitivity( int root_fd, const char *dir )
 }
 
 
+#ifdef WINE_IOS
+/* Madeira: directory listings kept in memory for case-insensitive lookups.
+ *
+ * find_file_in_dir answers a name it cannot stat in its exact case by asking
+ * for the volume's case sensitivity and reading the whole directory, and
+ * lookup_unix_name repeats both for the reparse name ("name?") whenever that
+ * fails. Source-engine games probe thousands of absent paths (each search path
+ * for every material, model and sound), and on iOS every one of those path
+ * syscalls pays the sandbox's path evaluation: Team Fortress 2 spent ~90% of
+ * its loading thread there, also during play.
+ *
+ * Each directory's names are kept per unix path and matched with the same
+ * wcsnicmp the scan uses. An entry is trusted for dircache_ttl_ms after it was
+ * last checked, as long as no create, rename, link or delete went through
+ * Wine since (dircache_gen); otherwise one stat compares the directory's
+ * device, inode and mtime, and it is read again only if they changed. Only
+ * lookups from the root (absolute paths) are cached; a directory that cannot
+ * be listed falls back to the scan. MADEIRA_DIRCACHE=0 turns it off;
+ * MADEIRA_DIRCACHE_TTL_MS sets the trust window (default 1000, 0 checks the
+ * directory on every lookup). */
+
+#define DIRCACHE_BUCKETS   2048
+#define DIRCACHE_MAX_DIRS  8192        /* the whole cache is dropped past these */
+#define DIRCACHE_MAX_NAMES (1 << 20)
+#define DIRCACHE_MAX_DIR_NAMES 65536   /* larger directories are not cached */
+
+struct dircache_name
+{
+    unsigned int   hash;     /* of the upper-cased WCHAR name */
+    unsigned int   woff;     /* into dir->wbuf */
+    unsigned int   uoff;     /* into dir->ubuf, NUL-terminated */
+    unsigned short wlen;
+};
+
+struct dircache_dir
+{
+    struct dircache_dir  *next;
+    unsigned int          path_hash;
+    unsigned int          path_len;
+    char                 *path;
+    dev_t                 dev;
+    ino_t                 ino;
+    struct timespec       mtime;
+    unsigned int          gen;       /* dircache_gen when last checked */
+    ULONGLONG             checked;   /* monotonic ms when last checked */
+    BOOL                  unlisted;  /* opendir failed: let the scan answer */
+    unsigned int          count;
+    struct dircache_name *names;
+    WCHAR                *wbuf;
+    char                 *ubuf;
+};
+
+/* Locked with pthread_mutex_lock, not mutex_lock: every pseudo-process shares
+ * this cache, and one that exits sets the global process_exiting, which turns
+ * mutex_lock into a no-op for all of them. Nothing in the locked sections
+ * calls the server or can fault. */
+static pthread_mutex_t dircache_mutex = PTHREAD_MUTEX_INITIALIZER;
+static struct dircache_dir *dircache_table[DIRCACHE_BUCKETS];
+static unsigned int dircache_dirs, dircache_names;
+static volatile unsigned int dircache_gen;
+static int dircache_on = -1;
+static ULONGLONG dircache_ttl_ms = 1000;
+static struct
+{
+    unsigned int lookups, found, absent, fallback, checks, reads, flushes;
+    ULONGLONG last_report;
+} dircache_stats;
+
+static ULONGLONG dircache_now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime( CLOCK_MONOTONIC_RAW, &ts );
+    return (ULONGLONG)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+static BOOL dircache_enabled(void)
+{
+    if (dircache_on < 0)
+    {
+        const char *v = getenv( "MADEIRA_DIRCACHE" );
+        const char *ttl = getenv( "MADEIRA_DIRCACHE_TTL_MS" );
+        if (ttl && *ttl) dircache_ttl_ms = strtoul( ttl, NULL, 10 );
+        dircache_on = !(v && v[0] == '0' && !v[1]);
+        ERR( "[dircache] %s, trust window %u ms (MADEIRA_DIRCACHE=0 disables)\n",
+             dircache_on ? "on" : "off", (unsigned int)dircache_ttl_ms );
+    }
+    return dircache_on;
+}
+
+/* Called after Wine creates, renames, links or deletes a file: every entry is
+ * checked against its directory again before it is used. */
+static void dircache_changed(void)
+{
+    __atomic_add_fetch( &dircache_gen, 1, __ATOMIC_RELEASE );
+}
+
+/* The same, for the wineserver (build/wineserver/fd_ios.c), which runs in this
+ * process and deletes files on close, makes directories and renames. */
+void madeira_dircache_changed(void)
+{
+    dircache_changed();
+}
+
+static unsigned int dircache_hash_path( const char *path, unsigned int len )
+{
+    unsigned int h = 2166136261u;
+    while (len--) h = (h ^ (unsigned char)*path++) * 16777619u;
+    return h;
+}
+
+static unsigned int dircache_hash_name( const WCHAR *name, int len )
+{
+    unsigned int h = 2166136261u;
+    while (len--) h = (h ^ ntdll_towupper( *name++ )) * 16777619u;
+    return h;
+}
+
+static void dircache_free_dir( struct dircache_dir *dir )
+{
+    free( dir->names );
+    free( dir->wbuf );
+    free( dir->ubuf );
+    free( dir->path );
+    free( dir );
+}
+
+/* caller holds dircache_mutex */
+static void dircache_flush(void)
+{
+    unsigned int i;
+    for (i = 0; i < DIRCACHE_BUCKETS; i++)
+    {
+        struct dircache_dir *dir = dircache_table[i], *next;
+        for (; dir; dir = next)
+        {
+            next = dir->next;
+            dircache_free_dir( dir );
+        }
+        dircache_table[i] = NULL;
+    }
+    dircache_dirs = dircache_names = 0;
+    dircache_stats.flushes++;
+}
+
+/* caller holds dircache_mutex */
+static struct dircache_dir *dircache_get( const char *path, unsigned int len, unsigned int hash )
+{
+    struct dircache_dir *dir;
+    for (dir = dircache_table[hash % DIRCACHE_BUCKETS]; dir; dir = dir->next)
+        if (dir->path_hash == hash && dir->path_len == len && !memcmp( dir->path, path, len ))
+            return dir;
+    return NULL;
+}
+
+/* caller holds dircache_mutex; replaces an entry for the same path */
+static void dircache_put( struct dircache_dir *dir )
+{
+    struct dircache_dir **p = &dircache_table[dir->path_hash % DIRCACHE_BUCKETS];
+
+    for (; *p; p = &(*p)->next)
+    {
+        struct dircache_dir *old = *p;
+        if (old->path_hash != dir->path_hash || old->path_len != dir->path_len ||
+            memcmp( old->path, dir->path, dir->path_len )) continue;
+        dir->next = old->next;
+        *p = dir;
+        dircache_names -= old->count;
+        dircache_names += dir->count;
+        dircache_free_dir( old );
+        return;
+    }
+    if (dircache_dirs >= DIRCACHE_MAX_DIRS || dircache_names + dir->count > DIRCACHE_MAX_NAMES)
+    {
+        dircache_flush();
+        p = &dircache_table[dir->path_hash % DIRCACHE_BUCKETS];
+    }
+    dir->next = *p;
+    *p = dir;
+    dircache_dirs++;
+    dircache_names += dir->count;
+}
+
+static BOOL dircache_same( const struct dircache_dir *dir, const struct stat *st )
+{
+    return dir->dev == st->st_dev && dir->ino == st->st_ino &&
+           dir->mtime.tv_sec == st->st_mtimespec.tv_sec &&
+           dir->mtime.tv_nsec == st->st_mtimespec.tv_nsec;
+}
+
+/* Reads a directory into a new entry, or one marked unlisted when it cannot be
+ * read; NULL when out of memory. */
+static struct dircache_dir *dircache_read( const char *path, unsigned int len, unsigned int hash,
+                                           const struct stat *st, unsigned int gen )
+{
+    WCHAR buffer[MAX_DIR_ENTRY_LEN];
+    struct dircache_dir *dir;
+    struct dirent *de;
+    struct stat dst;
+    unsigned int cap = 64, wcap = 1024, ucap = 1024, wused = 0, uused = 0;
+    DIR *d;
+
+    if (!(dir = calloc( 1, sizeof(*dir) ))) return NULL;
+    if (!(dir->path = malloc( len + 1 )))
+    {
+        free( dir );
+        return NULL;
+    }
+    memcpy( dir->path, path, len );
+    dir->path[len] = 0;
+    dir->path_len = len;
+    dir->path_hash = hash;
+    dir->gen = gen;
+    dir->checked = dircache_now_ms();
+    dir->dev = st->st_dev;
+    dir->ino = st->st_ino;
+    dir->mtime = st->st_mtimespec;
+
+    if (!(d = opendir( dir->path )))
+    {
+        dir->unlisted = TRUE;
+        return dir;
+    }
+    /* the listing belongs to the directory as it is now */
+    if (!fstat( dirfd( d ), &dst ))
+    {
+        dir->dev = dst.st_dev;
+        dir->ino = dst.st_ino;
+        dir->mtime = dst.st_mtimespec;
+    }
+    dir->names = malloc( cap * sizeof(*dir->names) );
+    dir->wbuf = malloc( wcap * sizeof(WCHAR) );
+    dir->ubuf = malloc( ucap );
+    if (!dir->names || !dir->wbuf || !dir->ubuf) goto failed;
+
+    while ((de = readdir( d )))
+    {
+        unsigned int ulen = strlen( de->d_name ) + 1;
+        int ret = ntdll_umbstowcs( de->d_name, ulen - 1, buffer, MAX_DIR_ENTRY_LEN );
+        struct dircache_name *n;
+
+        if (ret <= 0) continue;
+        if (dir->count == DIRCACHE_MAX_DIR_NAMES)
+        {
+            dir->unlisted = TRUE;  /* too big to keep: the scan answers */
+            dir->count = 0;
+            free( dir->names );
+            free( dir->wbuf );
+            free( dir->ubuf );
+            dir->names = NULL;
+            dir->wbuf = NULL;
+            dir->ubuf = NULL;
+            break;
+        }
+        if (dir->count == cap)
+        {
+            void *p = realloc( dir->names, (cap *= 2) * sizeof(*dir->names) );
+            if (!p) goto failed;
+            dir->names = p;
+        }
+        if (wused + ret > wcap)
+        {
+            void *p;
+            while (wused + ret > wcap) wcap *= 2;
+            if (!(p = realloc( dir->wbuf, wcap * sizeof(WCHAR) ))) goto failed;
+            dir->wbuf = p;
+        }
+        if (uused + ulen > ucap)
+        {
+            void *p;
+            while (uused + ulen > ucap) ucap *= 2;
+            if (!(p = realloc( dir->ubuf, ucap ))) goto failed;
+            dir->ubuf = p;
+        }
+        n = &dir->names[dir->count++];
+        n->hash = dircache_hash_name( buffer, ret );
+        n->wlen = ret;
+        n->woff = wused;
+        n->uoff = uused;
+        memcpy( dir->wbuf + wused, buffer, ret * sizeof(WCHAR) );
+        memcpy( dir->ubuf + uused, de->d_name, ulen );
+        wused += ret;
+        uused += ulen;
+    }
+    closedir( d );
+    return dir;
+
+failed:
+    closedir( d );
+    dircache_free_dir( dir );
+    return NULL;
+}
+
+/* caller holds dircache_mutex. 1 with the on-disk name copied to out, 0 when
+ * the directory has no such name, -1 when the scan has to answer. */
+static int dircache_match( const struct dircache_dir *dir, const WCHAR *name, int length, char *out )
+{
+    unsigned int i, hash;
+
+    if (dir->unlisted) return -1;
+    hash = dircache_hash_name( name, length );
+    for (i = 0; i < dir->count; i++)
+    {
+        const struct dircache_name *n = &dir->names[i];
+        if (n->hash != hash || n->wlen != length) continue;
+        if (wcsnicmp( dir->wbuf + n->woff, name, length )) continue;
+        strcpy( out, dir->ubuf + n->uoff );
+        return 1;
+    }
+    return 0;
+}
+
+/* caller holds dircache_mutex */
+static int dircache_count( int r )
+{
+    if (r > 0) dircache_stats.found++;
+    else if (!r) dircache_stats.absent++;
+    else dircache_stats.fallback++;
+    return r;
+}
+
+/* caller holds dircache_mutex */
+static void dircache_report( ULONGLONG now )
+{
+    if (now - dircache_stats.last_report < 10000) return;
+    dircache_stats.last_report = now;
+    ERR( "[dircache] lookups %u: found %u, absent %u, scanned %u | dir checks %u, reads %u, "
+         "flushes %u | %u dirs, %u names\n",
+         dircache_stats.lookups, dircache_stats.found, dircache_stats.absent,
+         dircache_stats.fallback, dircache_stats.checks, dircache_stats.reads,
+         dircache_stats.flushes, dircache_dirs, dircache_names );
+}
+
+/* Looks name up in the directory dir[0..len), which must be an absolute path.
+ * 1: found, its on-disk name copied to out (room for MAX_DIR_ENTRY_LEN + 1);
+ * 0: the directory has no such name; -1: not answered, use the scan. */
+static int dircache_find( const char *dir_path, unsigned int len, const WCHAR *name, int length, char *out )
+{
+    unsigned int hash = dircache_hash_path( dir_path, len ), gen;
+    struct dircache_dir *dir, *fresh;
+    struct stat st;
+    ULONGLONG now = dircache_now_ms();
+    char path[PATH_MAX];
+    int r;
+
+    if (len >= sizeof(path)) return -1;
+
+    pthread_mutex_lock( &dircache_mutex );
+    dircache_stats.lookups++;
+    dircache_report( now );
+    dir = dircache_get( dir_path, len, hash );
+    if (dir && dir->gen == __atomic_load_n( &dircache_gen, __ATOMIC_ACQUIRE ) &&
+        now - dir->checked < dircache_ttl_ms)
+    {
+        r = dircache_count( dircache_match( dir, name, length, out ) );
+        pthread_mutex_unlock( &dircache_mutex );
+        return r;
+    }
+    dircache_stats.checks++;
+    pthread_mutex_unlock( &dircache_mutex );
+
+    /* taken before the stat, so a change racing with it is checked next time */
+    gen = __atomic_load_n( &dircache_gen, __ATOMIC_ACQUIRE );
+    memcpy( path, dir_path, len );
+    path[len] = 0;
+    if (stat( path, &st ) || !S_ISDIR( st.st_mode )) return -1;  /* the scan reports the error */
+
+    pthread_mutex_lock( &dircache_mutex );
+    if ((dir = dircache_get( dir_path, len, hash )) && dircache_same( dir, &st ))
+    {
+        dir->gen = gen;
+        dir->checked = now;
+        r = dircache_count( dircache_match( dir, name, length, out ) );
+        pthread_mutex_unlock( &dircache_mutex );
+        return r;
+    }
+    dircache_stats.reads++;
+    pthread_mutex_unlock( &dircache_mutex );
+
+    if (!(fresh = dircache_read( path, len, hash, &st, gen ))) return -1;
+
+    pthread_mutex_lock( &dircache_mutex );
+    dircache_put( fresh );
+    r = dircache_count( dircache_match( fresh, name, length, out ) );
+    pthread_mutex_unlock( &dircache_mutex );
+    return r;
+}
+#endif /* WINE_IOS */
+
+
 /***********************************************************************
  *           is_hidden_file
  *
@@ -2999,6 +3388,27 @@ static NTSTATUS find_file_in_dir( int root_fd, char *unix_name, int pos, const W
     struct stat st;
     int fd, ret;
 
+#ifdef WINE_IOS
+    /* Madeira: answer from the directory's cached listing (see dircache_find).
+     * Short names (PROGRA~1) still go through the scan below. */
+    if (!check_case && root_fd == AT_FDCWD && pos > 1 && unix_name[0] == '/' &&
+        !(length >= 8 && name[4] == '~' && is_legal_8dot3_name( name, length )) &&
+        dircache_enabled())
+    {
+        int r = dircache_find( unix_name, pos, name, length, unix_name + pos + 1 );
+        if (r > 0)
+        {
+            unix_name[pos] = '/';
+            return STATUS_SUCCESS;
+        }
+        if (!r)
+        {
+            unix_name[pos] = 0;
+            return STATUS_OBJECT_NAME_NOT_FOUND;
+        }
+    }
+#endif
+
     /* try a shortcut for this directory */
 
     unix_name[pos++] = '/';
@@ -4617,6 +5027,10 @@ NTSTATUS open_unix_file( HANDLE *handle, const char *unix_name, ACCESS_MASK acce
     }
     SERVER_END_REQ;
     free( objattr );
+#ifdef WINE_IOS
+    /* the server may have created the file or directory */
+    if (!status && disposition != FILE_OPEN && disposition != FILE_OVERWRITE) dircache_changed();
+#endif
     return status;
 }
 
@@ -5625,6 +6039,17 @@ NTSTATUS WINAPI NtSetInformationFile( HANDLE handle, IO_STATUS_BLOCK *io,
                 status = wine_server_call( req );
             }
             SERVER_END_REQ;
+            /* madeira-pipe-state-fd-backed: a unix pipe wrapped as a file object is a pipe by device
+             * type but not a named-pipe object; the mode asked for is what it already is. */
+            if (status == STATUS_INVALID_HANDLE || status == STATUS_OBJECT_TYPE_MISMATCH)
+            {
+                FILE_FS_DEVICE_INFORMATION device;
+                IO_STATUS_BLOCK device_io;
+
+                if (!NtQueryVolumeInformationFile( handle, &device_io, &device, sizeof(device), FileFsDeviceInformation )
+                    && device.DeviceType == FILE_DEVICE_NAMED_PIPE)
+                    status = STATUS_SUCCESS;
+            }
         }
         else status = STATUS_INVALID_PARAMETER_3;
         break;
@@ -6873,11 +7298,13 @@ NTSTATUS WINAPI NtReadFileScatter( HANDLE file, HANDLE event, PIO_APC_ROUTINE ap
 
     while (length)
     {
+        /* as in NtReadFile: virtual_locked_* also fill buffers the kernel cannot write directly */
         if (offset && offset->QuadPart != FILE_USE_FILE_POINTER_POSITION)
-            result = pread( unix_handle, (char *)segments->Buffer + pos,
-                            min( length - pos, page_size - pos ), offset->QuadPart + total );
+            result = virtual_locked_pread( unix_handle, (char *)segments->Buffer + pos,
+                                           min( length - pos, page_size - pos ), offset->QuadPart + total );
         else
-            result = read( unix_handle, (char *)segments->Buffer + pos, min( length - pos, page_size - pos ) );
+            result = virtual_locked_read( unix_handle, (char *)segments->Buffer + pos,
+                                          min( length - pos, page_size - pos ) );
 
         if (result == -1)
         {

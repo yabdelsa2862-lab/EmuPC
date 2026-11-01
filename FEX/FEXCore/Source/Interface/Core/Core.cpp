@@ -93,6 +93,8 @@ int rpm_cas_snapshot_take(struct rpm_cas_snapshot* out);
 #include <utility>
 #include <xxhash.h>
 
+/* MADEIRA: gated like the HOT RIP telemetry in CompileBlock, the only user of these globals. */
+#if defined(FEX_IOS_HOST) || !defined(_WIN32)
 /* iOS-Madeira HOTRIP telemetry — plain globals (no constructors/guard vars).
  * 2026-05-14: per-thread callret tracking (GPT diagnosis: FMOD worker
  * thread leaks callret entries; need to confirm WHICH thread leaks and
@@ -116,6 +118,7 @@ static volatile uint64_t g_madeira_thr_crsp_max[4] = {0,0,0,0};
 static volatile uint64_t g_madeira_thr_crsp_last[4] = {0,0,0,0};
 static volatile uint64_t g_madeira_thr_count[4] = {0,0,0,0};
 static volatile uint64_t g_madeira_thr_last_rip[4] = {0,0,0,0};
+#endif
 
 /* iOS-Madeira 2026-05-18 low-noise CompileBlock instrumentation counters. */
 static volatile uint64_t g_cb_total = 0;
@@ -591,6 +594,24 @@ ContextImpl::CreateThread(uint64_t InitialRIP, uint64_t StackPointer, const FEXC
 
   // Set up the thread manager state
   Thread->CurrentFrame->Thread = Thread;
+#ifdef FEX_IOS_HOST
+  /* ml1205: the block-entry ring, when MADEIRA_BLOCK_RING is set (32 KB per thread, never freed). */
+  {
+    static int RingOn = -1;
+    if (RingOn < 0) {
+      const char* E = getenv("MADEIRA_BLOCK_RING");
+      RingOn = (E && *E && *E != '0') ? 1 : 0;
+    }
+    if (RingOn) {
+      const size_t Bytes = (FEXCore::Core::IosBlockRingEntries + 1) * sizeof(uint64_t);
+      auto* Ring = static_cast<uint64_t*>(FEXCore::Allocator::aligned_alloc(64, Bytes));
+      if (Ring) {
+        memset(Ring, 0, Bytes);
+      }
+      Thread->CurrentFrame->IosBlockRing = Ring;
+    }
+  }
+#endif
 
   InitializeCompiler(Thread);
 
@@ -927,6 +948,19 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
 
     const auto GPRSize = Thread->OpDispatcher->GetGPROpSize();
 
+    // MADEIRA: a page the frontend no longer write-protects (IsHotSMCCodePage) cannot report a code
+    // change through a write fault, so every block of a multiblock touching one checks its code
+    // before each instruction, as with SMCChecks=full.
+    bool HotSMCBlock = false;
+    if (Config.SMCChecks == FEXCore::Config::CONFIG_SMC_MTRACK && SyscallHandler) {
+      for (auto CodePage : BlockInfo->CodePages) {
+        if (SyscallHandler->IsHotSMCCodePage(CodePage)) {
+          HotSMCBlock = true;
+          break;
+        }
+      }
+    }
+
 #ifdef ZYDIS_DISASSEMBLER
     const auto ZydisMachineMode = Config.Is64BitMode ? ZYDIS_MACHINE_MODE_LONG_64 : ZYDIS_MACHINE_MODE_LEGACY_32;
     if (FEXCore::Config::Get_X86DISASSEMBLE()) {
@@ -1015,13 +1049,15 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
           Thread->OpDispatcher->_GuestOpcode(InstAddress - GuestRIP);
         }
 
-        if (Config.SMCChecks == FEXCore::Config::CONFIG_SMC_FULL || Block.ForceFullSMCDetection) {
-          // Guest window: snapshotting the guest's code bytes is a guest read. The address handed to
+        if (Config.SMCChecks == FEXCore::Config::CONFIG_SMC_FULL || Block.ForceFullSMCDetection || HotSMCBlock) {
+          // Compare against the bytes the decoder read, not a second read of guest memory: code
+          // rewritten between the two reads (HotSpot's `jmp $` placeholder replaced by the final jump
+          // while a thread was translating it) would be checked against its new bytes but run as the
+          // old instruction, and the self-loop never saw the change. The address handed to
           // _ValidateCode below stays guest; DEF_OP(ValidateCode) applies the window itself.
-          auto ExistingCodePtr = reinterpret_cast<uint8_t*>(GetGuestBase() + Block.Entry + BlockInstructionsLength);
           auto InstAddressReg = Thread->OpDispatcher->_EntrypointOffset(GPRSize, InstAddress - GuestRIP);
           std::array<uint8_t, 0x10> CodeOriginal;
-          memcpy(CodeOriginal.data(), ExistingCodePtr, DecodedInfo->InstSize);
+          memcpy(CodeOriginal.data(), DecodedInfo->InstBytes, DecodedInfo->InstSize);
           auto CodeChanged = Thread->OpDispatcher->_ValidateCode(CodeOriginal, InstAddressReg, DecodedInfo->InstSize);
 
           auto InvalidateCodeCond = Thread->OpDispatcher->CondJump(CodeChanged);
@@ -1988,6 +2024,9 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
     }
   }
 
+  /* MADEIRA: the HOT RIP probe below calls time(), which FEX's own Windows CRT (the non-iOS module
+   * link line) does not provide, so those modules leave out it and the callret tracking it prints. */
+#if defined(FEX_IOS_HOST) || !defined(_WIN32)
   /* iOS-Madeira 2026-05-14: per-thread callret tracking (runs for EVERY
    * block dispatch, not just hot RIPs). 4-slot hash table keyed by Frame
    * pointer (unique per FEX thread). Identifies WHICH thread is leaking
@@ -2111,6 +2150,7 @@ uintptr_t ContextImpl::CompileBlock(FEXCore::Core::CpuStateFrame* Frame, uint64_
       }
     }
   }
+#endif
 
   static_cast<ContextImpl*>(Thread->CTX)->SyscallHandler->PreCompile();
 
@@ -2330,6 +2370,52 @@ void ContextImpl::InvalidateCodeBuffersCodeRange(uint64_t Start, uint64_t Length
   }
 }
 
+#if defined(FEX_IOS_HOST) && defined(_WIN32)
+/* MADEIRA: rate-limit the call-ret reset that follows a code invalidation.
+ *
+ * On the iOS host nothing reads the stack's contents: the RET shortcut (BranchOps.cpp, ml305) and the
+ * EnterEC return (Dispatcher.cpp) are compiled out, so a skipped reset leaves only entries nobody trusts,
+ * and what the reset still does is reclaim the stack's pages. A stream of SMC writes paid a 16 MB
+ * decommit + recommit per thread for every invalidation. MADEIRA_CALLRET_RESET_RATE: unset = at most one
+ * such reset per thread every 50 ms, N = every N ms, 0 = every invalidation (the old behaviour).
+ * NOTE: the caller holds CodeInvalidationMutex exclusively, which serialises the table. */
+static bool IosSkipInvalidationCallRetReset(FEXCore::Core::InternalThreadState* Thread) {
+  static uint64_t IntervalTicks = ~0ULL;
+  if (IntervalTicks == ~0ULL) {
+    uint64_t Ms = 50;
+    if (const char* Rate = getenv("MADEIRA_CALLRET_RESET_RATE"); Rate && *Rate) {
+      Ms = strtoull(Rate, nullptr, 0);
+    }
+    uint64_t Frequency;
+    __asm volatile("mrs %0, cntfrq_el0" : "=r"(Frequency));
+    IntervalTicks = Frequency / 1000 * Ms;
+  }
+  if (!IntervalTicks) {
+    return false;
+  }
+
+  uint64_t Now;
+  __asm volatile("mrs %0, cntvct_el0" : "=r"(Now));
+  // Direct-mapped by thread: a collision only means an extra reset.
+  struct LastReset {
+    FEXCore::Core::InternalThreadState* Thread;
+    uint64_t Ticks;
+  };
+  static LastReset Table[256];
+  auto& Entry = Table[(reinterpret_cast<uintptr_t>(Thread) >> 12) & 255];
+  if (Entry.Thread == Thread && Now - Entry.Ticks < IntervalTicks) {
+    static uint64_t Skipped = 0;
+    if ((++Skipped & 0xfff) == 1) {
+      LogMan::Msg::EFmt("[callret] invalidation resets skipped={} (at most one per thread every {} ticks; "
+                        "MADEIRA_CALLRET_RESET_RATE=0 disables)", Skipped, IntervalTicks);
+    }
+    return true;
+  }
+  Entry = {Thread, Now};
+  return false;
+}
+#endif
+
 void ContextImpl::InvalidateThreadCachedCodeRange(FEXCore::Core::InternalThreadState* Thread, uint64_t Start, uint64_t Length) {
   LOGMAN_THROW_A_FMT(CodeInvalidationMutex.try_lock() == false, "CodeInvalidationMutex needs to be unique_locked here");
 
@@ -2339,6 +2425,11 @@ void ContextImpl::InvalidateThreadCachedCodeRange(FEXCore::Core::InternalThreadS
 
   if (Thread->LookupCache->InvalidateCacheRange(Start, Length)) {
     FEXCORE_PROFILE_SCOPED("InvalidateCallRet");
+#if defined(FEX_IOS_HOST) && defined(_WIN32)
+    if (IosSkipInvalidationCallRetReset(Thread)) {
+      return;
+    }
+#endif
 
     // This may cause access violations in the thread on Windows as zeroing is not atomic, this is handled by the frontend
     FEXCore::Core::ResetCallRetStack(Thread, "core");

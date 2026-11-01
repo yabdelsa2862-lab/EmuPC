@@ -1340,6 +1340,7 @@ void ios_eager_delay_resolve( const char *when )
  * Keep this separate from any broad auxiliary-IAT or call-checker redesign.
  */
 #include "arm64ec_x64_export_iat.c"
+#include "cs_x64_fastpath.c"   /* MADEIRA_CS_X64 / MADEIRA_TLS_X64 */
 
 static BOOL arm64ec_iat_is_exported_x64( HMODULE module, const IMAGE_THUNK_DATA *slot )
 {
@@ -1764,6 +1765,26 @@ static BOOL alloc_tls_slot( LDR_DATA_TABLE_ENTRY *mod )
     if (thread) NtClose( thread );
 
     *(DWORD *)dir->AddressOfIndex = i;
+#ifdef __arm64ec__
+    {
+        /* iOS executes this ARM64EC image from a JIT-pool copy made before
+         * alloc_tls_slot. Compiler TLS accesses read AddressOfIndex through
+         * that copy, so leaving its initial zero here makes every DLL use
+         * the main EXE's TLS[0]. Sync the loader's index before any TLS
+         * callback or DllMain can access a thread_local variable. */
+        struct ios_sync_pe_write_params params = { (void *)dir->AddressOfIndex, sizeof(DWORD), 0 };
+        NTSTATUS sync = WINE_UNIX_CALL( unix_ios_sync_pe_write, &params );
+        if (sync)
+        {
+            ERR( "[tls-jit-sync] module=%s slot=%lu status=%lx\n",
+                 debugstr_w(mod->BaseDllName.Buffer), i, sync );
+            NtTerminateProcess( GetCurrentProcess(), sync );
+            return FALSE;
+        }
+        if (i < 24) ERR( "[tls-jit-sync] module=%s slot=%lu copied=%lu\n",
+                         debugstr_w(mod->BaseDllName.Buffer), i, params.synced );
+    }
+#endif
     tls_dirs[i] = *dir;
     {
         /* iOS-Madeira ml704 [tls-life]: which TLS slot each module actually got.
@@ -2239,6 +2260,10 @@ static NTSTATUS process_attach( LDR_DDAG_NODE *node, LPVOID lpReserved )
 }
 
 
+#ifdef __arm64ec__
+static void *arm64ec_module;  /* the emulator (xtajit64.dll), see load_arm64ec_module */
+#endif
+
 /*************************************************************************
  *		process_detach
  *
@@ -2265,6 +2290,10 @@ static void process_detach(void)
 
             /* Call detach notification */
             mod->Flags &= ~LDR_PROCESS_ATTACHED;
+#ifdef __arm64ec__
+            /* The emulator's detach destroys its state: no more callbacks into it. */
+            if (mod->DllBase == arm64ec_module) arm64ec_emulator_detach();
+#endif
             MODULE_InitDLL( CONTAINING_RECORD(mod, WINE_MODREF, ldr), 
                             DLL_PROCESS_DETACH, ULongToPtr(process_detaching) );
             call_ldr_notifications( LDR_DLL_NOTIFICATION_REASON_UNLOADED, mod );
@@ -2517,6 +2546,15 @@ static void  **fa_real_slots;
 static void   *fa_wrappers[6];
 static int     fa_ready, fa_beaconed[6];
 
+static const char * const st_names[2] =
+    { "Steam_BGetCallback", "Steam_FreeLastCallback" };
+static const char * const st_wrap_names[2] =
+    { "st_BGetCallback", "st_FreeLastCallback" };
+static HMODULE st_target;
+static void  **st_real_slots;
+static void   *st_wrappers[2];
+static int     st_ready, st_beaconed[2];
+
 static HMODULE tft_target;             /* libtheorafile.dll base, 0 until seen */
 static HMODULE tft_tracer;             /* the pinned tracer module */
 static void  **tft_real_slots;         /* tracer's tft_real[] */
@@ -2537,20 +2575,28 @@ static int tft_enabled(void)
     return on;
 }
 
-/* ml736: loading the tracer is shared by both hooks and must not depend on
- * which target module loads first. The audio library loads roughly 9,000 log
- * lines BEFORE the video decoder, so an earlier version that only loaded the
- * tracer from the decoder's hook found nothing when the audio hook ran, bailed,
- * and never retried -- the audio trace silently never armed. Load on demand
- * from whichever hook arrives first. */
-static HMODULE tft_ensure_tracer(void)
+static int st_enabled(void)
+{
+    static int on = -1;
+    if (on < 0)
+    {
+        UNICODE_STRING nm, val;
+        WCHAR buf[8];
+        RtlInitUnicodeString( &nm, L"MADEIRA_STEAM_OVERLAY_CB" );
+        val.Buffer = buf; val.Length = 0; val.MaximumLength = sizeof(buf);
+        /* Enabled by default unless MADEIRA_STEAM_OVERLAY_CB=0 */
+        on = !(!RtlQueryEnvironmentVariable_U( NULL, &nm, &val ) && val.Length && buf[0] == '0');
+    }
+    return on;
+}
+
+static HMODULE tft_load_tracer_module(void)
 {
     UNICODE_STRING dll;
     HMODULE tracer = NULL;
     unsigned int st;
 
     if (tft_tracer) return tft_tracer;
-    if (!tft_enabled()) return NULL;
     RtlInitUnicodeString( &dll, L"tftrace-x64.dll" );
     if ((st = LdrLoadDll( NULL, 0, &dll, &tracer )) || !tracer)
     {
@@ -2561,6 +2607,19 @@ static HMODULE tft_ensure_tracer(void)
     LdrAddRefDll( LDR_ADDREF_DLL_PIN, tracer );
     tft_tracer = tracer;
     return tracer;
+}
+
+/* ml736: loading the tracer is shared by both hooks and must not depend on
+ * which target module loads first. The audio library loads roughly 9,000 log
+ * lines BEFORE the video decoder, so an earlier version that only loaded the
+ * tracer from the decoder's hook found nothing when the audio hook ran, bailed,
+ * and never retried -- the audio trace silently never armed. Load on demand
+ * from whichever hook arrives first. */
+static HMODULE tft_ensure_tracer(void)
+{
+    if (tft_tracer) return tft_tracer;
+    if (!tft_enabled()) return NULL;
+    return tft_load_tracer_module();
 }
 
 /* Called once libtheorafile has finished loading -- never from inside
@@ -2633,6 +2692,53 @@ static void fa_attach( HMODULE base )
     fa_ready = 1;
     ERR( "[fa-trace] ml736 ARMED target=%p fa_real=%p\n", base, fa_real_slots );
 }
+
+/* Armed when steamclient64.dll loads inside a game process (skipped in
+ * dockhost.exe / steamhost64.exe) so live Steam Overlay lobby & rich-presence
+ * join callbacks (333 / 337) can be delivered when the user accepts an invite
+ * in-game. */
+static void st_attach( HMODULE base )
+{
+    WINE_MODREF *exe_wm;
+    HMODULE tracer;
+    int i;
+
+    if (st_ready || !st_enabled()) return;
+    exe_wm = get_modref( NtCurrentTeb()->Peb->ImageBaseAddress );
+    if (exe_wm && exe_wm->ldr.BaseDllName.Buffer)
+    {
+        const WCHAR *exe = exe_wm->ldr.BaseDllName.Buffer;
+        if (!wcsnicmp( exe, L"dockhost", 8 ) ||
+            !wcsnicmp( exe, L"steamhost", 9 ) ||
+            !wcsnicmp( exe, L"madeira-steamhost", 17 ))
+            return;
+    }
+    if (!(tracer = tft_load_tracer_module())) return;
+    st_target = base;
+    for (i = 0; i < 2; i++)
+    {
+        ANSI_STRING an;
+        RtlInitAnsiString( &an, st_wrap_names[i] );
+        if (LdrGetProcedureAddress( tracer, &an, 0, &st_wrappers[i] ))
+        {
+            ERR( "[steam-overlay] missing wrapper %s -- callback hook OFF\n", st_wrap_names[i] );
+            return;
+        }
+    }
+    {
+        ANSI_STRING an;
+        void *p = NULL;
+        RtlInitAnsiString( &an, "st_real" );
+        if (LdrGetProcedureAddress( tracer, &an, 0, &p ) || !p)
+        {
+            ERR( "[steam-overlay] missing st_real -- callback hook OFF\n" );
+            return;
+        }
+        st_real_slots = p;
+    }
+    st_ready = 1;
+    ERR( "[steam-overlay] ARMED target=%p st_real=%p\n", base, st_real_slots );
+}
 #endif  /* __arm64ec__ */
 
 NTSTATUS WINAPI LdrGetProcedureAddress(HMODULE module, const ANSI_STRING *name,
@@ -2686,6 +2792,20 @@ NTSTATUS WINAPI LdrGetProcedureAddress(HMODULE module, const ANSI_STRING *name,
                     if (!fa_beaconed[i]++)
                         ERR( "[fa-trace] ml736 REDIRECT %s real=%p -> wrapper=%p\n",
                              fa_names[i], proc, fa_wrappers[i] );
+                    break;
+                }
+            }
+            if (st_ready && name && name->Buffer && module == st_target)
+            {
+                int i;
+                for (i = 0; i < 2; i++)
+                {
+                    if (strcmp( name->Buffer, st_names[i] )) continue;
+                    st_real_slots[i] = proc;
+                    *address = st_wrappers[i];
+                    if (!st_beaconed[i]++)
+                        ERR( "[steam-overlay] REDIRECT %s real=%p -> wrapper=%p\n",
+                             st_names[i], proc, st_wrappers[i] );
                     break;
                 }
             }
@@ -3460,6 +3580,9 @@ static NTSTATUS load_native_dll( LPCWSTR load_path, const UNICODE_STRING *nt_nam
     if (NT_SUCCESS(status) && *pwm && (*pwm)->ldr.BaseDllName.Buffer &&
         !wcsnicmp( (*pwm)->ldr.BaseDllName.Buffer, L"FAudio", 6 ))
         fa_attach( (*pwm)->ldr.DllBase );
+    if (NT_SUCCESS(status) && *pwm && (*pwm)->ldr.BaseDllName.Buffer &&
+        !wcsnicmp( (*pwm)->ldr.BaseDllName.Buffer, L"steamclient64", 13 ))
+        st_attach( (*pwm)->ldr.DllBase );
 #endif
     if (status && module) NtUnmapViewOfSection( NtCurrentProcess(), module );
     return status;
@@ -3905,7 +4028,23 @@ static BOOL madeira_force_builtin_dll( const WCHAR *name )
         L"xinput9_1_0.dll", L"xinputuap.dll",
     };
     static int native = -1;
+    static int native_ucrt = -1;
     unsigned int i;
+
+    /* The system UCRT is ARM64EC; an app-local x64 copy cannot serve its imports. */
+    if (!wcsicmp( name, L"ucrtbase.dll" ) || !wcsicmp( name, L"ucrtbase" ) ||
+        !wcsnicmp( name, L"api-ms-win-crt-", 15 ))
+    {
+        if (native_ucrt < 0)
+        {
+            UNICODE_STRING nm, val;
+            WCHAR buf[8];
+            RtlInitUnicodeString( &nm, L"MADEIRA_NATIVE_UCRT" );
+            val.Buffer = buf; val.Length = 0; val.MaximumLength = sizeof(buf);
+            native_ucrt = (!RtlQueryEnvironmentVariable_U( NULL, &nm, &val ) && val.Length && buf[0] == '1');
+        }
+        return !native_ucrt;
+    }
 
     if (native < 0)
     {
@@ -5392,6 +5531,8 @@ static void load_arm64ec_module(void)
      * the DllMain dependency walk, so that exception dispatch
      * (KiUserExceptionDispatcher needs __os_arm64x_dispatch_call_no_redirect)
      * and dispatch_emulation (needs pBeginSimulation) work during DllMain. */
+    arm64ec_module = wm->ldr.DllBase;
+
     if ((status = arm64ec_process_init_dispatchers( wm->ldr.DllBase )))
     {
         ERR( "arm64ec_process_init_dispatchers for %s failed, status %lx\n",
@@ -5433,6 +5574,10 @@ static void load_arm64ec_module(void)
         NtTerminateProcess( GetCurrentProcess(), status );
     }
     ERR( "load_arm64ec_module: arm64ec_process_init returned cleanly, status=%lx\n", status );
+
+    /* MADEIRA_CS_X64 / MADEIRA_TLS_X64: x64 fast paths over the FFS of hot exports (off by
+     * default); the emulator is up and no x64 code has run yet. */
+    madeira_x64_fastpath_install();
 }
 
 #endif
@@ -5682,6 +5827,7 @@ void loader_init( CONTEXT *context, void **entry )
 #ifdef __i386__
         heap_init_madeira_policy();  /* environment ready, no guest threads yet */
 #endif
+        sync_init_madeira_lean();  /* environment ready, no guest threads yet */
         load_global_options();
         version_init();
         open_known_dll_ntdir();

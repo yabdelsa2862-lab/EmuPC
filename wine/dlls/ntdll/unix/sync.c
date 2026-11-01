@@ -5061,59 +5061,49 @@ void ios_alert_waiter_dump(void)
  * (2-misaligned wait addrs = lock+2), and (c) is stamped by NO LIVE thread's
  * TEB Instrumentation[6] (every acquire stamps since ml446), for 3 consecutive
  * monitor cycles, has a dead owner with certainty — reap it.  The live-stamp
- * set is built by the monitor (registry + Mach liveness) and passed in. */
+ * set is built by the monitor (registry + Mach liveness) and passed in.
+ *
+ * ml1295: Ori and the Will of the Wisps crashed at a level load right after
+ * this reaped a guest SRW lock that four job threads were queued on: the loop
+ * below visits a lock once per parked waiter, so four waiters gave strikes
+ * 1, 2 and 3 in ONE check, and the lock word changed between them (00010009
+ * -> 00010007: a waiter had just been handed the lock, the owner was alive).
+ * The game's own locks are never stamped, so "no live stamp" is always true
+ * for them. Now a lock is looked at once per check; a strike counts only when
+ * the lock word is the same as at the previous strike (nothing moved); and
+ * only a lock some thread was once seen stamping (a FEX lock) is reaped. */
 void ios_orphan_check( const unsigned long long *live_stamps, int nstamps )
 {
-    static struct { unsigned long long lock; int strikes; } susp[8];
-    int i, j, k;
-    /* madeira-bcd lock-orphan (tools/patch-wine-lock-orphan.py): env
-     * MADEIRA_LOCK_ORPHAN = stamped counts strikes once per lock per cycle and
-     * releases only locks a live thread has stamped (FEX's code-buffer locks);
-     * = 0 releases nothing; unset keeps the reaper as it was. */
-    static int orphan_mode = -1;            /* 0 as before, 1 stamped, 2 off */
-    static unsigned long long ever[64];     /* locks a live thread has stamped */
-    static int never, ever_next;
-    unsigned long long done[32];            /* locks already looked at in this cycle */
-    int ndone = 0;
-
-    if (orphan_mode < 0)
+    static struct { unsigned long long lock; int strikes; unsigned int word; } susp[8];
+    static unsigned long long ever_stamped[64];
+    static int stamped_count, stamped_next;
+    static int guest_lock_logs;
+    unsigned long long checked[64];
+    int i, j, k, nchecked = 0;
+    /* The existing rollback switch still disables all orphan releases. */
+    const char *mode = getenv( "MADEIRA_LOCK_ORPHAN" );
+    if (mode && !strcmp( mode, "0" )) return;
+    for (k = 0; k < nstamps; k++)
     {
-        const char *e = getenv( "MADEIRA_LOCK_ORPHAN" );
-        orphan_mode = !e ? 0 : !strcmp( e, "stamped" ) ? 1 : !strcmp( e, "0" ) ? 2 : 0;
-        if (orphan_mode)
-            dprintf( 2, "[lock-orphan] madeira-bcd MADEIRA_LOCK_ORPHAN=%s: %s\n", e,
-                     orphan_mode == 1 ? "only locks a live thread has stamped are released, after 3 monitor cycles"
-                                      : "no orphan-lock releases" );
+        if (!live_stamps[k]) continue;
+        for (j = 0; j < stamped_count && ever_stamped[j] != live_stamps[k]; j++) ;
+        if (j < stamped_count) continue;
+        ever_stamped[stamped_next] = live_stamps[k];
+        stamped_next = (stamped_next + 1) % 64;
+        if (stamped_count < 64) stamped_count++;
     }
-    if (orphan_mode == 2) return;
-    if (orphan_mode == 1)
-        for (k = 0; k < nstamps; k++)
-        {
-            if (!live_stamps[k]) continue;
-            for (j = 0; j < never; j++) if (ever[j] == live_stamps[k]) break;
-            if (j < never) continue;
-            ever[ever_next] = live_stamps[k];
-            ever_next = (ever_next + 1) % 64;
-            if (never < 64) never++;
-        }
     for (i = 0; i < IOS_ALERT_WAITER_MAX; i++)
     {
         const void *a = ios_alert_waiters[i].addr;
         unsigned long long lock;
         unsigned int word;
-        int nsame = 0, stamped = 0;
+        int nsame = 0, stamped = 0, fex = 0;
         if (!a || ((ULONG_PTR)a & 3) != 2 || (ULONG_PTR)a < 0x10000 || (ULONG_PTR)a >= 0x8000000000ULL) continue;
         lock = (unsigned long long)(ULONG_PTR)a - 2;
-        if (orphan_mode == 1)
-        {
-            /* madeira-bcd lock-orphan: each lock once per cycle (one strike, not
-             * one per parked waiter), and never a lock nobody has stamped */
-            for (k = 0; k < ndone; k++) if (done[k] == lock) break;
-            if (k < ndone || ndone == 32) continue;
-            done[ndone++] = lock;
-            for (k = 0; k < never; k++) if (ever[k] == lock) break;
-            if (k == never) continue;
-        }
+        for (j = 0; j < nchecked && checked[j] != lock; j++) ;
+        if (j < nchecked) continue;   /* ml1295: once per lock per check, not once per waiter */
+        if (nchecked == 64) continue;
+        checked[nchecked++] = lock;
         for (j = 0; j < IOS_ALERT_WAITER_MAX; j++)
             if (ios_alert_waiters[j].addr == a) nsame++;
         if (nsame < 3) continue;
@@ -5152,9 +5142,23 @@ void ios_orphan_check( const unsigned long long *live_stamps, int nstamps )
             continue;
         }
         for (k = 0; k < nstamps; k++) if (live_stamps[k] == lock) stamped = 1;
+        for (k = 0; k < stamped_count; k++) if (ever_stamped[k] == lock) fex = 1;
         for (j = 0; j < 8; j++) if (susp[j].lock == lock) break;
         if (stamped)
         {
+            if (j < 8) { susp[j].lock = 0; susp[j].strikes = 0; }
+            continue;
+        }
+        if (!fex)
+        {
+            /* ml1295: never seen held by FEX: the guest's own lock, whose owner is
+             * simply not FEX. Never reaped. */
+            if (guest_lock_logs < 8)
+            {
+                guest_lock_logs++;
+                dprintf( 2, "[lock-orphan] SKIP %#llx word=%08x waiters=%d: a guest lock (never stamped), not reaped rev=ml1295\n",
+                         lock, word, nsame );
+            }
             if (j < 8) { susp[j].lock = 0; susp[j].strikes = 0; }
             continue;
         }
@@ -5164,6 +5168,12 @@ void ios_orphan_check( const unsigned long long *live_stamps, int nstamps )
             if (j == 8) continue;
             susp[j].lock = lock;
             susp[j].strikes = 0;
+            susp[j].word = word;
+        }
+        else if (susp[j].word != word)   /* ml1295: the lock moved since the last strike */
+        {
+            susp[j].strikes = 0;
+            susp[j].word = word;
         }
         susp[j].strikes++;
         dprintf( 2, "[lock-orphan] SRW %#llx word=%08x waiters=%d no-live-stamp strike=%d/3 rev=ml447\n",

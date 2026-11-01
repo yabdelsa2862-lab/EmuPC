@@ -1,4 +1,4 @@
-/* MABD local: linked in place of build/gl4es-ios when that is not built:
+/* EmuPC: linked in place of build/gl4es-ios when that is not built:
  * the OpenGL driver in driver_ios.c then reports no OpenGL, as before. */
 int   winios_gl_init( void ) { return 0; }
 void *winios_gl_proc( const char *name ) { return 0; }

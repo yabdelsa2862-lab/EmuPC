@@ -44,9 +44,13 @@ final class GamepadInput: @unchecked Sendable {
         guard Self.enabled else { return }
         let touch = touchControls && Self.touchEnabled && Self.optIn("MADEIRA_PAD_EARLY_SLOT")
         let paired = !GCController.controllers().isEmpty
-        guard touch || paired else { return }
+        // EmuPC: on a TV the phone is the controller (TVCompanion.swift). The pad must
+        // be there when the game enumerates at startup, and stay through the TV scene
+        // reconnecting at launch (Gang Beasts never saw a pad that came back 11 s later).
+        let tv = Self.touchEnabled && TVCompanionModel.shared.tvActive
+        guard touch || paired || tv else { return }
         queue.sync { touchState.reserved = true; sample() }
-        LogStore.shared.log("[xinput] ml1990 slot=0 reserved for the session touch=\(touch ? 1 : 0) paired=\(paired ? 1 : 0)")
+        LogStore.shared.log("[xinput] ml1990 slot=0 reserved for the session touch=\(touch ? 1 : 0) paired=\(paired ? 1 : 0) tv=\(tv ? 1 : 0)")
     }
 
     /// ml2100: how player 1 reaches Windows, `env.MADEIRA_PAD_MODE` from
@@ -206,6 +210,31 @@ final class GamepadInput: @unchecked Sendable {
     /// Availability of the mode. 0 removes the per-game choice; the physical pad then always feeds XInput.
     static let keyboardMouseAvailable: Bool = flag("MADEIRA_XINPUT") && flag("MADEIRA_PAD_KBM")
 
+    /// ml2170: XInputGetBatteryInformation and XINPUT_CAPS_WIRELESS from each
+    /// pad's GCDeviceBattery (win32u op 4). 0: nothing is published and XInput
+    /// reports an unknown battery, as before.
+    static let batteryEnabled: Bool = flag("MADEIRA_XINPUT_BATTERY")  // 0: XInput keeps reporting an unknown battery (no GCDeviceBattery level, no wireless flag)
+
+    /// ml2170: GameController's battery as XInput reports one. Charging or full
+    /// means a cable is in, which Windows shows as a wired pad (wired, full). On
+    /// its battery the level is bucketed at 5/20/70 % (SDL's reverse mapping).
+    /// No battery object or an unknown state: type unknown at full, so a game
+    /// does not warn about a battery level nobody can read.
+    static func xinputBattery(level: Float?, state: GCDeviceBattery.State?) -> (type: UInt8, level: UInt8) {
+        switch state {
+        case .charging?, .full?:
+            return (UInt8(WINIOS_BATTERY_TYPE_WIRED), UInt8(WINIOS_BATTERY_LEVEL_FULL))
+        case .discharging?:
+            let fraction = level.map { $0.isFinite ? max(0, min(1, $0)) : 1 } ?? 1
+            let bucket = fraction <= 0.05 ? WINIOS_BATTERY_LEVEL_EMPTY
+                : fraction <= 0.20 ? WINIOS_BATTERY_LEVEL_LOW
+                : fraction <= 0.70 ? WINIOS_BATTERY_LEVEL_MEDIUM : WINIOS_BATTERY_LEVEL_FULL
+            return (UInt8(WINIOS_BATTERY_TYPE_NIMH), UInt8(bucket))
+        default:
+            return (UInt8(WINIOS_BATTERY_TYPE_UNKNOWN), UInt8(WINIOS_BATTERY_LEVEL_FULL))
+        }
+    }
+
     /// Whether keyboard-and-mouse mode is on. Main thread: PadStickMouse ("Right
     /// stick controls mouse") stands down while it is, since this mode moves the
     /// mouse (or drives keys) with the same stick.
@@ -240,6 +269,14 @@ final class GamepadInput: @unchecked Sendable {
     private var hidKeepsXInput = false
     private var hidBattery: (level: UInt8, charging: UInt8) = (UInt8(WINIOS_HIDPAD_BATTERY_UNKNOWN), 0)
     private var hidBatteryCountdown = 0
+    /// ml2170: when each XInput slot's battery is read next (uptime ns); 0 = at once.
+    private var batteryNextRead = [UInt64](repeating: 0, count: 4)
+    private var batteryLogs = 0
+    /// ml2172: uptime (ns) at which each slot's controller joined; 0 = empty.
+    private var joinedAt = [UInt64](repeating: 0, count: 4)
+    /// ml2172: player 1 back to slot 0 after a reconnect GameController reported
+    /// as a new controller before the old one left (see refreshControllers).
+    static let slot0Reconnect: Bool = flag("MADEIRA_XINPUT_SLOT0_RECONNECT")  // 0: a reconnected player 1 stays in the slot it landed in (slot 0 left empty)
     private var touchState = TouchGamepadState()
     /// Wi-Fi controllers (RemotePads.swift): a phone's slot holds `.some`, at rest
     /// until its first state arrives. Players 2-4 only; queue-owned.
@@ -296,15 +333,20 @@ final class GamepadInput: @unchecked Sendable {
             return (controller, profile)
         }
         queue.async { [self] in
+            let now = DispatchTime.now().uptimeNanoseconds
+            var slot0Freed = false
             for i in controllers.indices {
                 guard let old = controllers[i], !live.contains(where: { $0.0 === old }) else { continue }
                 profiles[i]?.valueChangedHandler = nil
                 controllers[i] = nil
                 profiles[i] = nil
+                joinedAt[i] = 0
+                if i == 0 { slot0Freed = true }
                 // ml2106: a game's "motors off" for a pad that left is dropped (the
                 // slot reads disconnected), so the slot's motors end here.
                 winios_gamepad_set_vibration(Int32(i), 0, 0)
-                LogStore.shared.log("[xinput] slot=\(i) disconnected")
+                clearBattery(i)
+                fputs("[xinput] ml1920 slot=\(i) disconnected\n", stderr)
             }
             for (controller, profile) in live {
                 // A slot a Wi-Fi controller holds is skipped (RemotePads.swift).
@@ -312,15 +354,39 @@ final class GamepadInput: @unchecked Sendable {
                       let i = controllers.indices.first(where: { controllers[$0] == nil && !remoteHeld[$0] }) else { continue }
                 controllers[i] = controller
                 profiles[i] = profile
+                joinedAt[i] = now
                 // A pad joining a slot starts still, before sample() publishes it,
                 // rather than replaying the level the slot had before.
                 winios_gamepad_set_vibration(Int32(i), 0, 0)
+                batteryNextRead[i] = 0   // ml2170: the new pad's battery at the next sample
                 profile.valueChangedHandler = { [weak self] _, _ in
                     // Explicit queue hop also serializes callbacks already in flight
                     // when a controller is disconnected or the app resigns active.
                     self?.queue.async { [weak self] in self?.sample() }
                 }
                 LogStore.shared.log("[xinput] slot=\(i) connected vendor=\(controller.vendorName ?? "unknown") category=\(controller.productCategory)")
+            }
+            // ml2172: GameController can report a reconnecting pad as a new
+            // controller before the old object leaves. The new one then lands in
+            // slot 1 while slot 0 is still taken, slot 0 empties a moment later,
+            // and a game that reads only player 1 sees nothing. When slot 0 has
+            // just emptied and exactly one controller joined another slot in the
+            // last 5 s, that controller becomes player 1 again. A second player's
+            // pad that has been there longer keeps its slot.
+            if slot0Freed, controllers[0] == nil, Self.slot0Reconnect {
+                let recent = (1..<controllers.count).filter {
+                    controllers[$0] != nil && joinedAt[$0] != 0 && now - joinedAt[$0] < 5_000_000_000
+                }
+                if recent.count == 1, let j = recent.first {
+                    controllers[0] = controllers[j]; profiles[0] = profiles[j]; joinedAt[0] = joinedAt[j]
+                    controllers[j] = nil; profiles[j] = nil; joinedAt[j] = 0
+                    winios_gamepad_set_vibration(Int32(j), 0, 0)
+                    winios_gamepad_set_vibration(0, 0, 0)
+                    winios_gamepad_set_state(Int32(j), nil)
+                    clearBattery(j)
+                    batteryNextRead[0] = 0
+                    LogStore.shared.log("[xinput] ml2172 slot=\(j) moved to slot 0: player 1 reconnected as a new controller")
+                }
             }
             // ml2106: the pad in each slot is where that slot's rumble plays
             // (and slot 0's the DualSense output); unchanged slots are no-ops.
@@ -356,6 +422,9 @@ final class GamepadInput: @unchecked Sendable {
         source.resume()
     }
 
+    /// ml2180: per-slot diagnostic budget (first 16 rest/input transitions) and last state.
+    private static var diagLeft = [16, 16, 16, 16]
+    private static var diagLive = [false, false, false, false]
     // XInput leaves dead zones to the game. Preserve the complete signed range.
     static func axis(_ value: Float) -> Int16 {
         guard value.isFinite else { return 0 }
@@ -377,6 +446,12 @@ final class GamepadInput: @unchecked Sendable {
                 PadKeyboardMouse.shared.releaseAll("controller disconnected")
             }
             let hid = i == 0 && hidActive
+            // EmuPC: playing on a TV with the phone as the controller
+            // (TVCompanion.swift): the phone's buttons also browse the TV's home screen.
+            if i == 0, pad == nil, touchConnected, TVCompanionModel.phonePadNavigates {
+                let t = touchState.sample
+                LibraryController.shared.sample(buttons: t.buttons, lx: t.lx, ly: t.ly)
+            }
             // A Wi-Fi controller's slot: its own state, nothing else feeds it.
             if pad == nil, !touchConnected, let phone = remote[i] {
                 var state = winios_gamepad()
@@ -391,6 +466,7 @@ final class GamepadInput: @unchecked Sendable {
             }
             guard pad != nil || touchConnected else {
                 winios_gamepad_set_state(Int32(i), nil)
+                clearBattery(i)
                 if hid { winios_hidpad_set_state(nil) }
                 continue
             }
@@ -431,7 +507,7 @@ final class GamepadInput: @unchecked Sendable {
                         hidLive = nil
                         if keyboardMouse != nil { PadKeyboardMouse.shared.releaseAll("library menu") }
                     } else if keyboardMouse == nil {
-                        // MABD local: the game's controller layout (GameTuning.swift).
+                        // EmuPC: the game's controller layout (GameTuning.swift).
                         state = ButtonLayout.apply(state)
                     } else if let kbm = keyboardMouse {
                         // Keyboard-and-mouse mode: the pad becomes keys and mouse
@@ -451,7 +527,7 @@ final class GamepadInput: @unchecked Sendable {
                         state.connected = 1
                     }
                 } else {
-                    state = ButtonLayout.apply(state)   // MABD local: players 2-4 follow the same layout
+                    state = ButtonLayout.apply(state)   // EmuPC: players 2-4 follow the same layout
                 }
             }
             if active && touchConnected {
@@ -480,8 +556,56 @@ final class GamepadInput: @unchecked Sendable {
                 reportedGameInput = true
                 LogStore.shared.log("[xinput] physical input published to Windows slot=0")
             }
+            // ml2180: evidence for "the pad is detected but nothing happens": the
+            // first transitions between rest and input per slot, as published to
+            // win32u (the driver logs what the program reads, ml2180 there).
+            if Self.diagLeft[i] > 0 {
+                let live = state.buttons != 0 || state.left_trigger != 0 || state.right_trigger != 0
+                    || abs(Int(state.lx)) > 7849 || abs(Int(state.ly)) > 7849
+                    || abs(Int(state.rx)) > 8689 || abs(Int(state.ry)) > 8689
+                if live != Self.diagLive[i] {
+                    Self.diagLive[i] = live
+                    Self.diagLeft[i] -= 1
+                    let kind = live ? "input" : "rest"
+                    let owns = i == 0 ? LibraryController.shared.ownsInput : false
+                    LogStore.shared.log("[xinput] ml2180 app slot=\(i) \(kind): buttons=0x\(String(state.buttons, radix: 16)) lt=\(state.left_trigger) rt=\(state.right_trigger) lx=\(state.lx) ly=\(state.ly) rx=\(state.rx) ry=\(state.ry) physical=\(pad != nil) active=\(active) libraryOwns=\(owns) kbm=\(keyboardMouse != nil) hid=\(hid)")
+                }
+            }
+            publishBattery(i, pad: pad)
             winios_gamepad_set_state(Int32(i), &state)
         }
+    }
+
+    /// ml2170: slot i's XInput battery, read from GameController at most once a
+    /// second (queue). A physical pad reports its GCDeviceBattery; the touch
+    /// controller alone has no battery to run down and reads as wired and full.
+    private func publishBattery(_ i: Int, pad: GCExtendedGamepad?) {
+        guard Self.batteryEnabled else { return }
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard now >= batteryNextRead[i] else { return }
+        batteryNextRead[i] = now + 1_000_000_000
+        var value = winios_gamepad_battery()
+        value.valid = 1
+        if let pad {
+            let battery = pad.controller?.battery
+            let mapped = Self.xinputBattery(level: battery?.batteryLevel, state: battery?.batteryState)
+            value.type = mapped.type
+            value.level = mapped.level
+        } else {
+            value.type = UInt8(WINIOS_BATTERY_TYPE_WIRED)
+            value.level = UInt8(WINIOS_BATTERY_LEVEL_FULL)
+        }
+        if winios_gamepad_set_battery(Int32(i), &value) != 0 && batteryLogs < 32 {
+            batteryLogs += 1
+            LogStore.shared.log("[xinput] ml2170 slot=\(i) battery type=\(value.type) level=\(value.level)")
+        }
+    }
+
+    /// ml2170: the slot has no pad, so its battery is withdrawn (op 4 answers 0).
+    private func clearBattery(_ i: Int) {
+        guard batteryNextRead[i] != 0 else { return }
+        batteryNextRead[i] = 0
+        _ = winios_gamepad_set_battery(Int32(i), nil)
     }
 
     /// ml2100: player 1 as the HID controller reports it: the XInput sample above

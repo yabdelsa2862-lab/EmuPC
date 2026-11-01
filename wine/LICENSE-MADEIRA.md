@@ -58,6 +58,18 @@ distributes under **LGPL-2.1-or-later**. This branch keeps that licence.
   - Author spitefulowl, merged on 2026-10-06: `000cac48452` (mscoree iOS:
     cooperative thread suspend and keep-delegates for Wine Mono, pull request
     #26).
+  - opengl32: OpenGL ES contexts for Madeira's winios WGL driver
+    (`dlls/opengl32/unix_wgl.c`) and the fixed low image base limited to x86
+    builds (`dlls/opengl32/Makefile.in`). Author: Connor Gow, written with AI
+    assistance, 2026-09-26. Carried as a patch in the Madeira repository
+    (`patches/wine-opengl-winios.patch`).
+  - opengl32: 32-bit (WoW64) callers on iOS. `make_opengl` makes the wow64
+    thunks convert embedded guest pointers with `ios_wow_host_ptr()`, keeps
+    handles and callbacks unchanged, and passes pointer-or-offset parameters
+    unchanged while a buffer is bound (`dlls/opengl32/make_opengl`,
+    regenerated `unix_thunks.c`, `unix_private.h`, `unix_wgl.c`). Author:
+    Connor Gow, written with AI assistance, 2026-09-27. Carried in
+    `patches/wine-opengl-winios.patch`.
 
 The LGPL permits combining this library with proprietary components (such
 as Apple's Metal Shader Converter) subject to LGPL-2.1 section 6; see the

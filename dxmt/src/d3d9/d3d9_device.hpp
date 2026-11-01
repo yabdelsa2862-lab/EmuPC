@@ -267,6 +267,9 @@ public:
   // path, emits the tail signal, and commits. Pulled out of the
   // vertex/index buffer Lock helpers so both share one shape.
   void forceFlushAndCommit();
+  bool drainForDynamicRename();
+  uint64_t m_renameDrains = 0, m_renameDrainUs = 0, m_renameInPlace = 0;
+  void noteRenameInPlace();
 
   // Bytes of dynamic-buffer allocations minted since the last commit, and the
   // point at which the next draw submits rather than accumulating further.

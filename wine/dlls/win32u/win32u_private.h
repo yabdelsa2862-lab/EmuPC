@@ -378,18 +378,20 @@ static inline ULONG_PTR caller_zero_bits(void)
  * upstream's code paths after one load of this flag. */
 extern BOOL win32u_wow_session;
 
-/* Publish the GDI shared handle table into the calling WoW64 pseudo-process's
- * PEB, mapping a second view of the table inside its guest window first
- * (gdiobj.c).  64-bit threads never get here: they keep upstream's single
- * publication by init_gdi_shared().  The __thread flag makes the steady-state
- * check one load and one compare. */
+/* Publish into every pseudo-process's PEB. WoW64 also needs a view in its
+ * guest window; report a private table instead of trying to map one. */
 extern __thread void *win32u_gdi_published_peb;
 extern void win32u_gdi_publish_shared(void);
+extern void win32u_gdi_report_private(void);
 static inline void win32u_gdi_check_publish(void)
 {
-    if (win32u_wow_session && NtCurrentTeb()->WowTebOffset &&
-        win32u_gdi_published_peb != NtCurrentTeb()->Peb)
-        win32u_gdi_publish_shared();
+    if (win32u_gdi_published_peb != NtCurrentTeb()->Peb)
+    {
+        if (NtCurrentTeb()->WowTebOffset && !win32u_wow_session)
+            win32u_gdi_report_private();
+        else
+            win32u_gdi_publish_shared();
+    }
 }
 #else
 static inline ULONG_PTR caller_zero_bits(void) { return zero_bits; }

@@ -1,5 +1,7 @@
 #include "d3d9_device.hpp"
 #include "d3d9_guest_alloc.hpp"
+#include <mutex>
+#include <unordered_map>
 #include "d3d9_madeira_window.hpp"
 
 #include "airconv_public.h"
@@ -4795,6 +4797,34 @@ MTLD3D9Device::UpdateTexture(IDirect3DBaseTexture9 *pSourceTexture, IDirect3DBas
     return D3D_OK;
   }
 }
+// ---- Late readback (opt-in, DXMT_D9_LATE_READBACK=1) ---------------------
+// Per-destination staging state for GetRenderTargetData's late path (see the
+// block inside GetRenderTargetData). Two slots in one small host-visible
+// buffer; a slot is reused only after its completion signal has been observed.
+namespace {
+constexpr size_t kLateStagingBytes = 65536; // multiple of any host page size
+constexpr size_t kLateSlotStride = 16384;   // page-aligned slot offsets
+constexpr size_t kLateMaxBytes = 4096;      // only tiny readbacks qualify
+constexpr uint32_t kLateWarmup = 3;         // synchronous calls per destination
+constexpr size_t kLateMaxSurfaces = 8;      // bound the staging allocations
+
+struct LateReadbackState {
+  WMT::Reference<WMT::Buffer> buffer;
+  void *backing = nullptr;
+  size_t bytes = 0;
+  uint32_t warmup = kLateWarmup;
+  uint32_t next = 0;
+  uint64_t signal[2] = {0, 0}; // cmd seq that completes slot i; 0 = free
+  uint64_t posted[2] = {0, 0}; // post order, so the newest completed wins
+  uint64_t post_counter = 0;
+  uint64_t calls = 0;
+  uint64_t skipped = 0;
+};
+
+std::mutex g_lateReadbackMutex;
+std::unordered_map<const void *, LateReadbackState> g_lateReadbackStates;
+} // namespace
+
 // GetRenderTargetData: RT -> SYSTEMMEM blit. Validation per DXVK
 // d3d9_device.cpp, which forwards a DEFAULT-pool destination to StretchRect.
 HRESULT STDMETHODCALLTYPE
@@ -4805,6 +4835,10 @@ MTLD3D9Device::GetRenderTargetData(IDirect3DSurface9 *pRenderTarget, IDirect3DSu
   // commits a sync chunk and waits; autoreleased Metal handles (blit
   // encoder, fence) leak across every screenshot capture without it.
   auto pool = WMT::MakeAutoreleasePool();
+  // Opt-in (default off). Serves tiny GetRenderTargetData readbacks, such as a 1x1
+  // exposure sample, one frame late instead of waiting on the GPU. Applies to
+  // 32-bit D3D9 games that read a small render target back every frame.
+  static const bool late_enabled = [] { const auto v = env::getEnvVar("DXMT_D9_LATE_READBACK"); return !v.empty() && v != "0"; }();
   // A lost non-Ex device fails the readback with DEVICELOST (DXVK
   // d3d9_device.cpp GetRenderTargetData); Ex devices never enter Lost.
   if (!m_isEx && m_deviceState.load(std::memory_order_relaxed) == DeviceState::Lost)
@@ -4862,6 +4896,11 @@ MTLD3D9Device::GetRenderTargetData(IDirect3DSurface9 *pRenderTarget, IDirect3DSu
     // caller's LockRect maps that same buffer. The linear-texture-of-
     // buffer view path drops trailing rows on virtualized Apple Silicon,
     // so address the buffer directly.
+    if (late_enabled) {
+      static std::atomic<bool> warned_bb{false};
+      if (!warned_bb.exchange(true))
+        Logger::warn("[late-readback] destination is buffer-backed; the late path covers mirror-backed destinations only");
+    }
     WMT::Reference<WMT::Buffer> dst_buf_retain(dst->metalBuffer());
     auto *chunk = m_dxmtQueue->CurrentChunk();
     chunk->emitcc([src_tex_retain = std::move(src_tex_retain), dst_buf_retain = std::move(dst_buf_retain),
@@ -4934,6 +4973,119 @@ MTLD3D9Device::GetRenderTargetData(IDirect3DSurface9 *pRenderTarget, IDirect3DSu
   // sub-resource); refresh it now that materialisation set the level pitch.
   dst_pitch = dst->pitch();
   const size_t total_bytes = static_cast<size_t>(dst_pitch) * row_count;
+  // Late readback (opt-in: DXMT_D9_LATE_READBACK=1). A tiny render target read
+  // back once per frame (e.g. an HDR exposure sample) otherwise makes the CPU
+  // wait for the GPU every frame. For readbacks this small, post the blit into
+  // a dedicated staging slot and commit as usual but do NOT wait; the next call
+  // copies the newest completed slot into the mirror, so LockRect sees a value
+  // one frame old. The first kLateWarmup calls per destination stay synchronous
+  // so the mirror starts with real data. This path never blocks on the GPU.
+  if (late_enabled && total_bytes <= kLateMaxBytes && static_cast<uint64_t>(width) * height <= 64) {
+    std::lock_guard<std::mutex> late_guard(g_lateReadbackMutex);
+    LateReadbackState *stp = nullptr;
+    auto late_it = g_lateReadbackStates.find(dst);
+    if (late_it != g_lateReadbackStates.end())
+      stp = &late_it->second;
+    else if (g_lateReadbackStates.size() < kLateMaxSurfaces)
+      stp = &g_lateReadbackStates[dst];
+    if (stp) {
+      LateReadbackState &st = *stp;
+      if (st.bytes != total_bytes) {
+        st.bytes = total_bytes;
+        st.signal[0] = st.signal[1] = 0;
+        st.warmup = kLateWarmup;
+      }
+      if (st.backing == nullptr) {
+        void *backing = guest_alloc(kLateStagingBytes, DXMT_PAGE_SIZE);
+        if (backing) {
+          std::memset(backing, 0, kLateStagingBytes);
+          WMTBufferInfo info{};
+          info.length = kLateStagingBytes;
+          info.options = (WMTResourceOptions)(WMTResourceCPUCacheModeDefaultCache | WMTResourceStorageModeShared);
+          info.memory.set(backing);
+          st.buffer = m_metalDevice.newBuffer(info);
+          if (st.buffer == nullptr)
+            guest_free(backing);
+          else
+            st.backing = backing;
+        }
+      }
+      if (st.backing != nullptr) {
+        if (st.warmup > 0) {
+          --st.warmup; // fall through to the synchronous path below
+        } else {
+          // 1. Harvest: copy the newest completed slot into the mirror.
+          const uint64_t done = m_completionEvent.signaledValue();
+          int newest = -1;
+          for (int i = 0; i < 2; ++i) {
+            if (st.signal[i] != 0 && st.signal[i] <= done && (newest < 0 || st.posted[i] > st.posted[newest]))
+              newest = i;
+          }
+          if (newest >= 0) {
+            std::memcpy(
+                dst_base, static_cast<const uint8_t *>(st.backing) + static_cast<size_t>(newest) * kLateSlotStride,
+                total_bytes
+            );
+            dst->flagContainerDirtyRegion(nullptr);
+            for (int i = 0; i < 2; ++i) {
+              if (st.signal[i] != 0 && st.signal[i] <= done)
+                st.signal[i] = 0;
+            }
+          }
+          // 2. Post the new copy into a free slot. If both are still in
+          // flight, skip: the mirror keeps its older value and we never wait.
+          int slot = -1;
+          if (st.signal[st.next] == 0)
+            slot = static_cast<int>(st.next);
+          else if (st.signal[st.next ^ 1u] == 0)
+            slot = static_cast<int>(st.next ^ 1u);
+          ++st.calls;
+          if (st.calls == 1 || !(st.calls % 600))
+            Logger::warn(str::format(
+                "[late-readback] calls=", st.calls, " skipped=", st.skipped, " bytes=", total_bytes,
+                " format=", uint32_t(sd.Format)
+            ));
+          if (slot < 0) {
+            ++st.skipped;
+            return D3D_OK;
+          }
+          const uint64_t late_signal = m_currentCmdSeq;
+          const obj_handle_t staging_handle = st.buffer.handle;
+          const uint64_t slot_offset = static_cast<uint64_t>(slot) * kLateSlotStride;
+          auto *late_chunk = m_dxmtQueue->CurrentChunk();
+          late_chunk->emitcc([src_tex_retain = std::move(src_tex_retain), src_texture_handle, staging_handle,
+                              slot_offset, dst_pitch, width, height, row_count, src_mip, event_handle,
+                              late_signal](ArgumentEncodingContext &ctx) mutable {
+            ctx.startBlitPass();
+            auto &cmd = ctx.encodeBlitCommand<wmtcmd_blit_copy_from_texture_to_buffer>();
+            cmd.type = WMTBlitCommandCopyFromTextureToBuffer;
+            cmd.src = src_texture_handle;
+            cmd.slice = 0;
+            cmd.level = src_mip;
+            cmd.origin = WMTOrigin{0, 0, 0};
+            cmd.size = WMTSize{width, height, 1};
+            cmd.dst = staging_handle;
+            cmd.offset = slot_offset;
+            cmd.bytes_per_row = dst_pitch;
+            cmd.bytes_per_image = dst_pitch * row_count;
+            ctx.endPass();
+            ctx.signalEventByHandle(event_handle, late_signal);
+          });
+          ++m_currentCmdSeq;
+          refreshSignaledAndTrimRings();
+          noteReadback(2, sd);
+          // The commit stays: it keeps the completion signal at a chunk
+          // boundary, so the ring-recycling invariant holds. Only the CPU and
+          // GPU waits are dropped.
+          commitCurrentChunkTimed(3);
+          st.signal[slot] = late_signal;
+          st.posted[slot] = ++st.post_counter;
+          st.next = static_cast<uint32_t>(slot) ^ 1u;
+          return D3D_OK;
+        }
+      }
+    }
+  }
   uint64_t coherent_id = m_cachedSignaled.load(std::memory_order_acquire);
   auto span = tryRingAllocate(m_uploadRing, m_currentCmdSeq, coherent_id, total_bytes, 16);
   if (!span)
@@ -8961,6 +9113,10 @@ MTLD3D9Device::PackDrawConstants(
       amb[3] = static_cast<float>((a >> 24) & 0xFF) / 255.0f;
     }
     std::memcpy(ffp_base + 240, amb, sizeof(amb));
+    // The generated VS evaluates all eight light slots before masking inactive
+    // contributions. Recycled NaNs survive multiplication by zero and can
+    // poison a color channel, so initialize the complete uploaded light array.
+    std::memset(ffp_base + 256, 0, 8 * 112);
     for (uint32_t li = 0; li < pod.ffp_light_count; ++li) {
       const D3DLIGHT9 *lp = reinterpret_cast<const D3DLIGHT9 *>(pod.ffp->lights[li]);
       float blk[28] = {};
@@ -10942,6 +11098,58 @@ MTLD3D9Device::forceFlushAndCommit() {
   flushOpenWork();
   emitCmdbufTailSignal();
   commitCurrentChunkTimed(4);
+}
+
+// Rename drain from thebcd69/bcd-dxmt, commit 8ae252b (LGPL-2.1-or-later).
+bool
+MTLD3D9Device::drainForDynamicRename() {
+  static const bool enabled = [] {
+    const bool value = env::getEnvVar("DXMT_D9_RENAME_WAIT") != "0";
+    Logger::warn(str::format("[d9-rename-wait] madeira-bcd enabled=", value, " (DXMT_D9_RENAME_WAIT=0 keeps the stale draw)"));
+    return value;
+  }();
+  if (!enabled)
+    return false;
+  const auto start = std::chrono::steady_clock::now();
+  // The shape of the readback drains: queued draws, open work and the tail
+  // signal go into the chunk, the chunk is committed and the CPU fence and the
+  // GPU are waited for. forceFlushAndCommit is the rename-pressure submit.
+  FlushDrawBatch();
+  flushOpenWork();
+  emitCmdbufTailSignal();
+  // emitCmdbufTailSignal signalled the pre-increment sequence.
+  const uint64_t signal = m_currentCmdSeq - 1;
+  const auto seq = m_dxmtQueue->CurrentSeqId();
+  commitCurrentChunkTimed(4);
+  m_dxmtQueue->WaitCPUFence(seq);
+  if (!waitForGpuOrDeviceError(signal))
+    return false;
+  // Fold the event's progress in now and trim the rings against it, as
+  // refreshSignaledAndTrimRings does without its every-8-sequences throttle, so
+  // the retry sees every generation the GPU has released and the ring blocks it
+  // released give their address space back too.
+  const uint64_t event_signalled = m_completionEvent.signaledValue();
+  uint64_t prev = m_cachedSignaled.load(std::memory_order_relaxed);
+  while (prev < event_signalled &&
+         !m_cachedSignaled.compare_exchange_weak(prev, event_signalled, std::memory_order_relaxed))
+    ;
+  const uint64_t signalled = m_cachedSignaled.load(std::memory_order_acquire);
+  m_constRing.free_blocks(signalled);
+  m_uploadRing.free_blocks(signalled);
+  m_constRingResolve.free_blocks(signalled);
+  m_renameDrainUs += (uint64_t)std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::steady_clock::now() - start).count();
+  if (++m_renameDrains <= 4 || !(m_renameDrains % 256))
+    Logger::warn(str::format("[d9-rename-wait] madeira-bcd drains=", m_renameDrains, " avg-us=", m_renameDrainUs / m_renameDrains,
+                             " in-place=", m_renameInPlace));
+  return true;
+}
+
+void
+MTLD3D9Device::noteRenameInPlace() {
+  if (++m_renameInPlace <= 4 || !(m_renameInPlace % 256))
+    Logger::warn(str::format("[d9-rename-wait] madeira-bcd in-place=", m_renameInPlace,
+                             " (nothing left to recycle; the store went into the GPU-idle current generation)"));
 }
 
 void

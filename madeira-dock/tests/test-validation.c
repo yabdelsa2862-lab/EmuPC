@@ -32,6 +32,28 @@ int main(void)
     const char pending_text[] = "configuration not yet available";
     memcpy(missing + 12, pending_text, sizeof(pending_text));
     assert(!sh_launch_option_missing(missing, sizeof(missing), 7));
+    assert(sh_launch_arguments_valid("", 0));
+    const char *arguments = "--renderer portable --label \"two words\"";
+    assert(sh_launch_arguments_valid(arguments, strlen(arguments)));
+    assert(sh_launch_arguments_valid("--value\t123", 11));
+    assert(!sh_launch_arguments_valid(NULL, 0));
+    assert(!sh_launch_arguments_valid("a\0b", 3));
+    assert(!sh_launch_arguments_valid("a\nb", 3));
+    assert(!sh_launch_arguments_valid("a\rb", 3));
+    assert(!sh_launch_arguments_valid("\"unclosed", 9));
+    const char escaped[] = {'"', 'a', '\\', '"', 'b', '"', 0};
+    const char unclosed[] = {'"', 'a', '\\', '"', 0};
+    assert(sh_launch_arguments_valid(escaped, sizeof escaped - 1));
+    assert(!sh_launch_arguments_valid(unclosed, sizeof unclosed - 1));
+    assert(!sh_launch_arguments_valid("a\177b", 3));
+    char bound[SH_LAUNCH_ARGUMENTS_CAPACITY];
+    memset(bound, 'x', sizeof bound);
+    assert(sh_launch_arguments_valid(bound, sizeof bound - 1));
+    assert(!sh_launch_arguments_valid(bound, sizeof bound));
+    char tokens[130];
+    for (size_t i = 0; i < sizeof tokens; ++i) tokens[i] = i % 2 ? ' ' : 'x';
+    assert(sh_launch_arguments_valid(tokens, 128));
+    assert(!sh_launch_arguments_valid(tokens, 130));
     uint32_t apps[] = {17, 29, 44, 0};
     assert(sh_subscription_list_contains(apps, 3, 4, 29));
     assert(!sh_subscription_list_contains(apps, 3, 4, 30));
@@ -156,6 +178,6 @@ int main(void)
     assert(!strcmp(sh_install_scm_word(SH_INSTALL_SCM_OFF), "off"));
     assert(!strcmp(sh_install_scm_word(SH_INSTALL_SCM_FAILED), "failed"));
     assert(!strcmp(sh_install_scm_word(7), "failed"));
-    puts("steam-host: launch-option, entitlement-list, launch-result, content-wait, config-wait, session-wait, CEG, service-manager "
+    puts("steam-host: launch-option, launch-arguments, entitlement-list, launch-result, content-wait, config-wait, session-wait, CEG, service-manager "
          "and install-service-manager validation cases passed");
 }

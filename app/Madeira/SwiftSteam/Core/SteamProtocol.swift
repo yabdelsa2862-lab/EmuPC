@@ -43,6 +43,12 @@ enum EMsg: UInt32 {
     case serviceMethod = 146
     case serviceMethodResponse = 147
     case serviceMethodCallFromClient = 151
+    // Friends (SteamFriends.swift).
+    case clientChangeStatus = 716
+    case clientFriendMsgIncoming = 759
+    case clientPersonaState = 766
+    case clientFriendsList = 767
+    case clientRequestFriendData = 815
 
     /// The raw value with the protobuf flag set.
     var masked: UInt32 { rawValue | EMsg.protoMask }
@@ -63,6 +69,11 @@ enum SteamServiceMethod: String {
     case cloudClientBeginFileUpload = "Cloud.ClientBeginFileUpload#1"
     case cloudClientCommitFileUpload = "Cloud.ClientCommitFileUpload#1"
     case cloudCompleteAppUploadBatch = "Cloud.CompleteAppUploadBatchBlocking#1"
+    /// Friends and their game invites (SteamFriends.swift).
+    case friendsListGet = "FriendsList.GetFriendsList#1"
+    case friendMessagesActiveSessions = "FriendMessages.GetActiveMessageSessions#1"
+    case friendMessagesRecent = "FriendMessages.GetRecentMessages#1"
+    case friendMessagesSendMessage = "FriendMessages.SendMessage#1"
 }
 
 // MARK: - Result codes

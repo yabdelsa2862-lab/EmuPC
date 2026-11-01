@@ -22,9 +22,6 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <pthread.h>
-#ifdef WINE_IOS
-#include <stdio.h> /* dprintf */
-#endif
 
 #include "ntstatus.h"
 #include "windef.h"
@@ -55,9 +52,6 @@ static inline const struct opengl_funcs *get_dc_funcs( HDC hdc )
     if (NtGdiGetDCDword( hdc, NtGdiHasOpenGL, &has_opengl ) && has_opengl)
         return __wine_get_opengl_driver( WINE_OPENGL_DRIVER_VERSION );
 
-#ifdef WINE_IOS
-    { static int n; if (n++ < 8) dprintf( 2, "[gl] hdc %p has no OpenGL (not a display or memory DC)\n", hdc ); }
-#endif
     RtlSetLastWin32Error( ERROR_INVALID_HANDLE );
     return &null_opengl_funcs;
 }
@@ -81,19 +75,66 @@ static inline GLsync get_unix_sync( GLsync sync )
 
 #ifdef _WIN64
 
+/* Madeira: guest addresses are converted with ios_wow_host_ptr() (wine/unixlib.h),
+ * which is ULongToPtr everywhere but iOS. A host pointer inside the guest window
+ * goes back to the guest by plain truncation: the window base is 4 GB aligned. */
 static inline void *copy_wow64_ptr32s( UINT_PTR address, ULONG count )
 {
-    ULONG *ptrs = (ULONG *)address;
+    ULONG *ptrs = ios_wow_host_ptr( address );
     void **tmp;
 
     if (!ptrs || !(tmp = calloc( count, sizeof(*tmp) ))) return NULL;
-    while (count--) tmp[count] = ULongToPtr(ptrs[count]);
+    while (count--) tmp[count] = ios_wow_host_ptr( ptrs[count] );
     return tmp;
 }
 
-static inline TEB *get_teb64( ULONG teb32 )
+/* A pointer parameter that is an offset into the buffer bound at `binding` when
+ * there is one, and a pointer to guest memory otherwise. Guest memory never lies
+ * in the first 64 KB, so smaller values are offsets (or NULL) without asking. */
+extern void *wow64_query_buffer_ptr( TEB *teb, ULONG value );
+
+static inline void *wow64_buffer_ptr( TEB *teb, GLenum binding, ULONG value )
 {
-    TEB32 *teb32_ptr = ULongToPtr( teb32 );
+    const struct opengl_funcs *funcs = teb->glTable;
+    GLint name = 0;
+
+    if (binding == GL_QUERY_BUFFER_BINDING) return wow64_query_buffer_ptr( teb, value );
+    if (value < 0x10000) return ULongToPtr( value );
+    if (funcs && funcs->p_glGetIntegerv) funcs->p_glGetIntegerv( binding, &name );
+    return name ? ULongToPtr( value ) : ios_wow_host_ptr( value );
+}
+
+static inline void *copy_wow64_buffer_ptr32s( TEB *teb, GLenum binding, UINT_PTR address, ULONG count )
+{
+    const struct opengl_funcs *funcs = teb->glTable;
+    ULONG *ptrs = ios_wow_host_ptr( address );
+    GLint name = 0;
+    void **tmp;
+
+    if (!ptrs || !(tmp = calloc( count, sizeof(*tmp) ))) return NULL;
+    if (funcs && funcs->p_glGetIntegerv) funcs->p_glGetIntegerv( binding, &name );
+    while (count--) tmp[count] = name ? ULongToPtr( ptrs[count] ) : ios_wow_host_ptr( ptrs[count] );
+    return tmp;
+}
+
+#ifdef WINE_IOS
+/* Madeira: 32-bit GL/WGL calls through these thunks, read by the winios GL
+ * driver's perf line (build/win32u-unix/opengl_ios.c). Weak: 0 when absent.
+ * ml1343: also counted per thunk (by its __func__) for the driver's stall
+ * report, which lists the entry points a stalled 32-bit caller keeps calling. */
+extern unsigned int madeira_gl_wow64_calls __attribute__((weak));
+extern void madeira_gl_count_call( const char *thunk ) __attribute__((weak));
+#endif
+
+#define get_teb64( teb32 ) get_teb64_from( (teb32), __func__ )
+
+static inline TEB *get_teb64_from( ULONG teb32, const char *caller )
+{
+#ifdef WINE_IOS
+    if (&madeira_gl_wow64_calls) __atomic_fetch_add( &madeira_gl_wow64_calls, 1, __ATOMIC_RELAXED );
+    if (madeira_gl_count_call) madeira_gl_count_call( caller );
+#endif
+    TEB32 *teb32_ptr = ios_wow_host_ptr( teb32 );
     return (TEB *)((char *)teb32_ptr + teb32_ptr->WowTebOffset);
 }
 

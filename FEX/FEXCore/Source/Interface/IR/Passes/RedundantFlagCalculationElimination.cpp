@@ -550,6 +550,15 @@ bool DeadFlagCalculationEliminination::EliminateDeadCode(IREmitter* IREmit, Ref 
     return false;
   }
 
+#if defined(_WIN32)
+  // An x86 load can fault even when nothing reads its value, and programs rely on that: HotSpot
+  // stops compiled loops at a safepoint with `test eax, [polling_page]`, whose only results are
+  // flags, then makes the page unreadable. Removing the load left such a loop unstoppable.
+  if (IROp->Op == OP_LOADMEM || IROp->Op == OP_LOADMEMTSO) {
+    return false;
+  }
+#endif
+
   IREmit->Remove(CodeNode);
   return true;
 }

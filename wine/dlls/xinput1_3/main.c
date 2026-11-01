@@ -803,13 +803,54 @@ static XINPUT_GAMEPAD host_last_keystroke[XUSER_MAX_COUNT];
 static SRWLOCK host_keystroke_lock = SRWLOCK_INIT;
 static LONG host_enabled = TRUE;
 
+/* Is a pad connected in the host slot? For callers that need nothing else, so
+ * they never run the XInputEnable handling below. */
+static BOOL host_pad_connected(DWORD index)
+{
+    XINPUT_STATE state;
+
+    if (index >= XUSER_MAX_COUNT) return FALSE;
+    return NtUserGetGamepadState(index, NtUserGamepadOp_State, &state);
+}
+
+/* Madeira (ml2114/ml2115): the program has called XInputEnable(FALSE). Many
+ * programs do that from WM_ACTIVATEAPP when their window loses activation and
+ * enable again when it comes back. At startup the port restores a window born
+ * minimized and brings it to the front from its own thread, and those messages
+ * can arrive unbalanced, leaving XInput disabled while the window is in front;
+ * the program then reads a connected pad at rest for good. When the calling
+ * process owns the foreground window the disable is taken as stale and the
+ * live state is returned. win32u answers both questions (the switch is read
+ * from the host environment there, so it applies to 32- and 64-bit processes
+ * alike); MADEIRA_XINPUT_ENABLE_FOREGROUND=0, or a win32u without the query,
+ * keeps the zeroed state. Each outcome is logged once per process. */
+static BOOL host_disable_is_stale(void)
+{
+    static LONG said_stale, said_zeroed;
+    DWORD flags = ~0u;
+
+    if (NtUserGetGamepadState(0, NtUserGamepadOp_Foreground, &flags))
+    {
+        if (!InterlockedExchange(&said_stale, 1))
+            ERR("[xinput] ml2115 XInput was disabled by the program, but its window is in front: "
+                "live state (MADEIRA_XINPUT_ENABLE_FOREGROUND=0 keeps it zeroed)\n");
+        return TRUE;
+    }
+    if (!InterlockedExchange(&said_zeroed, 1))
+        ERR("[xinput] ml2114 XInput disabled by the program: host pad state zeroed (%s)\n",
+            flags == ~0u ? "no foreground query in win32u" :
+            !(flags & NtUserGamepadForeground_Rule) ? "MADEIRA_XINPUT_ENABLE_FOREGROUND=0" :
+            "another process owns the foreground window");
+    return FALSE;
+}
+
 /* Fill state from the host slot. TRUE means a pad is connected there. */
 static BOOL host_pad_state(DWORD index, XINPUT_STATE *state)
 {
     memset(state, 0, sizeof(*state));
     if (index >= XUSER_MAX_COUNT) return FALSE;
     if (!NtUserGetGamepadState(index, NtUserGamepadOp_State, state)) return FALSE;
-    if (!InterlockedCompareExchange(&host_enabled, 0, 0))
+    if (!InterlockedCompareExchange(&host_enabled, 0, 0) && !host_disable_is_stale())
         memset(&state->Gamepad, 0, sizeof(state->Gamepad));
     return TRUE;
 }
@@ -834,12 +875,35 @@ static void host_pad_vibrate(DWORD index)
  * cheaper than the staleness bug a cache would buy. */
 static BOOL host_pad_any(void)
 {
-    XINPUT_STATE state;
     DWORD i;
 
     for (i = 0; i < XUSER_MAX_COUNT; i++)
-        if (host_pad_state(i, &state)) return TRUE;
+        if (host_pad_connected(i)) return TRUE;
     return FALSE;
+}
+
+/* ml2114: what a log needs to tell a launch where the program sees the pad
+ * from one where it does not. XInputEnable calls (8 per process) and the
+ * first state query per user index. */
+static void host_note_enable(BOOL enable)
+{
+    static LONG said;
+    DWORD flags = ~0u;
+
+    if (InterlockedIncrement(&said) > 8) return;
+    NtUserGetGamepadState(0, NtUserGamepadOp_Foreground, &flags);
+    ERR("[xinput] ml2114 XInputEnable(%d) slot0=%s foreground=%s\n", !!enable,
+        host_pad_connected(0) ? "connected" : "empty",
+        flags == ~0u ? "unknown" : (flags & NtUserGamepadForeground_Owner) ? "this process" : "another process");
+}
+
+static void host_note_query(DWORD index, const char *result)
+{
+    static LONG said[XUSER_MAX_COUNT];
+
+    if (index >= XUSER_MAX_COUNT || InterlockedExchange(&said[index], 1)) return;
+    ERR("[xinput] ml2114 first state query index=%lu: %s, XInput %s\n", index, result,
+        InterlockedCompareExchange(&host_enabled, 0, 0) ? "enabled" : "disabled");
 }
 
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved)
@@ -879,13 +943,12 @@ void WINAPI DECLSPEC_HOTPATCH XInputEnable(BOOL enable)
     to the controllers. Setting to true will send the last vibration
     value (sent to XInputSetState) to the controller and allow messages to
     be sent */
+    host_note_enable(enable);
     InterlockedExchange(&host_enabled, !!enable);
     if (host_pad_any())
     {
-        XINPUT_STATE host_state;
-
         for (index = 0; index < XUSER_MAX_COUNT; index++)
-            if (host_pad_state(index, &host_state)) host_pad_vibrate(index);
+            if (host_pad_connected(index)) host_pad_vibrate(index);
         return;
     }
 
@@ -902,7 +965,6 @@ void WINAPI DECLSPEC_HOTPATCH XInputEnable(BOOL enable)
 
 DWORD WINAPI DECLSPEC_HOTPATCH XInputSetState(DWORD index, XINPUT_VIBRATION *vibration)
 {
-    XINPUT_STATE host_state;
     DWORD ret;
 
     TRACE("index %lu, vibration %p.\n", index, vibration);
@@ -910,7 +972,7 @@ DWORD WINAPI DECLSPEC_HOTPATCH XInputSetState(DWORD index, XINPUT_VIBRATION *vib
     if (index >= XUSER_MAX_COUNT) return ERROR_BAD_ARGUMENTS;
 
     if (!vibration) return ERROR_BAD_ARGUMENTS;
-    if (host_pad_state(index, &host_state))
+    if (host_pad_connected(index))
     {
         host_vibration[index] = *vibration;
         host_pad_vibrate(index);
@@ -938,11 +1000,20 @@ static DWORD xinput_get_state(DWORD index, XINPUT_STATE *state)
     /* ml668: the host pad first, and before start_update_thread() - see the
      * banner above. This is the hot path: a game may call it once per frame per
      * pad, or in a spin loop at 1 kHz. */
-    if (host_pad_state(index, state)) return ERROR_SUCCESS;
+    if (host_pad_state(index, state))
+    {
+        host_note_query(index, "connected (host slot)");
+        return ERROR_SUCCESS;
+    }
 
     start_update_thread();
 
-    if (!controller_lock(&controllers[index])) return ERROR_DEVICE_NOT_CONNECTED;
+    if (!controller_lock(&controllers[index]))
+    {
+        host_note_query(index, "not connected");
+        return ERROR_DEVICE_NOT_CONNECTED;
+    }
+    host_note_query(index, "connected (HID)");
 
     *state = controllers[index].state;
     controller_unlock(&controllers[index]);
@@ -1218,30 +1289,44 @@ DWORD WINAPI DECLSPEC_HOTPATCH XInputGetCapabilities(DWORD index, DWORD flags, X
 
 DWORD WINAPI DECLSPEC_HOTPATCH XInputGetDSoundAudioDeviceGuids(DWORD index, GUID *render_guid, GUID *capture_guid)
 {
-    XINPUT_STATE host_state;
     FIXME("index %lu, render_guid %s, capture_guid %s stub!\n", index, debugstr_guid(render_guid),
           debugstr_guid(capture_guid));
 
     if (index >= XUSER_MAX_COUNT || !render_guid || !capture_guid) return ERROR_BAD_ARGUMENTS;
-    if (!host_pad_state(index, &host_state) && !controllers[index].device) return ERROR_DEVICE_NOT_CONNECTED;
+    if (!host_pad_connected(index) && !controllers[index].device) return ERROR_DEVICE_NOT_CONNECTED;
 
     return ERROR_NOT_SUPPORTED;
 }
 
 DWORD WINAPI DECLSPEC_HOTPATCH XInputGetBatteryInformation(DWORD index, BYTE type, XINPUT_BATTERY_INFORMATION* battery)
 {
-    XINPUT_STATE host_state;
     static int once;
 
     if (!once++) FIXME("index %lu, type %u, battery %p.\n", index, type, battery);
 
     if (index >= XUSER_MAX_COUNT) return ERROR_BAD_ARGUMENTS;
 
-    /* Battery reporting is not part of the host snapshot. Do not invent a
-     * wired/full battery for a wireless controller. */
-    if (host_pad_state(index, &host_state))
+    if (host_pad_connected(index))
     {
+        XINPUT_BATTERY_INFORMATION host_battery;
+
         if (!battery) return ERROR_BAD_ARGUMENTS;
+        /* ml2170: the app maps the controller's GCDeviceBattery to XInput's
+         * type and level (GamepadInput.swift) and win32u hands it over through
+         * NtUserGamepadOp_Battery. No pad here has a headset port. A win32u
+         * without the op, or env.MADEIRA_XINPUT_BATTERY = 0, answers 0 and the
+         * old answer below stands. */
+        if (NtUserGetGamepadState(index, NtUserGamepadOp_Battery, &host_battery))
+        {
+            if (type == BATTERY_DEVTYPE_HEADSET)
+            {
+                battery->BatteryType = BATTERY_TYPE_DISCONNECTED;
+                battery->BatteryLevel = BATTERY_LEVEL_EMPTY;
+            }
+            else *battery = host_battery;
+            return ERROR_SUCCESS;
+        }
+        /* Do not invent a wired/full battery for a wireless controller. */
         battery->BatteryType = BATTERY_TYPE_UNKNOWN;
         battery->BatteryLevel = BATTERY_LEVEL_EMPTY;
         return ERROR_SUCCESS;

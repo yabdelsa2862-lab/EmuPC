@@ -516,6 +516,9 @@ struct CMsgClientLogon {
     var machineID: Data = Data()
     var supportsRateLimitResponse: Bool = true
     var clientPackageVersion: UInt32 = 1771
+    var chatMode: UInt32 = 0
+    var uiMode: UInt32 = 0
+    var loginIDMask: UInt32 = 0
 
     /// Get the machine's primary IPv4 address in host byte order (for obfuscation).
     /// getifaddrs works on both macOS and iOS — Host.current() doesn't exist on iOS.
@@ -541,7 +544,7 @@ struct CMsgClientLogon {
         // Valve's own client always sends this; without it some CM servers silently ignore the logon.
         // NOTE: field 2 is deprecated_obfustucated_private_ip (uint32), field 11 is the correct CMsgIPAddress.
         let localIP = CMsgClientLogon.getLocalIPv4()
-        let obfuscatedIP = localIP ^ 0xBAADF00D
+        let obfuscatedIP = localIP ^ 0xBAADF00D ^ loginIDMask
         var ipEncoder = ProtobufEncoder()
         ipEncoder.writeFixed32(fieldNumber: 1, value: obfuscatedIP)
         encoder.writeSubmessage(fieldNumber: 11, value: ipEncoder.data)         // obfuscated_private_ip = 11
@@ -556,6 +559,12 @@ struct CMsgClientLogon {
         encoder.writeBytes(fieldNumber: 30, value: machineID)                   // machine_id = 30
         encoder.writeString(fieldNumber: 50, value: accountName)                // account_name = 50
         encoder.writeString(fieldNumber: 96, value: machineName)                // machine_name = 96
+        if chatMode != 0 {
+            encoder.writeUInt32(fieldNumber: 97, value: chatMode)               // chat_mode = 97
+        }
+        if uiMode != 0 {
+            encoder.writeUInt32(fieldNumber: 98, value: uiMode)                 // ui_mode = 98
+        }
         encoder.writeBool(fieldNumber: 102, value: supportsRateLimitResponse)   // supports_rate_limit_response = 102
         encoder.writeString(fieldNumber: 108, value: accessToken)               // access_token = 108
         return encoder.data

@@ -544,6 +544,45 @@ HRESULT ExtractEntireResourceViewDescription(const RESOURCE_DESC *pResourceDesc,
       if (pViewDescOut->Format == DXGI_FORMAT_UNKNOWN) {
         pViewDescOut->Format = pResourceDesc->Format;
       }
+      /* D3D11 semantics: an SRV created with MipLevels == (UINT)-1 ("all
+       * remaining mips") reports the RESOLVED count from GetDesc (Wine's
+       * normalize_srv_desc does the same). Keeping -1 here leaks into
+       * ID3D11ShaderResourceView::GetDesc and DS3 sizes a per-mip array with
+       * it (0xFFFFFFFF * 8 bytes -> NULL -> crash at DarkSoulsIII+0x176d65b).
+       * pResourceDesc->MipLevels is already resolved (0 -> full chain) at
+       * texture creation. */
+      if constexpr (std::is_same_v<VIEW_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC1>) {
+        const UINT total = pResourceDesc->MipLevels;
+        auto resolve = [total](UINT most, UINT &levels) {
+          if (levels == ~0u && most < total)
+            levels = total - most;
+        };
+        switch (pViewDescOut->ViewDimension) {
+        case D3D11_SRV_DIMENSION_TEXTURE1D:
+          resolve(pViewDescOut->Texture1D.MostDetailedMip, pViewDescOut->Texture1D.MipLevels);
+          break;
+        case D3D11_SRV_DIMENSION_TEXTURE1DARRAY:
+          resolve(pViewDescOut->Texture1DArray.MostDetailedMip, pViewDescOut->Texture1DArray.MipLevels);
+          break;
+        case D3D11_SRV_DIMENSION_TEXTURE2D:
+          resolve(pViewDescOut->Texture2D.MostDetailedMip, pViewDescOut->Texture2D.MipLevels);
+          break;
+        case D3D11_SRV_DIMENSION_TEXTURE2DARRAY:
+          resolve(pViewDescOut->Texture2DArray.MostDetailedMip, pViewDescOut->Texture2DArray.MipLevels);
+          break;
+        case D3D11_SRV_DIMENSION_TEXTURE3D:
+          resolve(pViewDescOut->Texture3D.MostDetailedMip, pViewDescOut->Texture3D.MipLevels);
+          break;
+        case D3D11_SRV_DIMENSION_TEXTURECUBE:
+          resolve(pViewDescOut->TextureCube.MostDetailedMip, pViewDescOut->TextureCube.MipLevels);
+          break;
+        case D3D11_SRV_DIMENSION_TEXTURECUBEARRAY:
+          resolve(pViewDescOut->TextureCubeArray.MostDetailedMip, pViewDescOut->TextureCubeArray.MipLevels);
+          break;
+        default:
+          break;
+        }
+      }
     }
     return S_OK;
   } else {

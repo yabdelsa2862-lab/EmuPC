@@ -165,6 +165,34 @@ public:
 
   void free_blocks(uint64_t coherent_id);
 
+  /* DXMT_CMDLIST_KEEP_BLOCK: free_blocks(~0) for a ring whose every pointer is
+   * dead (a recycled command list), except that the first block survives, emptied,
+   * when it has the ring's normal size. MTLD3D11CommandList::Reset used to free a
+   * 2 MB malloc'd block per command list and the next recording malloc'd a new one:
+   * in Dark Souls III ~960 a second, each a fresh NtAllocateVirtualMemory (heap
+   * "large block"), first-touch faults and an NtFreeVirtualMemory that makes FEX
+   * invalidate the 2 MB range on every guest thread under its global code lock. */
+  void
+  free_blocks_keep_first() {
+    std::lock_guard<mutex> lock(mutex_);
+    if (fifo.empty())
+      return;
+    Allocation first = std::move(fifo.front());
+    fifo.pop();
+    while (!fifo.empty()) {
+      if (fifo.front().reusable_oversize) --reusable_oversize_blocks_;
+      fifo.pop();
+    }
+    if (first.total_size == ring_block_size() && !first.reusable_oversize) {
+      first.allocated_size = 0;
+      first.last_used_seq_id = 0;
+      first.inc_time_to_live = 0;
+      fifo.push(std::move(first));
+    } else if (first.reusable_oversize) {
+      --reusable_oversize_blocks_;
+    }
+  }
+
 private:
   struct Allocation {
     size_t allocated_size;

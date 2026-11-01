@@ -119,15 +119,22 @@ enum MadeiraDock {
                 if !libraries.contains(where: { $0.caseInsensitiveCompare(relative) == .orderedSame }) { libraries.append(relative) }
             }
         }
+        // Libraries on external drives (ExternalDrives.swift). They are reached
+        // through drive_c/External/<name> links, so they resolve outside drive_c.
+        let external = ExternalDrives.steamLibraries
+        for library in external where !libraries.contains(where: { $0.caseInsensitiveCompare(library) == .orderedSame }) {
+            libraries.append(library)
+        }
         var result: [DockGame] = []
         // Apps that only lend depots to another install ("Shared Only", e.g. GTA V
         // Enhanced's RGL/SC 1899670) have a record but nothing to start. A game that
         // lends depots but has its own installed too (a base game whose depots its
         // expansions share) stays: the same test as the uninstall (SteamInstall.swift).
         var lent: [Int: Set<String>] = [:], installed: [Int: Set<String>] = [:]
-        for library in libraries.prefix(16) {
+        for library in libraries.prefix(32) {
             let folder = drive.appendingPathComponent(library, isDirectory: true)
-            guard folder.resolvingSymlinksInPath().path.hasPrefix(drive.resolvingSymlinksInPath().path + "/"),
+            let isExternal = external.contains { $0.caseInsensitiveCompare(library) == .orderedSame }
+            guard isExternal || folder.resolvingSymlinksInPath().path.hasPrefix(drive.resolvingSymlinksInPath().path + "/"),
                   let names = try? fm.contentsOfDirectory(atPath: folder.path) else { continue }
             for file in names.sorted().prefix(2000) where file.hasPrefix("appmanifest_") && file.hasSuffix(".acf") {
                 guard let data = try? Data(contentsOf: folder.appendingPathComponent(file)) else { continue }
@@ -236,6 +243,9 @@ enum MadeiraDock {
                     ? "Steam signed in but did not confirm this game's license in time. Export the log before trying again."
                     : "Steam did not finish signing in. Check the connection and try again."
             }
+            if result == 54, fields["launch-user-arguments-invalid"] != nil {
+                return "The game's launch arguments are invalid or too long. Edit them in Game details and try again."
+            }
             if result == 35 { return "Steam did not confirm a license for this game on the signed-in account." }
             // Offline start (madeira-dock docs/OFFLINE.md): Valve's client decides.
             if result == 50 {
@@ -321,6 +331,7 @@ enum MadeiraDock {
         "session-offline-logon-retry", "session-offline-logon-state", "session-offline-callback-id",
         "session-offline-entitled", "session-offline-listed", "session-offline-timeout-state",
         "session-offline-fallback", "session-offline-ready",
+        "launch-user-arguments-bytes", "launch-user-arguments-invalid",
         "launch-client-error", "launch-option-index", "launch-option-invalid", "launch-option-missing",
         "launch-update-wait", "launch-update-retry", "launch-update-ready", "launch-update-gave-up",
         "launch-config-wait", "launch-config-gave-up", "launch-session-wait", "launch-session-gave-up",
@@ -431,7 +442,7 @@ enum MadeiraDock {
     }
 
     /// The host's environment for one launch.
-    static func configure(_ game: DockGame, launchOption: UInt32 = 0) {
+    static func configure(_ game: DockGame, launchOption: UInt32 = 0, arguments: String = "") {
         for key in ["MADEIRA_STEAM_HOST_PROBE", "MADEIRA_STEAM_HOST_SESSION", "MADEIRA_STEAM_HOST_LOGIN", "MADEIRA_STEAM_HOST_LAUNCH"] {
             setenv(key, "1", 1)
         }
@@ -442,6 +453,10 @@ enum MadeiraDock {
         setenv("MADEIRA_STEAM_HOST_CLIENT_DIR", SteamRuntimeFiles.windowsRoot, 1)
         setenv("MADEIRA_STEAM_HOST_EXPECTED_INSTALL", game.windowsInstallPath, 1)
         setenv("MADEIRA_STEAM_HOST_LOG", "C:\\madeira-dock.txt", 1)
+        // The client receives only this game's extra arguments, separately from the host's
+        // explorer/cmd command. An empty profile clears any previous game's choice.
+        if arguments.isEmpty { unsetenv("MADEIRA_STEAM_HOST_ARGUMENTS") }
+        else { setenv("MADEIRA_STEAM_HOST_ARGUMENTS", arguments, 1) }
         // The install record lists per-user executables: Dock asks Valve's client to prepare
         // them before it launches. env.MADEIRA_DOCK_CEG = 0 never asks.
         if game.customExecutables && SteamSignIn.flag("MADEIRA_DOCK_CEG", default: true) {

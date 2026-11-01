@@ -1,4 +1,4 @@
-/* MABD local: the one piece of the iOS OpenGL glue that needs gl4es's
+/* EmuPC: the one piece of the iOS OpenGL glue that needs gl4es's
  * internals (built against gl4es/src). gl4es draws "the screen" (framebuffer
  * 0) into glstate->fbo.mainfbo_fbo; iOS has no window framebuffer, so the
  * window's IOSurface-backed FBO (winios_gl.m) becomes that main FBO, and its

@@ -446,6 +446,8 @@ int send_thread_signal( struct thread *thread, int sig )
 #define IOS_SCF_SIZE  0x330
 #define IOS_SCF_RESTORE_FLAGS 0x10c           /* syscall_frame.restore_flags */
 #define IOS_CTX_ARM64_CONTROL 0x00400001u     /* CONTEXT_ARM64 | CONTEXT_ARM64_CONTROL */
+#define IOS_CPUAREA_EMU_BASE_OFF   0x08     /* CHPE_V2_CPU_AREA_INFO.EmulatorStackBase */
+#define IOS_CPUAREA_EMU_LIMIT_OFF  0x10     /* CHPE_V2_CPU_AREA_INFO.EmulatorStackLimit */
 #define IOS_CPUAREA_CTX64_OFF      0x18     /* CHPE_V2_CPU_AREA_INFO.ContextAmd64 */
 #define IOS_A64_SEGCS   0x38
 #define IOS_A64_SEGDS   0x3a
@@ -512,11 +514,14 @@ static int ios_safe_read( uint64_t addr, void *buf, unsigned int size )
  * the timing this changes. Failures are always reported (capped). */
 int ios_real_suspend_enabled(void)
 {
-    static int env = -1;
-    if (env < 0)
+    /* Read on every call: the app sets it per session (a game's "Pause threads
+     * fully" switch, BCDLaunch.realSuspend), and this server runs again in the
+     * same process for the next session of the app run. Logged when it changes. */
+    static int logged = -1;
+    const char *e = getenv( "MADEIRA_REAL_SUSPEND" );
+    int env = (e && e[0] == '1') ? 1 : 0;
+    if (env != __atomic_exchange_n( &logged, env, __ATOMIC_RELAXED ))
     {
-        const char *e = getenv( "MADEIRA_REAL_SUSPEND" );
-        env = (e && e[0] == '1') ? 1 : 0;
         fprintf( stderr, "[real-susp] ml730 MADEIRA_REAL_SUSPEND=%d\n", env );
     }
     return env;
@@ -556,6 +561,37 @@ static int rs_flag_ok( struct thread *thread, const char *who )
     return 0;
 }
 
+/* When taking a persistent Mach hold on a 64-bit guest thread, avoid freezing
+ * the thread inside a FEX C++ helper (CompileBlock / LookupBlock /
+ * HandleUnalignedAccess) where hardware sp is in [EmulatorStackLimit,
+ * EmulatorStackBase) and the thread may hold CodeInvalidationMutex or the
+ * shared host malloc lock. In JIT code, hardware sp equals EmulatorStackBase. */
+static int ios_step_out_of_fex_helper( mach_port_t port, struct thread *thread )
+{
+    uint64_t cpuarea = 0, emu_base = 0, emu_limit = 0;
+    arm_thread_state64_t arm;
+    mach_msg_type_number_t count;
+    int tries;
+
+    if (!thread->teb || ios_process_is_wow64( thread->process )) return 1;
+    if (!ios_safe_read( (uint64_t)thread->teb + IOS_TEB_CHPE_CPUAREA_OFF, &cpuarea, 8 ) || !cpuarea ||
+        !ios_safe_read( cpuarea + IOS_CPUAREA_EMU_BASE_OFF, &emu_base, 8 ) ||
+        !ios_safe_read( cpuarea + IOS_CPUAREA_EMU_LIMIT_OFF, &emu_limit, 8 ) ||
+        !emu_limit || !emu_base || emu_limit >= emu_base)
+        return 1;
+
+    for (tries = 0; tries < 40; tries++)
+    {
+        count = ARM_THREAD_STATE64_COUNT;
+        if (thread_get_state( port, ARM_THREAD_STATE64, (thread_state_t)&arm, &count )) break;
+        if (arm.__sp < emu_limit || arm.__sp >= emu_base) break;
+        thread_resume( port );
+        usleep( 50 );
+        if (thread_suspend( port )) return 0;
+    }
+    return 1;
+}
+
 /* Apply ONE persistent Mach hold. Idempotent per thread. */
 int ios_thread_mach_hold( struct thread *thread )
 {
@@ -572,6 +608,7 @@ int ios_thread_mach_hold( struct thread *thread )
                                  MACH_MSG_TYPE_COPY_SEND, &port, &type ))
         return 0;
     kr = thread_suspend( port );
+    if (!kr && !ios_step_out_of_fex_helper( port, thread )) kr = KERN_FAILURE;
     mach_port_deallocate( mach_task_self(), port );
     if (kr)
     {
@@ -890,6 +927,12 @@ int ios_fill_thread_context( struct thread *thread,
         return 0;
 
     if (thread_suspend( port )) { mach_port_deallocate( mach_task_self(), port ); return 0; }
+    if (ios_pending_persistent_hold == thread && ios_real_suspend_enabled() &&
+        !thread->ios_mach_suspended && !ios_step_out_of_fex_helper( port, thread ))
+    {
+        mach_port_deallocate( mach_task_self(), port );
+        return 0;
+    }
 
     /* --- native ARM64 context --- */
     kr = thread_get_state( port, ARM_THREAD_STATE64, (thread_state_t)&arm, &count );
@@ -932,11 +975,12 @@ int ios_fill_thread_context( struct thread *thread,
      * through to the old behaviour rather than inventing state. */
     if (have_native)
     {
+        int substituted = 0;
         static int ctx_frame_env = -1;
         if (ctx_frame_env < 0)
         {
             const char *e = getenv( "MADEIRA_CTX_FRAME" );
-            ctx_frame_env = (e && e[0] == '1') ? 1 : 0;
+            ctx_frame_env = !(e && e[0] == '0');
         }
         if (ctx_frame_env && thread->teb)
         {
@@ -964,6 +1008,7 @@ int ios_fill_thread_context( struct thread *thread,
                         native->ctl.arm64_regs.sp     = fsp;
                         native->ctl.arm64_regs.pc     = fpc;
                         native->ctl.arm64_regs.pstate = *(uint32_t *)(f + IOS_SCF_CPSR);
+                        substituted = 1;
                         if (n_sub++ < 48)
                             fprintf( stderr, "[ctx-frame] ml716 #%d tid=%04x source=syscall-frame "
                                      "mach_pc=%p sp=%p inside_syscall=1 frame=%p frame_pc=%p frame_sp=%p\n",
@@ -972,6 +1017,25 @@ int ios_fill_thread_context( struct thread *thread,
                                      (void *)(uintptr_t)fpc, (void *)(uintptr_t)fsp );
                     }
                 }
+            }
+        }
+        /* For a 64-bit guest thread halted inside FEX JIT (arm.__sp on the
+         * emulator stack), all 15 non-RSP x64 GPRs live in the exact ARM64
+         * registers that context_arm_to_x64() reads, while guest RSP lives in
+         * x23 (FEX SRA REG_RSP) and hardware sp is EmulatorStackBase. Report
+         * x23 as sp so GetThreadContext scans the guest stack instead of the
+         * emulator stack. */
+        if (!substituted && thread->teb && !ios_process_is_wow64( thread->process ))
+        {
+            uint64_t cpuarea = 0, emu_base = 0, emu_limit = 0;
+            if (ios_safe_read( (uint64_t)thread->teb + IOS_TEB_CHPE_CPUAREA_OFF, &cpuarea, 8 ) && cpuarea &&
+                ios_safe_read( cpuarea + IOS_CPUAREA_EMU_BASE_OFF, &emu_base, 8 ) &&
+                ios_safe_read( cpuarea + IOS_CPUAREA_EMU_LIMIT_OFF, &emu_limit, 8 ) &&
+                emu_limit && emu_base && emu_limit < emu_base &&
+                arm.__sp >= emu_limit && arm.__sp <= emu_base &&
+                arm.__x[23] >= 0x10000 && !(arm.__x[23] & 7))
+            {
+                native->ctl.arm64_regs.sp = arm.__x[23];
             }
         }
     }

@@ -3705,7 +3705,61 @@ void OpDispatchBuilder::NEGOp(OpcodeArgs) {
   }
 }
 
+#if defined(_WIN32)
+// x86 division raises #DE where arm64 division quietly returns a result: for a zero divisor, and for
+// DIV whenever the quotient does not fit its register. Branch to a trap before dividing; the
+// division itself follows in a new block, which loads its operands again.
+// IDIV's quotient overflow (such as INT_MIN / -1) is not detected.
+void OpDispatchBuilder::DivideErrorCheck(OpcodeArgs, bool Signed) {
+  const auto Size = OpSizeFromSrc(Op);
+  const auto Bits = IR::OpSizeAsBits(Size);
+
+  CalculateDeferredFlags();
+
+  Ref Divisor = LoadSourceGPR(Op, Op->Dest, Op->Flags, {.AllowUpperGarbage = true});
+  if (Size != OpSize::i64Bit) {
+    Divisor = _Bfe(OpSize::i64Bit, Bits, 0, Divisor);
+  }
+
+  // Nonzero when the division may go ahead. CondJump only branches on a register against zero.
+  Ref NoTrap = Divisor;
+  if (!Signed) {
+    // An unsigned 2N/N-bit quotient fits, and the divisor is nonzero, exactly when the dividend's
+    // high half is below the divisor.
+    Ref High = Size == OpSize::i8Bit ? _Bfe(OpSize::i64Bit, 8, 8, LoadGPRRegister(X86State::REG_RAX)) : LoadGPRRegister(X86State::REG_RDX);
+    if (Size == OpSize::i16Bit || Size == OpSize::i32Bit) {
+      High = _Bfe(OpSize::i64Bit, Bits, 0, High);
+    }
+    NoTrap = _Select(OpSize::i64Bit, OpSize::i64Bit, CondClass::ULT, High, Divisor, Constant(1), Constant(0));
+  }
+
+  auto CondJump_ = CondJump(NoTrap, CondClass::NEQ);
+
+  auto TrapBlock = CreateNewCodeBlockAfter(GetCurrentBlock());
+  SetFalseJumpTarget(CondJump_, TrapBlock);
+  SetCurrentCodeBlock(TrapBlock);
+  StartNewBlock();
+  // A fault: RIP stays on the dividing instruction.
+  _StoreContextGPR(GetGPROpSize(), GetRelocatedPC(Op, -Op->InstSize), offsetof(FEXCore::Core::CPUState, rip));
+  Break(FEXCore::IR::BreakDefinition {
+    .ErrorRegister = 0,
+    .Signal = Core::FAULT_SIGSEGV,
+    .TrapNumber = X86State::X86_TRAPNO_DE,
+    .si_code = 0x80,
+  });
+
+  auto ContinueBlock = CreateNewCodeBlockAfter(TrapBlock);
+  SetTrueJumpTarget(CondJump_, ContinueBlock);
+  SetCurrentCodeBlock(ContinueBlock);
+  StartNewBlock();
+}
+#endif
+
 void OpDispatchBuilder::DIVOp(OpcodeArgs) {
+#if defined(_WIN32)
+  // First: the blocks it ends cannot share values with the division below.
+  DivideErrorCheck(Op, false);
+#endif
   const auto GPRSize = GetGPROpSize();
   auto Size = OpSizeFromSrc(Op);
 
@@ -3747,6 +3801,10 @@ void OpDispatchBuilder::DIVOp(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::IDIVOp(OpcodeArgs) {
+#if defined(_WIN32)
+  // First: the blocks it ends cannot share values with the division below.
+  DivideErrorCheck(Op, true);
+#endif
   // This loads the divisor
   Ref Divisor = LoadSourceGPR(Op, Op->Dest, Op->Flags);
 

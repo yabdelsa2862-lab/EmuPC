@@ -260,6 +260,9 @@ extern obj_handle_t async_handoff( struct async *async, data_size_t *result, int
 extern void queue_async( struct async_queue *queue, struct async *async );
 extern void async_set_timeout( struct async *async, timeout_t timeout, unsigned int status );
 extern void async_set_result( struct object *obj, unsigned int status, apc_param_t total );
+#ifdef WINE_IOS
+extern int async_can_defer_to_issuer( struct object *obj, struct thread *thread );
+#endif
 extern void async_set_completion_callback( struct async *async, async_completion_callback func, void *private );
 extern void async_set_unknown_status( struct async *async );
 extern void set_async_pending( struct async *async );

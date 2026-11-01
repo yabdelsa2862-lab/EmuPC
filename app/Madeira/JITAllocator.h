@@ -119,7 +119,7 @@ extern unsigned long madeira_early_pool_base;     /* placeholder directly above 
 extern unsigned long madeira_early_intruder_base, madeira_early_intruder_size;   /* ml1135: first mapping above the window (above the placeholder when one was taken) */
 extern unsigned madeira_early_intruder_tag, madeira_early_intruder_prot;
 extern unsigned long madeira_early_pool_size;
-/* MABD local: the low gap's other free runs, held from image load (JITAllocator.c). */
+/* EmuPC: the low gap's other free runs, held from image load (JITAllocator.c). */
 #define MADEIRA_EARLY_RUNS 8
 extern unsigned long madeira_early_runs_base[MADEIRA_EARLY_RUNS], madeira_early_runs_size[MADEIRA_EARLY_RUNS];
 extern int madeira_early_runs_count;

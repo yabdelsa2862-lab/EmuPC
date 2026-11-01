@@ -535,7 +535,9 @@ static const GUID kD3DDeviceD3DUID = {0xaeb2cdd4, 0x6e41, 0x43ea, {0x94, 0x1c, 0
 // DXMT_CONFIG, four hex digits, absent = off) and reachable on device through
 // Documents/madeira-dxmt.txt. Overriding the ids alone leaves the description
 // saying what the adapter really is; d3d9.customDeviceDesc overrides that too
-// for a title that reads the string instead of the numbers.
+// for a title that reads the string instead of the numbers, and
+// d3d9.customDriver the driver file name (Fallout: New Vegas picks its render
+// path from the description and the driver, nv4_disp.dll for NVIDIA).
 //
 // wined3d has the same pair of settings (VideoPciVendorID / VideoPciDeviceID,
 // wined3d_main.c) for the same reason.
@@ -545,6 +547,7 @@ struct AdapterIdOverride {
   int32_t vendorId;
   int32_t deviceId;
   std::string desc;
+  std::string driver;
 };
 
 int32_t
@@ -574,6 +577,7 @@ adapterIdOverride() {
     o.vendorId = parsePciId(cfg.getOption<std::string>("d3d9.customVendorId", ""));
     o.deviceId = parsePciId(cfg.getOption<std::string>("d3d9.customDeviceId", ""));
     o.desc = cfg.getOption<std::string>("d3d9.customDeviceDesc", "");
+    o.driver = cfg.getOption<std::string>("d3d9.customDriver", "");
     return o;
   }();
   return ov;
@@ -617,6 +621,8 @@ MTLD3D9Interface::GetAdapterIdentifier(UINT Adapter, DWORD Flags, D3DADAPTER_IDE
     pIdentifier->DeviceId = (DWORD)ov.deviceId;
   if (!ov.desc.empty())
     std::snprintf(pIdentifier->Description, MAX_DEVICE_IDENTIFIER_STRING, "%s", ov.desc.c_str());
+  if (!ov.driver.empty())
+    std::snprintf(pIdentifier->Driver, MAX_DEVICE_IDENTIFIER_STRING, "%s", ov.driver.c_str());
 
   // Apps gate driver-bug workarounds on this version; a low value
   // re-enables ancient workaround paths. DXVK reports INT64_MAX
@@ -636,7 +642,7 @@ MTLD3D9Interface::GetAdapterIdentifier(UINT Adapter, DWORD Flags, D3DADAPTER_IDE
         (unsigned)(pIdentifier->DriverVersion.HighPart >> 16), (unsigned)(pIdentifier->DriverVersion.HighPart & 0xffff),
         (unsigned)(pIdentifier->DriverVersion.LowPart >> 16), (unsigned)(pIdentifier->DriverVersion.LowPart & 0xffff),
         pIdentifier->Description, pIdentifier->DeviceName,
-        (ov.vendorId >= 0 || ov.deviceId >= 0 || !ov.desc.empty()) ? "  [overridden by DXMT_CONFIG d3d9.custom*]" : ""
+        (ov.vendorId >= 0 || ov.deviceId >= 0 || !ov.desc.empty() || !ov.driver.empty()) ? "  [overridden by DXMT_CONFIG d3d9.custom*]" : ""
     );
 
   return D3D_OK;

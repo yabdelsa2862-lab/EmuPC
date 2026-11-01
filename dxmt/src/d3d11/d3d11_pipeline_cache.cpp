@@ -6,6 +6,7 @@
 #include "dxmt_shader_cache.hpp"
 #include "dxmt_tasks.hpp"
 #include "log/log.hpp"
+#include "config/config.hpp"   /* ml1222: d3d11.keepShaderIR */
 #include "sha1/sha1_util.hpp"
 #include "../d3d10/d3d10_shader.hpp"
 #if defined(__i386__)  /* madeira-bcd: 32-bit (i386) builds only, as the fork shipped it */
@@ -62,6 +63,8 @@ madeira_parse_cb_sizes(const void *pBytecode, uint32_t BytecodeLength, uint16_t 
 #include "../d3d10/d3d10_input_layout.hpp"
 #include <cstring>
 #include <shared_mutex>
+#include <atomic>
+#include <vector>
 
 namespace dxmt {
 
@@ -128,10 +131,25 @@ class PipelineCache : public MTLD3D11PipelineCacheBase {
     uint16_t cb_vec4_[14] = {}; /* madeira-bcd: short constant buffers */
 #endif
     std::unordered_map<ShaderVariant, std::unique_ptr<CompiledShader>> variants;
+    /* ml1222: the shader object SM50Initialize returns (SM50ShaderInternal)
+     * lives in the host heap and, like this object, for the device's
+     * lifetime: shaders_ never evicts. airconv no longer keeps its parsed
+     * program (see with_parsed_program), but the object still holds the
+     * resource maps, the argument buffer layout, the signatures and a copy of
+     * the bytecode. Ori and the Will of the Wisps creates thousands of shaders
+     * on its title screen and draws a few hundred. Unless
+     * d3d11.keepShaderIR=1, the object is destroyed once the reflection and
+     * the argument info are taken, and only the bytecode (PE heap, a few KB)
+     * is kept; the first variant compile creates the object again under
+     * parse_mutex_ and keeps it. SM50Compile parses the program again for
+     * every compile, so that first compile parses the bytecode twice. */
+    std::vector<uint8_t> bytecode_;
+    dxmt::mutex parse_mutex_;
 
   public:
     CachedSM50Shader(PipelineCache *cache, sm50_shader_t shader_transfered,
-                     const Sha1Digest &hash, MTL_SHADER_REFLECTION &reflection)
+                     const Sha1Digest &hash, MTL_SHADER_REFLECTION &reflection,
+                     const void *pBytecode, uint32_t BytecodeLength, bool keep_ir)
         : cache(cache), shader(shader_transfered), sha1_(hash),
           reflection_(reflection) {
       if (reflection_.NumConstantBuffers + reflection_.NumArguments) {
@@ -144,21 +162,43 @@ class PipelineCache : public MTLD3D11PipelineCacheBase {
       } else {
         arguments_info_buffer = nullptr;
       }
+      if (!keep_ir) {
+        bytecode_.assign((const uint8_t *)pBytecode, (const uint8_t *)pBytecode + BytecodeLength);
+        SM50Destroy(shader);
+        shader = nullptr;
+      }
     }
 
     ~CachedSM50Shader() {
       if (shader) {
         SM50Destroy(shader);
-        if (arguments_info_buffer)
-          free(arguments_info_buffer);
         shader = nullptr;
       }
+      if (arguments_info_buffer)
+        free(arguments_info_buffer);
     };
 
     CachedSM50Shader(CachedSM50Shader &&moved) = delete;
     CachedSM50Shader(const CachedSM50Shader &copy) = delete;
 
-    virtual sm50_shader_t handle() { return shader; };
+    /* Only the variant compile tasks call this (d3d11_shader.cpp). */
+    virtual sm50_shader_t handle() {
+      std::lock_guard<dxmt::mutex> lock(parse_mutex_);
+      if (!shader && !bytecode_.empty()) {
+        sm50_error_t err = nullptr;
+        MTL_SHADER_REFLECTION reflection;
+        if (SM50Initialize(bytecode_.data(), bytecode_.size(), &shader, &reflection, &err)) {
+          ERR("ml1222: failed to parse shader ", sha1_.string(), " again: ", SM50GetErrorMessageString(err));
+          SM50FreeError(err);
+          shader = nullptr;
+        } else {
+          cache->NoteShaderReparsed(bytecode_.size());
+          bytecode_.clear();
+          bytecode_.shrink_to_fit();
+        }
+      }
+      return shader;
+    };
     virtual MTL_SHADER_REFLECTION &reflection() { return reflection_; }
     virtual MTL_SM50_SHADER_ARGUMENT *constant_buffers_info() {
       return arguments_info_buffer;
@@ -263,6 +303,25 @@ class PipelineCache : public MTLD3D11PipelineCacheBase {
   std::unordered_map<Sha1Digest, std::unique_ptr<CachedSM50Shader>> shaders_;
   std::shared_mutex mutex_shares;
 
+  /* ml1222: d3d11.keepShaderIR=1 keeps every shader object as SM50Initialize
+   * returns it (what airconv alone does) */
+  bool keep_shader_ir_ = Config::getInstance().getOption<int>("d3d11.keepShaderIR", 0) != 0;
+  std::atomic<uint64_t> ir_shaders_{0}, ir_bytecode_bytes_{0}, ir_reparsed_{0}, ir_reparsed_bytes_{0};
+
+  void NoteShaderCached(size_t bytecode_length) {
+    uint64_t n = ++ir_shaders_;
+    uint64_t kept = (ir_bytecode_bytes_ += keep_shader_ir_ ? 0 : bytecode_length);
+    if (n == 1 || (n & 1023) == 0)
+      WARN("[shader-ir] ml1222 ", n, " unique shaders cached, shader objects ",
+           keep_shader_ir_ ? "kept (d3d11.keepShaderIR=1)" : "dropped", "; bytecode kept ",
+           kept >> 10, " KB; recreated for a compile: ", ir_reparsed_.load(), " (",
+           ir_reparsed_bytes_.load() >> 10, " KB of bytecode)");
+  }
+  void NoteShaderReparsed(size_t bytecode_length) {
+    ++ir_reparsed_;
+    ir_reparsed_bytes_ += bytecode_length;
+  }
+
   std::unordered_map<MTL_GRAPHICS_PIPELINE_DESC, std::unique_ptr<MTLCompiledGraphicsPipeline>> pipelines_;
   dxmt::mutex mutex_;
 
@@ -293,7 +352,8 @@ class PipelineCache : public MTLD3D11PipelineCacheBase {
       SM50FreeError(err);
       return nullptr;
     }
-    auto shader = std::make_unique<CachedSM50Shader>(this, sm50, sha1, reflection);
+    auto shader = std::make_unique<CachedSM50Shader>(this, sm50, sha1, reflection,
+                                                     pBytecode, BytecodeLength, keep_shader_ir_);
 #if defined(__i386__)  /* madeira-bcd: 32-bit (i386) builds only, as the fork shipped it */
     shader->set_cb_declared(pBytecode, BytecodeLength);
 #endif
@@ -308,6 +368,7 @@ class PipelineCache : public MTLD3D11PipelineCacheBase {
       shader->bytecode_length = BytecodeLength;
       memcpy(shader->bytecode, pBytecode, BytecodeLength);
 #endif
+      NoteShaderCached(BytecodeLength);
       return shaders_.emplace(sha1, std::move(shader)).first->second.get();
     }
   }

@@ -277,4 +277,147 @@ __declspec(dllexport) void fa_DestroyVoice(void *v)
     ((fn_destroy)fa_real[FA_DESTROY])(v);
 }
 
+/* ---------------------------------------------------------------------------
+ * Steam Overlay live callback delivery (steamclient64.dll).
+ *
+ * Steamworks games poll Steam_BGetCallback / Steam_FreeLastCallback every frame
+ * (both legacy SteamAPI_RunCallbacks and SDK 1.50+ ManualDispatch). When the
+ * user accepts an invite or clicks Join in Madeira's Steam Overlay while a
+ * game is running, Swift writes C:\madeira\steam_join_cb.bin and the next poll
+ * delivers GameLobbyJoinRequested_t (333) or GameRichPresenceJoinRequested_t
+ * (337) directly into the running game.
+ * --------------------------------------------------------------------------- */
+
+#define ST_SLOTS 2
+enum { ST_BGET = 0, ST_FREE };
+
+__declspec(dllexport) void *st_real[ST_SLOTS];
+
+__declspec(dllimport) void *__stdcall CreateFileA(
+    const char *, uint32_t, uint32_t, void *, uint32_t, uint32_t, void *);
+__declspec(dllimport) int __stdcall ReadFile(
+    void *, void *, uint32_t, uint32_t *, void *);
+__declspec(dllimport) int __stdcall CloseHandle(void *);
+__declspec(dllimport) int __stdcall DeleteFileA(const char *);
+
+#pragma pack(push, 8)
+typedef struct {
+    int32_t  m_hSteamUser;
+    int32_t  m_iCallback;
+    uint8_t *m_pubParam;
+    int32_t  m_cubParam;
+} SteamCallbackMsg;
+
+typedef struct {
+    uint64_t m_steamIDLobby;
+    uint64_t m_steamIDFriend;
+} SteamLobbyJoinReq;
+
+typedef struct {
+    uint64_t m_steamIDFriend;
+    char     m_rgchConnect[256];
+} SteamRichPresenceJoinReq;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
+    uint32_t magic;       /* 0x4D4A4E31 ('MJN1') */
+    int32_t  callback_id; /* 333 = LobbyJoin, 337 = RichPresenceJoin */
+    uint64_t lobby_id;
+    uint64_t friend_id;
+    char     connect[256];
+} MadeiraJoinPayload;
+#pragma pack(pop)
+
+typedef uint8_t (*fn_st_bget)(int32_t, SteamCallbackMsg *, void *, void *);
+typedef void    (*fn_st_free)(int32_t, void *);
+
+static int32_t                  st_last_user = 1;
+static int32_t                  st_injected_pipe = 0;
+static uint64_t                 st_polls = 0;
+static SteamLobbyJoinReq        st_lobby_req;
+static SteamRichPresenceJoinReq st_rp_req;
+
+static void st_emit(const char *tag, uint64_t a, uint64_t b)
+{
+    char buf[128], *p = buf;
+    p = tft_str( p, "[steam-overlay] " );
+    p = tft_str( p, tag );
+    p = tft_str( p, " a=" ); p = tft_hex( p, a );
+    p = tft_str( p, " b=" ); p = tft_hex( p, b );
+    *p++ = '\n'; *p = 0;
+    OutputDebugStringA( buf );
+}
+
+__declspec(dllexport) int st_BGetCallback(int32_t pipe, SteamCallbackMsg *cb, void *a3, void *a4)
+{
+    uint8_t r = ((fn_st_bget)st_real[ST_BGET])(pipe, cb, a3, a4);
+    if (r)
+    {
+        if (cb && cb->m_hSteamUser > 0)
+            st_last_user = cb->m_hSteamUser;
+        return 1;
+    }
+
+    if (pipe > 0 && cb && st_injected_pipe == 0)
+    {
+        uint64_t n = ++st_polls;
+        if (n > 120 && (n & 31) == 0)
+        {
+            void *h = CreateFileA( "C:\\madeira\\steam_join_cb.bin",
+                                   0x80000000U, 7U, 0, 3U, 0, 0 );
+            if (h != (void *)(intptr_t)-1)
+            {
+                MadeiraJoinPayload payload;
+                uint32_t nread = 0;
+                int ok = ReadFile( h, &payload, sizeof(payload), &nread, 0 );
+                CloseHandle( h );
+                DeleteFileA( "C:\\madeira\\steam_join_cb.bin" );
+
+                if (ok && nread >= 24 && payload.magic == 0x4D4A4E31U)
+                {
+                    if (payload.callback_id == 333 && payload.lobby_id != 0)
+                    {
+                        st_lobby_req.m_steamIDLobby  = payload.lobby_id;
+                        st_lobby_req.m_steamIDFriend = payload.friend_id;
+                        cb->m_hSteamUser = st_last_user ? st_last_user : 1;
+                        cb->m_iCallback  = 333;
+                        cb->m_pubParam   = (uint8_t *)&st_lobby_req;
+                        cb->m_cubParam   = (int32_t)sizeof(st_lobby_req);
+                        st_injected_pipe = pipe;
+                        st_emit( "GameLobbyJoinRequested_t", payload.lobby_id, payload.friend_id );
+                        return 1;
+                    }
+                    else if (payload.callback_id == 337 && payload.connect[0] != 0)
+                    {
+                        int i;
+                        st_rp_req.m_steamIDFriend = payload.friend_id;
+                        for (i = 0; i < 255 && payload.connect[i]; i++)
+                            st_rp_req.m_rgchConnect[i] = payload.connect[i];
+                        st_rp_req.m_rgchConnect[i] = 0;
+                        cb->m_hSteamUser = st_last_user ? st_last_user : 1;
+                        cb->m_iCallback  = 337;
+                        cb->m_pubParam   = (uint8_t *)&st_rp_req;
+                        cb->m_cubParam   = (int32_t)sizeof(st_rp_req);
+                        st_injected_pipe = pipe;
+                        st_emit( "GameRichPresenceJoinRequested_t", payload.friend_id, (uint64_t)i );
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+__declspec(dllexport) void st_FreeLastCallback(int32_t pipe, void *a2)
+{
+    if (st_injected_pipe != 0 && st_injected_pipe == pipe)
+    {
+        st_injected_pipe = 0;
+        return;
+    }
+    ((fn_st_free)st_real[ST_FREE])(pipe, a2);
+}
+
 int __stdcall DllMainCRTStartup(void *h, unsigned r, void *x) { (void)h;(void)r;(void)x; return 1; }

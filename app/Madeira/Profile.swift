@@ -5,7 +5,7 @@ import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
-// MABD local: the player's profile, console style. A name and a picture (a photo
+// EmuPC: the player's profile, console style. A name and a picture (a photo
 // or one of the built-in avatars), shown in the controller home's top bar and
 // guide, set up in onboarding and Settings › Profile. The profile page sums up
 // the library: games installed, their size, the last one played, and which
@@ -298,7 +298,7 @@ struct ProfilePage: View {
 }
 
 
-/// MABD local: the system photo picker, presented from the top of the key
+/// EmuPC: the system photo picker, presented from the top of the key
 /// window rather than from a SwiftUI view, so it opens from any overlay (the
 /// controller home's profile page sits in a ZStack, where `.photosPicker`
 /// did not reliably open or deliver). Loads the image itself (HEIC and iCloud

@@ -2084,12 +2084,22 @@ static NTSTATUS do_getsockopt( HANDLE handle, IO_STATUS_BLOCK *io, int level,
     socklen_t len = out_size;
     NTSTATUS status;
     int ret;
+    /* The kernel fills a local copy and the caller's buffer is written by an ordinary store. On iOS, Madeira maps
+     * anonymous RWX memory as an RX view with a separate RW alias (W^X): the kernel cannot write such a buffer
+     * (EFAULT, so WSAEFAULT where Windows succeeds), while a store into it is redirected to the alias. */
+    char local[256], *tmp = out_size <= sizeof(local) ? local : malloc( out_size );
 
+    if (!tmp) return STATUS_NO_MEMORY;
     if ((status = server_get_unix_fd( handle, 0, &fd, &needs_close, NULL, NULL )))
+    {
+        if (tmp != local) free( tmp );
         return status;
+    }
 
-    ret = getsockopt( fd, level, option, out_buffer, &len );
+    ret = getsockopt( fd, level, option, tmp, &len );
     if (needs_close) close( fd );
+    if (!ret) memcpy( out_buffer, tmp, min( len, out_size ) );
+    if (tmp != local) free( tmp );
     if (ret) return sock_errno_to_status( errno );
     if (io)
     {
@@ -2668,7 +2678,13 @@ NTSTATUS sock_ioctl( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, void *apc
                 return status;
 
 #ifdef IP_DONTFRAG
-            ret = getsockopt( fd, IPPROTO_IP, IP_DONTFRAG, out_buffer, &len );
+            {   /* a local copy, see do_getsockopt */
+                char value[sizeof(DWORD)];
+
+                if (len > sizeof(value)) len = sizeof(value);
+                ret = getsockopt( fd, IPPROTO_IP, IP_DONTFRAG, value, &len );
+                if (!ret) memcpy( out_buffer, value, len );
+            }
 #elif defined(IP_MTU_DISCOVER) && defined(IP_PMTUDISC_DONT)
             {
                 int value;
@@ -2885,7 +2901,13 @@ NTSTATUS sock_ioctl( HANDLE handle, HANDLE event, PIO_APC_ROUTINE apc, void *apc
                 return status;
 
 #ifdef IPV6_DONTFRAG
-            ret = getsockopt( fd, IPPROTO_IPV6, IPV6_DONTFRAG, out_buffer, &len );
+            {   /* a local copy, see do_getsockopt */
+                char value[sizeof(DWORD)];
+
+                if (len > sizeof(value)) len = sizeof(value);
+                ret = getsockopt( fd, IPPROTO_IPV6, IPV6_DONTFRAG, value, &len );
+                if (!ret) memcpy( out_buffer, value, len );
+            }
 #elif defined(IPV6_MTU_DISCOVER) && defined(IPV6_PMTUDISC_DONT)
             {
                 int value;

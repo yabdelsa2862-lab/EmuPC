@@ -134,6 +134,16 @@ struct ios_get_fex_arena_params
     ULONG64 end;    /* OUT: exclusive */
 };
 
+/* A PE loader write made after an ARM64EC image was copied into the iOS JIT
+ * pool must also reach that copy. In particular, compiler TLS accesses read
+ * AddressOfIndex from the copy while alloc_tls_slot writes the PE image. */
+struct ios_sync_pe_write_params
+{
+    void *address;       /* IN: address in the original PE image */
+    ULONG size;          /* IN: bounded to a single DWORD for TLS indices */
+    ULONG synced;        /* OUT: 1 if a JIT-pool copy existed and was updated */
+};
+
 enum ntdll_unix_funcs
 {
     unix_load_so_dll,
@@ -151,6 +161,7 @@ enum ntdll_unix_funcs
     unix_ios_jit_alias_probe,   /* ml631 — APPEND ONLY (see note above) */
     unix_ios_mono_bridge_ptr,   /* ml648 — APPEND ONLY: inserting renumbers every later ordinal */
     unix_ios_get_fex_arena,     /* ml800 — APPEND ONLY */
+    unix_ios_sync_pe_write,     /* append only: sync loader TLS index into JIT copy */
 };
 
 extern unixlib_handle_t __wine_unixlib_handle;

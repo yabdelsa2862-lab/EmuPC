@@ -9,7 +9,7 @@ import UIKit
 import os
 import UserNotifications
 
-// MABD local: why the last game closed, and what to change.
+// EmuPC: why the last game closed, and what to change.
 //
 // iOS ends an app that goes over its memory limit (jetsam) without telling it,
 // so a game that "just closed" leaves no exit report. While a library game runs,
@@ -311,7 +311,7 @@ struct HeatGuardSettingsSection: View {
 // MARK: - Reopen after closing
 
 
-/// MABD local: iOS does not let an app start itself again. When Madeira has to
+/// EmuPC: iOS does not let an app start itself again. When Madeira has to
 /// close (a game that will not stop, a restart between games, a JIT pool it
 /// cannot use), it first leaves a notification, "tap to open Madeira again",
 /// which brings it straight back. Nothing can be done when iOS itself ends the
@@ -433,12 +433,14 @@ struct MadeiraShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(intent: ClosedByItselfIntent(), phrases: ["Did \(.applicationName) close by itself"],
                     shortTitle: "Closed by itself?", systemImageName: "arrow.clockwise")
+        AppShortcut(intent: OpenGameIntent(), phrases: ["Play \(\.$game) in \(.applicationName)", "Open \(\.$game) in \(.applicationName)"],
+                    shortTitle: "Open Game", systemImageName: "gamecontroller")
     }
 }
 
 // MARK: - In-game guide
 
-/// MABD local: the in-game menu with a controller, console style: a panel from
+/// EmuPC: the in-game menu with a controller, console style: a panel from
 /// the left with the game's name and the time, and the things a player reaches
 /// for in a game. "All settings" opens the full (touch) session menu.
 @MainActor
@@ -447,6 +449,8 @@ final class InGameGuide: ObservableObject {
     @Published var focus = 0
     /// The full session menu instead of the guide.
     @Published var fullMenu = false
+    /// Presents the Steam Overlay (Friends & invites) sheet over the running game.
+    @Published var steamOverlay = false
 
     /// action gets -1 (left), 1 (right) or 0 (A or a tap).
     struct Item { let title: String; let value: String?; let symbol: String; var music = false; let action: (Int) -> Void }
@@ -455,8 +459,13 @@ final class InGameGuide: ObservableObject {
         let fpsModes = [3, 4, 1, 0]
         let fpsNames = [3: "30", 4: "40", 1: "60", 0: "Max", 2: "Uncapped"]
         let controls = TouchControlsModel.shared
+        let inviteCount = SteamFriendsModel.shared.invites.count + SteamFriendsModel.shared.joinableFriends.count
         return [
             Item(title: "Resume", value: nil, symbol: "play.fill") { _ in model.menu = false },
+            Item(title: "Steam Overlay", value: inviteCount > 0 ? "\(inviteCount)" : nil, symbol: "person.2.fill") { _ in
+                model.menu = false
+                self.steamOverlay = true
+            },
             Item(title: "Quit game", value: nil, symbol: "xmark.circle.fill") { _ in model.menu = false; model.stopGame() },
             Item(title: "Music", value: nil, symbol: "music.note", music: true) { d in
                 if d == 0 { MusicNow.shared.toggle() } else { MusicNow.shared.skip(d) }
@@ -610,7 +619,7 @@ struct StopLaunchPrompt: View {
 
 // MARK: - Music
 
-/// MABD local: the player's own music while they play. Game sound mixes with
+/// EmuPC: the player's own music while they play. Game sound mixes with
 /// it (instead of stopping it), and the guides show Apple Music's song with
 /// play/pause and skip. iOS gives no other app's playback to EmuPC, so this is
 /// the Music app only.

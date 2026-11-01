@@ -15,6 +15,8 @@ struct MadeiraJITRequest: Codable, Sendable {
         /// The memory experiment (MemoryProbe): the helper fills shared memory
         /// for Madeira to map.
         case memoryProbe
+        /// ml1310: report what the extension's own process may map (read-only probe).
+        case probe
     }
 
     let operation: Operation
@@ -38,6 +40,11 @@ struct MadeiraJITRequest: Codable, Sendable {
 
     static var resetDDI: MadeiraJITRequest {
         MadeiraJITRequest(operation: .resetDDI, targetPID: nil,
+                          pairingData: nil, scriptBase64: nil)
+    }
+
+    static var probe: MadeiraJITRequest {
+        MadeiraJITRequest(operation: .probe, targetPID: nil,
                           pairingData: nil, scriptBase64: nil)
     }
 

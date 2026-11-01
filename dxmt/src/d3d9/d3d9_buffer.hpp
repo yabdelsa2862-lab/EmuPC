@@ -93,11 +93,12 @@ public:
   size() const {
     return m_size;
   }
-  // Host-mapped pointer to the authoritative vertex data. Callers must
+  // Host-mapped pointer to the authoritative vertex data: the allocation draws
+  // read when the buffer is direct-mapped, else the host mirror. Callers must
   // null-check.
   const void *
   hostPointer() const {
-    return m_hostPtr;
+    return m_direct ? m_dynamic->immediateMappedMemory() : m_hostPtr;
   }
   // FVF the buffer was created with (0 for a non-FVF buffer). ProcessVertices
   // reads it to synthesise the destination layout when the caller passes no
@@ -123,6 +124,10 @@ private:
   // See MTLD3D9VertexBuffer::m_dirty and ::m_writeLocked.
   bool m_dirty = false;
   bool m_writeLocked = false;
+  // Lock hands out the allocation draws read, not the mirror
+  // (d3d9_buffer_map.hpp, direct mapping): a DEFAULT + DYNAMIC buffer in a
+  // 64-bit guest. There is then no mirror and nothing to refresh.
+  bool m_direct = false;
   // Nested Lock/Unlock depth; the upload fires on the outer Unlock only.
   D3D9BufferLockCount m_lockCount;
   // The process-owned host mirror, never registered with Metal; the dtor
@@ -206,12 +211,13 @@ public:
     return m_dirty;
   }
   void refreshWholeMirror();
-  // Host-mapped pointer to the current index data: the host mirror, which is
+  // Host-mapped pointer to the current index data: the allocation draws read
+  // when the buffer is direct-mapped, else the host mirror, which is then
   // authoritative. The index fan-remap path in d3d9_device.cpp reads the
   // source indices through it to remap them; callers must null-check.
   const void *
   hostPointer() const {
-    return m_hostPtr;
+    return m_direct ? m_dynamic->immediateMappedMemory() : m_hostPtr;
   }
   MTLD3D9Device *
   deviceRaw() const {
@@ -241,6 +247,8 @@ private:
   // then leave every later write unpublished. While this is set, a refresh
   // re-uploads unconditionally.
   bool m_writeLocked = false;
+  // See MTLD3D9VertexBuffer::m_direct.
+  bool m_direct = false;
   D3D9BufferLockCount m_lockCount;
   UINT m_size;
   DWORD m_usage;

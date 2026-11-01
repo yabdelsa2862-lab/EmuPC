@@ -568,7 +568,7 @@ enum StikJITHelper {
                                            madeira_early_intruder_tag, madeira_early_intruder_prot), level: .error)
             }
         }
-        // MABD local: the low gap's other free runs, held since image load
+        // EmuPC: the low gap's other free runs, held since image load
         // (JITAllocator.c), released here so the census and the debugger see one
         // large hole. The 16MB pin at 0x119000000 stays.
         if madeira_early_runs_count > 0 {

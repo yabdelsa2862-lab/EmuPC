@@ -3,7 +3,7 @@
 
 import SwiftUI
 
-// MABD local: what a GOG or Epic game row shows before downloading, like a
+// EmuPC: what a GOG or Epic game row shows before downloading, like a
 // Steam row: its sizes, and whether it should run. The compatibility estimate
 // (GameCompatibility: anti-cheat and Steam's minimum requirements, RAM among
 // them) is keyed by Steam app, so the game is looked up on Steam by its title;
@@ -301,8 +301,8 @@ final class StoreDetailsModel: ObservableObject {
 
     func requestEpic(_ game: EpicGame) {
         load("epic:\(game.appName)") {
-            let token = try? await EpicLibrary.shared.tokens().accessToken
-            let url = EpicAPI.catalog + "/catalog/api/shared/namespace/\(game.namespace)/bulk/items?id=\(game.catalogItemID)&country=US&locale=en"
+            let token: String? = nil   // the public catalog answers without a sign-in
+            let url = "https://catalog-public-service-prod06.ol.epicgames.com" + "/catalog/api/shared/namespace/\(game.namespace)/bulk/items?id=\(game.catalogItemID)&country=US&locale=en"
             guard let root = await Self.json(url, token: token) as? [String: Any],
                   let item = root[game.catalogItemID] as? [String: Any] else { return nil }
             let images = item["keyImages"] as? [[String: Any]] ?? []
@@ -564,7 +564,7 @@ struct PosterImage: View {
 }
 
 
-/// MABD local: a large shared cache for artwork and screenshots (AsyncImage and
+/// EmuPC: a large shared cache for artwork and screenshots (AsyncImage and
 /// URLSession.shared use URLCache.shared, whose default is a few MB). Set once at launch.
 enum ImageCache {
     static func configure() {
@@ -573,7 +573,7 @@ enum ImageCache {
     }
 }
 
-/// MABD local: upstream's Steam sizes are UInt64 `downloadBytes` and
+/// EmuPC: upstream's Steam sizes are UInt64 `downloadBytes` and
 /// `installBytes`; the store pages read them as Int64.
 extension SteamOwnedGame {
     var diskBytes: Int64? { installBytes.map { Int64(clamping: $0) } }

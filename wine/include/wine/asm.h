@@ -274,13 +274,14 @@
                        ".seh_endprologue\n\t" \
                        ".byte 0x4c,0x8b,0xd1\n\t" /* 00: movq %rcx,%r10 */ \
                        ".byte 0xb8\n\t"           /* 03: movl $i,%eax */ \
-                       ".long (" #id ")\n\t"                            \
+                       ".long (" #id ")\n\t" \
                        ".byte 0xf6,0x04,0x25,0x08,0x03,0xfe,0x7f,0x01\n\t" /* 08: testb $1,0x7ffe0308 */ \
                        ".byte 0x75,0x03\n\t"      /* 10: jne 15 */ \
                        ".byte 0x0f,0x05\n\t"      /* 12: syscall */ \
                        ".byte 0xc3\n\t"           /* 14: ret */ \
                        ".byte 0xcd,0x2e\n\t"      /* 15: int $0x2e */ \
-                       ".byte 0xc3" )             /* 17: ret */
+                       ".byte 0xc3\n\t"           /* 17: ret */ \
+                       ".byte 0x0f,0x1f,0x84,0x00,0x00,0x00,0x00,0x00" )   /* 18..1f: 8-byte nop */
 #elif defined __x86_64__
 /* Chromium depends on syscall thunks having the same form as on
  * Windows. For 64-bit systems the only viable form we can emulate is

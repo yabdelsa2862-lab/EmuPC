@@ -1,4 +1,4 @@
-// MABD local: OpenGL for Windows programs on iOS.
+// EmuPC: OpenGL for Windows programs on iOS.
 //
 // The pieces: gl4es (../../gl4es) turns the program's desktop OpenGL 2.1 into
 // OpenGL ES; iOS's own OpenGL ES (EAGL) runs it; a window has no framebuffer

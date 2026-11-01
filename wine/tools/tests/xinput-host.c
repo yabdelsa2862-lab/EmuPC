@@ -8,12 +8,21 @@
 static XINPUT_STATE sample;
 static BOOL connected[XUSER_MAX_COUNT] = { TRUE, FALSE, FALSE, FALSE };
 static XINPUT_VIBRATION motors[XUSER_MAX_COUNT];
+static BOOL battery_published, foreground_owner;
+static XINPUT_BATTERY_INFORMATION host_battery;
 
 static ULONG_PTR WINAPI query(ULONG_PTR arg1, ULONG_PTR arg2, ULONG code)
 {
     UINT index = arg1 & 0xff, op = (arg1 >> 8) & 0xff;
     assert(code == NtUserCallTwoParam_GetGamepadState);
     assert(index < XUSER_MAX_COUNT && arg2);
+    if (op == NtUserGamepadOp_Foreground)
+    {
+        /* ml2115: index ignored; 0 leaves the buffer alone, like an older win32u. */
+        if (!foreground_owner) return 0;
+        *(DWORD *)arg2 = NtUserGamepadForeground_Rule | NtUserGamepadForeground_Owner;
+        return 1;
+    }
     if (!connected[index]) return 0;
     if (op == NtUserGamepadOp_State) *(XINPUT_STATE *)arg2 = sample;
     else if (op == NtUserGamepadOp_Caps)
@@ -24,6 +33,11 @@ static ULONG_PTR WINAPI query(ULONG_PTR arg1, ULONG_PTR arg2, ULONG code)
         caps->SubType = XINPUT_DEVSUBTYPE_GAMEPAD;
     }
     else if (op == NtUserGamepadOp_SetVibration) motors[index] = *(XINPUT_VIBRATION *)arg2;
+    else if (op == NtUserGamepadOp_Battery)
+    {
+        if (!battery_published) return 0;
+        *(XINPUT_BATTERY_INFORMATION *)arg2 = host_battery;
+    }
     else assert(0);
     return 1;
 }
@@ -74,6 +88,11 @@ int main(void)
     assert(XInputGetState(0, &state) == ERROR_SUCCESS);
     XINPUT_GAMEPAD zero = {0};
     assert(!memcmp(&state.Gamepad, &zero, sizeof(zero)));
+    /* ml2115: a disable while the caller owns the foreground window is stale. */
+    foreground_owner = TRUE;
+    assert(XInputGetState(0, &state) == ERROR_SUCCESS && state.Gamepad.bLeftTrigger == 255);
+    foreground_owner = FALSE;
+    assert(XInputGetState(0, &state) == ERROR_SUCCESS && !state.Gamepad.bLeftTrigger);
     vibration.wLeftMotorSpeed = 0x4000;
     assert(XInputSetState(0, &vibration) == ERROR_SUCCESS);
     assert(!motors[0].wLeftMotorSpeed && !motors[0].wRightMotorSpeed);
@@ -84,11 +103,20 @@ int main(void)
     assert(!motors[0].wLeftMotorSpeed && !motors[0].wRightMotorSpeed);
     assert(XInputGetBatteryInformation(0, BATTERY_DEVTYPE_GAMEPAD, &battery) == ERROR_SUCCESS);
     assert(battery.BatteryType == BATTERY_TYPE_UNKNOWN);
+    battery_published = TRUE;
+    host_battery.BatteryType = BATTERY_TYPE_NIMH;
+    host_battery.BatteryLevel = BATTERY_LEVEL_LOW;
+    assert(XInputGetBatteryInformation(0, BATTERY_DEVTYPE_GAMEPAD, &battery) == ERROR_SUCCESS);
+    assert(battery.BatteryType == BATTERY_TYPE_NIMH && battery.BatteryLevel == BATTERY_LEVEL_LOW);
+    assert(XInputGetBatteryInformation(0, BATTERY_DEVTYPE_HEADSET, &battery) == ERROR_SUCCESS);
+    assert(battery.BatteryType == BATTERY_TYPE_DISCONNECTED);
+    assert(XInputGetBatteryInformation(0, BATTERY_DEVTYPE_GAMEPAD, NULL) == ERROR_BAD_ARGUMENTS);
+    assert(XInputGetBatteryInformation(1, BATTERY_DEVTYPE_GAMEPAD, &battery) == ERROR_DEVICE_NOT_CONNECTED);
     assert(XInputGetDSoundAudioDeviceGuids(0, &render, &capture) == ERROR_NOT_SUPPORTED);
     assert(XInputGetDSoundAudioDeviceGuids(1, &render, &capture) == ERROR_DEVICE_NOT_CONNECTED);
     connected[0] = FALSE;
     assert(!host_pad_state(0, &state));
     assert(!memcmp(&state.Gamepad, &zero, sizeof(zero)));
-    puts("PASS: host XInput state/caps/edges/disable, vibration, invalid arguments, battery and per-index audio");
+    puts("PASS: host XInput state/caps/edges/disable, vibration, invalid arguments, stale disable (ml2115), unknown and published battery, and per-index audio");
     return 0;
 }

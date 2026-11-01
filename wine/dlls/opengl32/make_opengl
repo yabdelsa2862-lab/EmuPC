@@ -354,6 +354,122 @@ my %pointer_array_count =
      "glDrawCommandsStatesNV" => "count",
      "glListDrawCommandsStatesClientNV" => "count",
     );
+# Madeira (iOS): a 32-bit guest address is not a host address there, guest
+# address a lives at host B + a (see wine/unixlib.h), so a wow64 thunk turns
+# every embedded pointer into a host one with ios_wow_host_ptr() (ULongToPtr on
+# every other platform). These pointer parameters are an OFFSET instead while
+# a buffer is bound to the given binding point, and must then pass unchanged.
+my %wow64_unpack_buffer_params =
+    (
+     "glBitmap" => "bitmap",
+     "glColorSubTable" => "data",
+     "glColorSubTableEXT" => "data",
+     "glColorTable" => "table",
+     "glColorTableEXT" => "table",
+     "glConvolutionFilter1D" => "image",
+     "glConvolutionFilter1DEXT" => "image",
+     "glConvolutionFilter2D" => "image",
+     "glConvolutionFilter2DEXT" => "image",
+     "glDrawPixels" => "pixels",
+     "glPixelMapfv" => "values",
+     "glPixelMapuiv" => "values",
+     "glPixelMapusv" => "values",
+     "glPolygonStipple" => "mask",
+     "glSeparableFilter2D" => "row|column",
+     "glSeparableFilter2DEXT" => "row|column",
+    );
+my %wow64_pack_buffer_params =
+    (
+     "glGetColorTable" => "table",
+     "glGetCompressedTexImage" => "img",
+     "glGetCompressedTexImageARB" => "img",
+     "glGetCompressedTextureImage" => "pixels",
+     "glGetCompressedTextureSubImage" => "pixels",
+     "glGetConvolutionFilter" => "image",
+     "glGetHistogram" => "values",
+     "glGetMinmax" => "values",
+     "glGetPixelMapfv" => "values",
+     "glGetPixelMapuiv" => "values",
+     "glGetPixelMapusv" => "values",
+     "glGetPolygonStipple" => "mask",
+     "glGetSeparableFilter" => "row|column|span",
+     "glGetTexImage" => "pixels",
+     "glGetTextureImage" => "pixels",
+     "glGetTextureSubImage" => "pixels",
+     "glGetnColorTable" => "table",
+     "glGetnColorTableARB" => "table",
+     "glGetnCompressedTexImage" => "pixels",
+     "glGetnCompressedTexImageARB" => "img",
+     "glGetnConvolutionFilter" => "image",
+     "glGetnConvolutionFilterARB" => "image",
+     "glGetnHistogram" => "values",
+     "glGetnHistogramARB" => "values",
+     "glGetnMinmax" => "values",
+     "glGetnMinmaxARB" => "values",
+     "glGetnPixelMapfv" => "values",
+     "glGetnPixelMapfvARB" => "values",
+     "glGetnPixelMapuiv" => "values",
+     "glGetnPixelMapuivARB" => "values",
+     "glGetnPixelMapusv" => "values",
+     "glGetnPixelMapusvARB" => "values",
+     "glGetnPolygonStipple" => "pattern",
+     "glGetnPolygonStippleARB" => "pattern",
+     "glGetnSeparableFilter" => "row|column|span",
+     "glGetnSeparableFilterARB" => "row|column|span",
+     "glGetnTexImage" => "pixels",
+     "glGetnTexImageARB" => "img",
+     "glReadPixels" => "pixels",
+     "glReadnPixels" => "data",
+     "glReadnPixelsARB" => "data",
+    );
+
+my %wow64_buffer_seen;
+
+# The binding a pointer parameter is relative to while a buffer is bound to it,
+# or "" when it is always a pointer.
+sub get_wow64_buffer_binding($$)
+{
+    my ($name, $pname) = @_;
+    return "GL_PIXEL_UNPACK_BUFFER_BINDING"
+        if defined $wow64_unpack_buffer_params{$name} && $pname =~ /^($wow64_unpack_buffer_params{$name})$/;
+    return "GL_PIXEL_UNPACK_BUFFER_BINDING"
+        if $name =~ /^gl(Compressed)?(Tex|Texture|MultiTex)(Sub)?Image[123]D/ && $pname =~ /^(pixels|data|bits)$/;
+    return "GL_PIXEL_PACK_BUFFER_BINDING"
+        if defined $wow64_pack_buffer_params{$name} && $pname =~ /^($wow64_pack_buffer_params{$name})$/;
+    return "GL_DRAW_INDIRECT_BUFFER_BINDING"
+        if $name =~ /Indirect/ && $pname eq "indirect";
+    return "GL_ELEMENT_ARRAY_BUFFER_BINDING"
+        if $name =~ /^gl(Multi)?Draw(Range)?Elements/ && $pname eq "indices";
+    return "GL_ARRAY_BUFFER_BINDING"
+        if $name =~ /^gl(?!Get).*Pointer(EXT|ARB|NV)?$/ && $pname =~ /^(pointer|ptr)$/;
+    return "GL_ARRAY_BUFFER_BINDING"
+        if $name eq "glInterleavedArrays" && $pname eq "pointer";
+    # ARB_query_buffer_object: the result goes to an offset in the query buffer.
+    return "GL_QUERY_BUFFER_BINDING"
+        if $name =~ /^glGetQueryObject(i|ui|i64|ui64)v(ARB|EXT)?$/ && $pname eq "params";
+    return "";
+}
+
+# PTR32 arguments that are not guest pointers: real handles, and the guest
+# callback and its user data, which are only stored and handed back to the
+# 32-bit side.
+sub is_wow64_raw_arg($$$)
+{
+    my ($name, $arg_type, $pname) = @_;
+    return 1 if $arg_type =~ /^(HDC|HENHMETAFILE|GLeglImageOES|GLeglClientBufferEXT|GLVULKANPROCNV)$/;
+    return 1 if $arg_type =~ /GLDEBUGPROC/;
+    return 1 if $name =~ /DebugMessageCallback/;
+    return 0;
+}
+
+# The unix side expression for a PTR32 argument.
+sub get_wow64_ptr_arg($$$)
+{
+    my ($name, $arg_type, $pname) = @_;
+    return "ULongToPtr(params->$pname)" if is_wow64_raw_arg( $name, $arg_type, $pname );
+    return "ios_wow_host_ptr(params->$pname)";
+}
+
 my %pointer_is_offset =
     (
      "glGetPointerv" => "params",
@@ -509,7 +625,15 @@ sub generate_unix_thunk($$$$)
                     $arg_type =~ s/^const //;
                 }
                 $vars .= "    $arg_type$pname;\n";
-                $input_conv .= "    $pname = copy_wow64_ptr32s( params->$pname, params->$pointer_array_count{$_} );\n";
+                if (my $binding = get_wow64_buffer_binding( $name, $pname ))
+                {
+                    $wow64_buffer_seen{"$name:$pname"} = 1;
+                    $input_conv .= "    $pname = copy_wow64_buffer_ptr32s( teb, $binding, params->$pname, params->$pointer_array_count{$_} );\n";
+                }
+                else
+                {
+                    $input_conv .= "    $pname = copy_wow64_ptr32s( params->$pname, params->$pointer_array_count{$_} );\n";
+                }
                 $output_conv .= "    free( $pname );\n";
                 $call_args .= " $pname,";
             }
@@ -517,7 +641,7 @@ sub generate_unix_thunk($$$$)
             {
                 $arg_type =~ s/\*$//;
                 $vars .= "    $arg_type$pname\_arg;\n";
-                $output_conv .= "    *(PTR32 *)UlongToPtr(params->$pname) = PtrToUlong( $pname\_arg );\n";
+                $output_conv .= "    *(PTR32 *)ios_wow_host_ptr(params->$pname) = PtrToUlong( $pname\_arg );\n";
                 $call_args .= " &$pname\_arg,";
             }
             elsif ($arg_type =~ /(sizei|int)ptr/)
@@ -526,16 +650,21 @@ sub generate_unix_thunk($$$$)
             }
             elsif ($arg_type =~ /GLsync/)
             {
-                $call_args .= " get_unix_sync( ULongToPtr(params->$pname) ),";
+                $call_args .= " get_unix_sync( ios_wow_host_ptr(params->$pname) ),";
+            }
+            elsif (my $binding = get_wow64_buffer_binding( $name, $pname ))
+            {
+                $call_args .= " wow64_buffer_ptr( teb, $binding, params->$pname ),";
+                $wow64_buffer_seen{"$name:$pname"} = 1;
             }
             else
             {
-                $call_args .= " ULongToPtr(params->$pname),";
+                $call_args .= " " . get_wow64_ptr_arg( $name, $arg_type, $pname ) . ",";
                 $need_manual_thunk = 1 if $arg_type =~ /(\*.*\*|(sizei|int)ptr.*\*)/;
                 $need_lock = 1 if $arg_type =~ /GLsync/;
             }
         }
-        $call_args .= " UlongToHandle( params->ret )," if $func_ret =~ /HPBUFFERARB|HGLRC|GLsync/;
+        $call_args .= " ios_wow_host_ptr( params->ret )," if $func_ret =~ /HPBUFFERARB|HGLRC|GLsync/;
         if (!is_void_func($func))
         {
             my $ret_type = get_arg_type( $func->[0] );
@@ -611,7 +740,7 @@ sub generate_unix_thunk($$$$)
     if ($use_dc || $use_pbuffer || $use_context)
     {
         my $param = "params->" . get_arg_name( ${$func->[1]}[0] );
-        $param = "ULongToPtr($param)" if $is_wow64;
+        $param = ($use_dc ? "ULongToPtr($param)" : "ios_wow_host_ptr($param)") if $is_wow64;
         $ret .= "    const struct opengl_funcs *funcs = ";
         $ret .= "get_dc_funcs( $param );\n" if $use_dc;
         $ret .= "get_pbuffer_funcs( $param );\n" if $use_pbuffer;
@@ -656,7 +785,7 @@ sub generate_unix_thunk($$$$)
         my $state_args = $state_attrib_funcs{$name};
         if ($is_wow64)
         {
-            $state_args =~ s/PARAMSPTR/UlongToPtr/g;
+            $state_args =~ s/PARAMSPTR/ios_wow_host_ptr/g;
         }
         else
         {
@@ -1948,3 +2077,16 @@ foreach (sort keys %ext_functions)
 print OUT "};\n";
 
 close OUT;
+
+# Madeira: every pointer-or-offset entry above must have matched a parameter.
+foreach my $table (\%wow64_unpack_buffer_params, \%wow64_pack_buffer_params)
+{
+    foreach my $func (sort keys %$table)
+    {
+        foreach my $pname (split /\|/, $table->{$func})
+        {
+            print STDERR "make_opengl: no wow64 thunk used $func:$pname\n"
+                unless $wow64_buffer_seen{"$func:$pname"};
+        }
+    }
+}

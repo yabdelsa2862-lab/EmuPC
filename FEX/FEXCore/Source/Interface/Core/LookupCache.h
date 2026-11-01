@@ -348,12 +348,24 @@ public:
   // Invalidates L1/L2 for a given guest block
   void InvalidateCache(uint64_t Address, const LookupCacheWriteLockToken& lk) {
     // Do L1
-    auto& L1Entry = reinterpret_cast<LookupCacheEntry*>(L1Pointer)[Address & L1PointerMask];
-    if (L1Entry.GuestCode == Address) {
-      L1Entry.GuestCode = 0;
-      // Leave L1Entry.HostCode as is, so that concurrent lookups won't read a null pointer
-      // This is a soft guarantee for cross thread invalidation, as atomics are not used
-      // and it hasn't been thoroughly tested
+#if defined(_WIN32)
+    // A dynamic L1 changes size, and an entry stays at the index the size of its time gave it: check
+    // the index under every size up to the current one. Missed, the entry came back to life when the
+    // cache returned to that size and sent the address to its old translation (HotSpot, rewriting
+    // code it runs, failed one launch in three). Entries past the current size were decommitted when
+    // the cache shrank.
+    for (size_t Entries = DynamicL1Cache() ? MIN_L1_ENTRIES : L1PointerMask + 1; Entries <= L1PointerMask + 1; Entries <<= 1) {
+      auto& L1Entry = reinterpret_cast<LookupCacheEntry*>(L1Pointer)[Address & (Entries - 1)];
+#else
+    {
+      auto& L1Entry = reinterpret_cast<LookupCacheEntry*>(L1Pointer)[Address & L1PointerMask];
+#endif
+      if (L1Entry.GuestCode == Address) {
+        L1Entry.GuestCode = 0;
+        // Leave L1Entry.HostCode as is, so that concurrent lookups won't read a null pointer
+        // This is a soft guarantee for cross thread invalidation, as atomics are not used
+        // and it hasn't been thoroughly tested
+      }
     }
 
     if (!DisableL2Cache()) {

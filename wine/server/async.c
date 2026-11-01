@@ -2,6 +2,7 @@
  * Server-side async I/O support
  *
  * Copyright (C) 2007 Alexandre Julliard
+ * Copyright (C) 2026 BCD (async cancellation lifetime fixes)
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -132,6 +133,7 @@ struct async
     unsigned int         unknown_status :1; /* initial status is not known yet */
     unsigned int         blocking :1;     /* async is blocking */
     unsigned int         is_system :1;    /* background system operation not affecting userspace visible state. */
+    unsigned int         completed :1;    /* async_set_result has completed it (madeira-bcd async-cancel-keepalive) */
     struct completion   *completion;      /* completion associated with fd */
     apc_param_t          comp_key;        /* completion key associated with fd */
     unsigned int         comp_flags;      /* completion flags */
@@ -415,6 +417,7 @@ struct async *create_async( struct fd *fd, struct thread *thread, const struct a
     async->unknown_status = 0;
     async->blocking      = !is_fd_overlapped( fd );
     async->is_system     = 0;
+    async->completed     = 0;
     async->completion    = fd_get_completion( fd, &async->comp_key );
     async->comp_flags    = 0;
     async->completion_callback = NULL;
@@ -686,6 +689,8 @@ void async_set_result( struct object *obj, unsigned int status, apc_param_t tota
             else if (async->fd && !async->is_system) set_fd_signaled( async->fd, 1 );
         }
 
+        async->completed = 1;   /* madeira-bcd async-cancel-keepalive */
+
         if (!async->signaled)
         {
             async->signaled = 1;
@@ -766,8 +771,15 @@ restart:
             (!thread || async->thread == thread) &&
             (!iosb || async->data.iosb == iosb))
         {
+            /* madeira-bcd async-cancel-keepalive (tools/patch-wineserver-async-cancel.py).
+             * cancel_async can complete the async on the spot (the APC for its thread could not be
+             * queued: on iOS every thread that is not waiting in the server), which drops the last
+             * reference and frees it; the lines below then ran on freed memory. Hold it until it is
+             * back on the process list. An async that is already completed has no completion left to
+             * count the cancel group down, so it does not join the group. */
+            grab_object( &async->obj );
             if (!async->canceled) cancel_async( async );
-            if (cancel)
+            if (cancel && !async->completed)
             {
                 assert( !async->async_cancel );
                 async->async_cancel = cancel;
@@ -784,6 +796,7 @@ restart:
     {
         list_remove( &async->process_entry );
         list_add_tail( &process->asyncs, &async->process_entry );
+        release_object( &async->obj );   /* madeira-bcd async-cancel-keepalive: the keepalive taken above */
     }
     if (cancel)
     {
@@ -976,6 +989,22 @@ struct thread *async_get_thread( struct async *async )
 {
     return async->thread;
 }
+
+#ifdef WINE_IOS
+/* A pending synchronous request always enters wait_async() on its issuing
+ * thread after the request reply. Its completion APC can arrive in the gap
+ * before that server wait, while signals cannot interrupt the issuer on iOS.
+ * Keeping that APC on the issuer is safe: unlike an overlapped request, its
+ * next wait is guaranteed to process system APCs rather than sleep in madsync.
+ * The wait handle and issuer checks keep this limited to that request path. */
+int async_can_defer_to_issuer( struct object *obj, struct thread *thread )
+{
+    struct async *async = (struct async *)obj;
+
+    return obj && obj->ops == &async_ops && async->thread == thread &&
+           async->blocking && async->wait_handle;
+}
+#endif
 
 /* find the first pending async in queue */
 struct async *find_pending_async( struct async_queue *queue )

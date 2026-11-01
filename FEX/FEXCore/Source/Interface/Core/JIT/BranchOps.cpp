@@ -438,6 +438,15 @@ DEF_OP(CondJump) {
 
   auto TrueTargetLabel = JumpTarget(Op->TrueBlock);
 
+#if defined(ARCHITECTURE_arm64ec)
+  // A loop closed by a conditional branch must check the suspend doorbell too, as unconditional
+  // backward branches do, or a thread spinning in it can never be suspended. The check leaves
+  // NZCV alone, so it can sit between the comparison and the branch.
+  if (TrueTargetLabel->Backward.Location) {
+    EmitSuspendInterruptCheck();
+  }
+#endif
+
   if (Op->FromNZCV) {
     b_OrRestart(MapCC(Op->Cond), TrueTargetLabel);
   } else {

@@ -60,6 +60,13 @@ extern UINT winios_pShowWindow( HWND hwnd, INT cmd, RECT *rect, UINT swp ) __att
 extern void winios_pWindowPosChanged( HWND hwnd, HWND insert_after, HWND owner_hint, UINT swp_flags,
                                       const struct window_rects *new_rects, struct window_surface *surface ) __attribute__((weak));
 
+extern UINT winios_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs,
+                               const struct opengl_driver_funcs **driver_funcs );
+/* vulkan_ios.c: VK_KHR_win32_surface on the window's CAMetalLayer. Only reached
+ * once a session loaded a Vulkan library (MADEIRA_VULKAN_LIBRARY). */
+extern UINT madeira_ios_VulkanInit( UINT version, void *vulkan_handle,
+                               const struct vulkan_driver_funcs **driver_funcs );
+
 static struct user_driver_funcs winios_user_driver;
 
 /* Direct mode (no virtual desktop) has no compositor to draw the Windows
@@ -69,6 +76,7 @@ static struct user_driver_funcs winios_user_driver;
  * program hides it, and where Wine's cursor is after clipping; it changes
  * nothing the program sees, and does nothing until the app has asked for the
  * reports (MADEIRA_DIRECT_CURSOR=0 or MADEIRA_HWINPUT=0 in the app: never). */
+extern int winios_mouse_routing_enabled( void ) __attribute__((weak));
 extern int winios_direct_cursor_wanted( void ) __attribute__((weak));
 extern void winios_direct_cursor_set( unsigned int id, int w, int h, int hot_x, int hot_y,
                                       const void *bgra ) __attribute__((weak));
@@ -77,13 +85,18 @@ extern void winios_direct_cursor_pos( int x, int y ) __attribute__((weak));
 
 static int winios_desktop_mode(void);
 
-/* MABD local: OpenGL (end of this file; build/gl4es-ios). */
-static UINT winios_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs,
-                               const struct opengl_driver_funcs **driver_funcs );
+/* EmuPC: the gl4es backend (end of this file; build/gl4es-ios). */
+static UINT winios_gl4es_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs,
+                                     const struct opengl_driver_funcs **driver_funcs );
+static int winios_mouse_routing_on(void)
+{
+    return !winios_mouse_routing_enabled || winios_mouse_routing_enabled();
+}
 
 static int winios_direct_cursor_on(void)
 {
-    return !winios_desktop_mode() && winios_direct_cursor_wanted && winios_direct_cursor_wanted();
+    return (!winios_desktop_mode() || winios_mouse_routing_on()) &&
+           winios_direct_cursor_wanted && winios_direct_cursor_wanted();
 }
 
 /* Wine's cursor position, read the way NtUserGetCursorPos does but without the
@@ -103,7 +116,7 @@ static void winios_report_cursor_pos(void)
     if (!status) winios_direct_cursor_pos( x, y );
 }
 
-/* A program moved its cursor itself (SetCursorPos). Direct mode only. */
+/* A program moved its cursor itself (SetCursorPos). Metadata is used in both modes. */
 static BOOL winios_drv_set_cursor_pos( INT x, INT y )
 {
     if (winios_direct_cursor_on()) winios_direct_cursor_pos( x, y );
@@ -226,14 +239,15 @@ void winios_drv_post_key(unsigned short vk, unsigned int flags)
          * old "first 40 lines" cap was exhausted by arrow keys early in the
          * session, so the WASD presses that prompted this fix left no trace at
          * all and the log looked like they were never sent. Log the first few,
-         * then one line per 256 with a running total that is always truthful. */
+         * then one line per 256 with a running total that is always truthful.
+         * The line counts keys and never names them: the first few keys of a
+         * session are often a password. */
         static unsigned cnt, bad;
         if (st) bad++;
         cnt++;
         if (cnt <= 8 || (cnt & 0xff) == 0)
-            dprintf(2, "[winios] ml647 drv_post_key #%u vk=0x%x scan=0x%x flags=0x%x "
-                       "-> status=0x%x (failures=%u)\n",
-                    cnt, vk, scan, flags, (unsigned)st, bad);
+            dprintf(2, "[winios] ml647 drv_post_key #%u -> status=0x%x (failures=%u)\n",
+                    cnt, (unsigned)st, bad);
     }
 }
 
@@ -440,13 +454,106 @@ int winios_drv_post_restore( HWND hwnd )
     return NtUserPostMessage( hwnd, WM_SYSCOMMAND, SC_RESTORE, 0 ) ? 1 : 0;
 }
 
+/* ml2181: keyboard focus for a window the user picked. Wine moves the focus
+ * into a top-level window only while it activates it (set_active_window with
+ * focus = TRUE); a window that is already its thread's active window keeps
+ * whatever focus the thread has, and that can be none: a click on it sends no
+ * WM_MOUSEACTIVATE (process_mouse_message activates only a window that is not
+ * active yet), and NtUserSetForegroundWindow on the foreground window does
+ * nothing at all. Keys still arrive then (the server hands them to the active
+ * window as WM_SYSKEYDOWN), but a program that tests GetFocus() against its
+ * window before it reads polled input (a game viewport typically does, every
+ * frame) drops the controller. Called on the window's own thread after a
+ * click (message_ios.c), a tap or restore activation
+ * (winios_drv_foreground_if_owner) and the XInput foreground check: when the
+ * top-level window of `hwnd` is the thread's active window and the focus is
+ * nowhere inside it, focus the top-level window, which is what Windows'
+ * DefWindowProc does for WM_ACTIVATE. Focus already inside the window, menu
+ * and move/size modes, and minimized or disabled windows are left alone.
+ * MADEIRA_CLICK_FOCUS=0 turns this off. Returns 1 when the focus moved. */
+int winios_click_focus( HWND hwnd, const char *why )
+{
+    static int enabled = -1;
+    static LONG logged;
+    GUITHREADINFO info;
+    HWND root, focus;
+    DWORD style;
+
+    if (enabled < 0)
+    {
+        const char *e = getenv( "MADEIRA_CLICK_FOCUS" );  /* 0: a tap or click on an active window leaves its keyboard focus as it is */
+        enabled = !(e && e[0] == '0' && !e[1]);
+    }
+    if (!enabled || !hwnd) return 0;
+    if (!(root = NtUserGetAncestor( hwnd, GA_ROOT ))) return 0;
+    if (get_window_thread( root, NULL ) != GetCurrentThreadId()) return 0;
+    info.cbSize = sizeof(info);
+    if (!NtUserGetGUIThreadInfo( GetCurrentThreadId(), &info )) return 0;
+    if (info.hwndActive != root) return 0;
+    if (info.flags & (GUI_INMENUMODE | GUI_INMOVESIZE)) return 0;
+    if (info.hwndFocus && NtUserGetAncestor( info.hwndFocus, GA_ROOT ) == root) return 0;
+    style = get_window_long( root, GWL_STYLE );
+    if (style & (WS_MINIMIZE | WS_DISABLED)) return 0;
+
+    NtUserSetFocus( root );
+    focus = get_focus();
+    if (InterlockedIncrement( &logged ) <= 24)
+        dprintf( 2, "[winios] ml2181 focus \xe2\x86\x92 hwnd %p (%s) was %p now %p (MADEIRA_CLICK_FOCUS=0 leaves it)\n",
+                 root, why, info.hwndFocus, focus );
+    return focus == root;
+}
+
 /* A taskbar click also brings the window to the front. Only the window's own
  * thread does that, from its event pump (not inside SetWindowPos). Returns 0
- * on another thread, 1 when the window is now foreground, -1 on failure. */
+ * on another thread, 1 when the window is now foreground, -1 on failure.
+ * ml2181: the window also gets keyboard focus when it has none (a window
+ * already in front is not activated again, so nothing else would give it). */
 int winios_drv_foreground_if_owner( HWND hwnd )
 {
     if (!hwnd || get_window_thread( hwnd, NULL ) != GetCurrentThreadId()) return 0;
-    return NtUserSetForegroundWindow( hwnd ) ? 1 : -1;
+    if (!NtUserSetForegroundWindow( hwnd )) return -1;
+    winios_click_focus( hwnd, "activate" );
+    return 1;
+}
+
+/* Opt-in for engines which draw and read mouse positions in monitor pixels
+ * while leaving their initial small HWND unchanged. Keep normal windowed
+ * games alone; the app queues this only for MADEIRA_DIRECT_WINDOW_SIZE=1. */
+int winios_drv_size_game_window( HWND hwnd, int width, int height )
+{
+    static _Thread_local BOOL resizing;
+    struct window_rects rects;
+    int cw, ch, outer_w, outer_h;
+    BOOL ok;
+
+    if (resizing || !hwnd || get_window_thread( hwnd, NULL ) != GetCurrentThreadId()) return 0;
+    if (width <= 0 || height <= 0 || !get_window_rects( hwnd, COORDS_SCREEN, &rects, get_thread_dpi() )) return -1;
+    cw = rects.client.right - rects.client.left;
+    ch = rects.client.bottom - rects.client.top;
+    if (cw == width && ch == height) return 1;
+    outer_w = width + rects.window.right - rects.window.left - cw;
+    outer_h = height + rects.window.bottom - rects.window.top - ch;
+    resizing = TRUE;
+    ok = NtUserSetWindowPos( hwnd, 0, rects.window.left - rects.client.left,
+                           rects.window.top - rects.client.top, outer_w, outer_h,
+                           SWP_NOZORDER | SWP_NOACTIVATE );
+    resizing = FALSE;
+    dprintf( 2, "[winios] direct window size hwnd=%p client=%dx%d -> %dx%d ok=%d\n",
+             hwnd, cw, ch, width, height, ok );
+    return ok ? 1 : -1;
+}
+
+/* The end of a Dock session: Madeira Dock has shut Valve's client down after the
+ * game, but explorer's virtual desktop never closes by itself on iOS (server
+ * winstation.c, "desktop auto-close suppressed"). WM_CLOSE makes the desktop's
+ * message loop quit and explorer exit, which ends the session. Only the desktop
+ * window's own thread posts it, from its event pump. Returns 0 on another
+ * thread, 1 when posted, -1 on failure. */
+int winios_drv_close_desktop_if_owner( void )
+{
+    HWND desktop = get_desktop_window();
+    if (!desktop || get_window_thread( desktop, NULL ) != GetCurrentThreadId()) return 0;
+    return NtUserPostMessage( desktop, WM_CLOSE, 0, 0 ) ? 1 : -1;
 }
 
 /* ============================================================ *
@@ -2074,9 +2181,16 @@ static LRESULT nulldrv_WintabProc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
     return 0;
 }
 
+#ifdef MADEIRA_MOLTENVK
+extern UINT madeira_ios_VulkanInit( UINT version, void *handle, const struct vulkan_driver_funcs **funcs );
+#endif
 static UINT nulldrv_VulkanInit( UINT version, void *vulkan_handle, const struct vulkan_driver_funcs **driver_funcs )
 {
+#ifdef MADEIRA_MOLTENVK
+    return madeira_ios_VulkanInit( version, vulkan_handle, driver_funcs );
+#else
     return STATUS_NOT_IMPLEMENTED;
+#endif
 }
 
 static UINT nulldrv_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs, const struct opengl_driver_funcs **driver_funcs )
@@ -2208,7 +2322,7 @@ static void load_display_driver(void)
         /* direct mode: inert (like winios_pSetCursor) until the app enables it */
         else if (winios_direct_cursor_set) winios_user_driver.pSetCursor         = winios_drv_set_cursor;
         else if (winios_pSetCursor)      winios_user_driver.pSetCursor           = winios_pSetCursor;
-        if (!winios_desktop_mode() && winios_direct_cursor_pos)
+        if ((!winios_desktop_mode() || winios_mouse_routing_on()) && winios_direct_cursor_pos)
             winios_user_driver.pSetCursorPos = winios_drv_set_cursor_pos;
         if (winios_pDestroyCursorIcon)   winios_user_driver.pDestroyCursorIcon   = winios_pDestroyCursorIcon;
         if (winios_pShowWindow)          winios_user_driver.pShowWindow          = winios_pShowWindow;
@@ -2239,7 +2353,18 @@ static void load_display_driver(void)
                         "(MADEIRA_GAME_WINDOWS=0 hides them)\n" );
         }
         winios_user_driver.pUpdateDisplayDevices = winios_UpdateDisplayDevices;
-        winios_user_driver.pOpenGLInit = winios_OpenGLInit;
+        /* OpenGL ES behind WGL (opengl_ios.c). MADEIRA_NO_GL=1 restores the
+         * GL-absent behaviour (every context creation fails). EmuPC:
+         * MADEIRA_GL4ES=1 (games EmuPC detects as OpenGL, GameTuning.swift)
+         * takes the gl4es backend instead: desktop OpenGL 2.1 on OpenGL ES. */
+        if (!getenv( "MADEIRA_NO_GL" ))
+        {
+            const char *gl4es = getenv( "MADEIRA_GL4ES" );
+            winios_user_driver.pOpenGLInit = gl4es && *gl4es == '1' ? winios_gl4es_OpenGLInit : winios_OpenGLInit;
+        }
+        /* Vulkan surfaces on Metal (vulkan_ios.c). win32u calls it only after a
+         * Vulkan library was loaded, which needs MADEIRA_VULKAN_LIBRARY. */
+        winios_user_driver.pVulkanInit = madeira_ios_VulkanInit;
         __wine_set_user_driver( &winios_user_driver, WINE_GDI_DRIVER_VERSION );
 #else
         __wine_set_user_driver( &null_user_driver, WINE_GDI_DRIVER_VERSION );
@@ -2726,8 +2851,16 @@ struct ios_xinput_caps
     WORD  left_motor_speed, right_motor_speed;
 };
 
+/* Byte-for-byte XINPUT_BATTERY_INFORMATION (ml2170). */
+struct ios_xinput_battery
+{
+    BYTE  type;
+    BYTE  level;
+};
+
 C_ASSERT( sizeof(struct ios_xinput_state) == 16 );
 C_ASSERT( sizeof(struct ios_xinput_caps) == 20 );
+C_ASSERT( sizeof(struct ios_xinput_battery) == 2 );
 C_ASSERT( sizeof(struct winios_gamepad) == 20 );
 
 /* There is no window manager on iOS, so nothing ever activates a window: a
@@ -2845,16 +2978,57 @@ static void ios_foreground_check(void)
     next_ns = now + 1000000000LL;
     pthread_mutex_unlock( &lock );
 
-    if ((fg = NtUserGetForegroundWindow()) && get_window_thread( fg, &fg_pid ) && fg_pid == pid) return;
+    /* ml2181: in front is not enough for a program that reads its pad only
+     * while GetFocus() is its window. When the polling thread owns the
+     * foreground window and nothing in it has the focus, focus it (once a
+     * second at most, like the rest of this check; winios_click_focus). */
+    if ((fg = NtUserGetForegroundWindow()) && get_window_thread( fg, &fg_pid ) && fg_pid == pid)
+    {
+        winios_click_focus( fg, "activate" );
+        return;
+    }
     if (!(main_hwnd = ios_main_window( pid ))) return;
 
     ok = set_foreground_window( main_hwnd, FALSE, TRUE );
+    /* A window that was already its thread's active window is not activated
+     * again, so set_foreground_window gave it no focus. */
+    if (ok) winios_click_focus( main_hwnd, "activate" );
     if (logged < 16)
     {
         logged++;
         dprintf( 2, "[fg] activated main window %p of pid %04x (foreground was %p) ok=%d\n",
                  main_hwnd, (unsigned)pid, fg, ok );
     }
+}
+
+/* ml2115: NtUserGamepadOp_Foreground (op 3). xinput asks this while the
+ * program has XInput disabled (XInputEnable(FALSE)): many programs disable
+ * XInput when their window loses activation and enable it again when it comes
+ * back, and the activation messages a window gets while the port restores it
+ * and brings it to the front at startup can arrive unbalanced. The program
+ * then reads a connected pad at rest for the whole session. TRUE tells xinput
+ * to treat the disable as stale: the switch is on and the calling process
+ * owns the foreground window. `*flags` gets bit 0 (switch on) and bit 1
+ * (owner) either way, for xinput's log lines. Two shared-memory reads, no
+ * server call. The switch comes from the host environment, which every
+ * process of the session shares, so 32- and 64-bit games read the same value.
+ * Same number and ABI as the pre-2026-10-01 fork's query. */
+static ULONG_PTR ios_gamepad_foreground( DWORD *flags )
+{
+    static int rule = -1;
+    DWORD pid = 0;
+    HWND hwnd;
+
+    if (rule < 0)
+    {
+        const char *env = getenv( "MADEIRA_XINPUT_ENABLE_FOREGROUND" );  /* 0: a program's XInputEnable(FALSE) zeroes the pad even while its window is in front */
+        rule = !(env && *env == '0');
+    }
+    *flags = rule ? 0x1 : 0;   /* NtUserGamepadForeground_Rule */
+    if ((hwnd = NtUserGetForegroundWindow()) && get_window_thread( hwnd, &pid ) &&
+        pid == GetCurrentProcessId())
+        *flags |= 0x2;         /* NtUserGamepadForeground_Owner */
+    return *flags == 0x3;
 }
 
 /***********************************************************************
@@ -2864,7 +3038,10 @@ static void ios_foreground_check(void)
  * index (0-3) and `op` selects the payload; see NtUserGamepadOp_* in
  * wine/include/ntuser.h. Op 2 (ml2106, NtUserGamepadOp_SetVibration) passes
  * the game's XINPUT_VIBRATION in from XInputSetState; an xinput that predates
- * it never sends it. Returns 1 when a pad is connected in that slot and
+ * it never sends it. Op 3 (ml2115, NtUserGamepadOp_Foreground) answers for
+ * any slot; see ios_gamepad_foreground. Op 4 (ml2170, NtUserGamepadOp_Battery)
+ * fills XINPUT_BATTERY_INFORMATION from the app's GCDeviceBattery mapping.
+ * Returns 1 when a pad is connected in that slot and
  * `buffer` was filled (or read), 0 otherwise — which is also what an upstream,
  * non-Madeira win32u returns for a code it does not know, so xinput1_3's
  * runtime probe falls back to the existing HID path.
@@ -2874,6 +3051,7 @@ ULONG_PTR ios_gamepad_query( UINT index, UINT op, void *buffer )
     struct winios_gamepad pad;
 
     if (!buffer || index >= 4) return 0;
+    if (op == 3) return ios_gamepad_foreground( buffer );   /* NtUserGamepadOp_Foreground */
     if (op == 0 && index == 0) ios_foreground_check();
     if (!winios_gamepad_get_state( index, &pad )) return 0;
 
@@ -2891,6 +3069,48 @@ ULONG_PTR ios_gamepad_query( UINT index, UINT op, void *buffer )
         state->gamepad.thumb_ly     = pad.ly;
         state->gamepad.thumb_rx     = pad.rx;
         state->gamepad.thumb_ry     = pad.ry;
+        /* ml2180: evidence for "the pad is detected but nothing happens": the
+         * first eight non-rest states the program reads per slot, and the
+         * first rest state after one. Capped; nothing is logged for a slot
+         * that never moves.
+         * ml2181: plus the reading thread's GUI state, for "reads the pad but
+         * ignores it": the foreground window and its process, the thread's
+         * active, focus and capture windows (its own input, not the
+         * foreground one: Wine's GetGUIThreadInfo(0) means the foreground
+         * thread), whether the focus lies inside the foreground window, and
+         * the foreground thread's focus. Note that DirectInput's host
+         * joystick (MADEIRA_DINPUT_PAD) samples through this same op: a slot
+         * read here with no "[xinput] ml2114 first state query index=N" line
+         * for that index came from DirectInput, not XInputGetState. */
+        {
+            static unsigned int logged[4], was_live[4];
+            int live = pad.buttons || pad.left_trigger || pad.right_trigger ||
+                       pad.lx > 7849 || pad.lx < -7849 || pad.ly > 7849 || pad.ly < -7849 ||
+                       pad.rx > 8689 || pad.rx < -8689 || pad.ry > 8689 || pad.ry < -8689;
+            if (live != (int)was_live[index] && logged[index] < 16)
+            {
+                GUITHREADINFO gui, fg_gui;
+                HWND fg = NtUserGetForegroundWindow(), focus_root = 0;
+                DWORD fg_pid = 0;
+
+                memset( &gui, 0, sizeof(gui) );
+                memset( &fg_gui, 0, sizeof(fg_gui) );
+                gui.cbSize = fg_gui.cbSize = sizeof(gui);
+                NtUserGetGUIThreadInfo( GetCurrentThreadId(), &gui );
+                NtUserGetGUIThreadInfo( 0, &fg_gui );
+                if (fg) get_window_thread( fg, &fg_pid );
+                if (gui.hwndFocus) focus_root = NtUserGetAncestor( gui.hwndFocus, GA_ROOT );
+                logged[index]++;
+                ERR( "[xinput] ml2180 state read index=%u %s: packet=%u buttons=0x%04x lt=%u rt=%u lx=%d ly=%d rx=%d ry=%d (pid %04x) "
+                     "ml2181 fg=%p(pid %04x) active=%p focus=%p capture=%p focus-in-fg=%d fg-focus=%p\n",
+                     index, live ? "input" : "rest", (unsigned int)pad.packet, (unsigned int)pad.buttons,
+                     (unsigned int)pad.left_trigger, (unsigned int)pad.right_trigger, (int)pad.lx, (int)pad.ly,
+                     (int)pad.rx, (int)pad.ry, (unsigned int)GetCurrentProcessId(),
+                     fg, (unsigned int)fg_pid, gui.hwndActive, gui.hwndFocus, gui.hwndCapture,
+                     fg && focus_root == fg, fg_gui.hwndFocus );
+            }
+            was_live[index] = live;
+        }
         return 1;
     }
     case 1:   /* NtUserGamepadOp_Caps */
@@ -2914,6 +3134,17 @@ ULONG_PTR ios_gamepad_query( UINT index, UINT op, void *buffer )
         /* ml2106: motors only while the app applies XInput rumble
          * (env.MADEIRA_PAD_OUTPUT); 0xff is what a wired Xbox pad reports. */
         caps->left_motor_speed = caps->right_motor_speed = winios_gamepad_rumble_caps() ? 0xff : 0;
+        /* ml2170: XINPUT_CAPS_WIRELESS (0x0002) while the app reports the pad
+         * running on its own battery, as Windows does for a wireless pad.
+         * Nothing is published with env.MADEIRA_XINPUT_BATTERY = 0, so the
+         * flags then stay 0 as before. */
+        {
+            struct winios_gamepad_battery battery;
+
+            if (winios_gamepad_get_battery( index, &battery ) &&
+                (battery.type == WINIOS_BATTERY_TYPE_ALKALINE || battery.type == WINIOS_BATTERY_TYPE_NIMH))
+                caps->flags |= 0x0002;
+        }
         return 1;
     }
     case 2:   /* ml2106 NtUserGamepadOp_SetVibration: XINPUT_VIBRATION (4 bytes, in) */
@@ -2923,6 +3154,18 @@ ULONG_PTR ios_gamepad_query( UINT index, UINT op, void *buffer )
         winios_gamepad_set_vibration( index, motors[0], motors[1] );
         return 1;
     }
+    case 4:   /* ml2170 NtUserGamepadOp_Battery: XINPUT_BATTERY_INFORMATION (2 bytes, out) */
+    {
+        struct ios_xinput_battery *out = buffer;
+        struct winios_gamepad_battery battery;
+
+        /* 0 when nothing is published (env.MADEIRA_XINPUT_BATTERY = 0): xinput
+         * then keeps its previous answer, as with a win32u without this op. */
+        if (!winios_gamepad_get_battery( index, &battery )) return 0;
+        out->type  = battery.type;
+        out->level = battery.level;
+        return 1;
+    }
     default:
         return 0;
     }
@@ -2930,13 +3173,13 @@ ULONG_PTR ios_gamepad_query( UINT index, UINT op, void *buffer )
 
 
 #ifdef WINE_IOS
-/* MABD local: OpenGL for Windows programs.
+/* EmuPC: OpenGL for Windows programs.
  *
  * win32u's OpenGL front end needs a driver for contexts, pixel formats and
  * window surfaces; on iOS that is this one. The GL functions come from gl4es
  * (desktop OpenGL 2.1 on iOS's OpenGL ES), a window's buffers are IOSurfaces
  * and SwapBuffers draws the finished one into the game's Metal layer: all in
- * build/gl4es-ios/winios_gl.m. Opt-in per process: MADEIRA_OPENGL=1 (the app
+ * build/gl4es-ios/winios_gl.m. Opt-in per process: MADEIRA_GL4ES=1 (the app
  * sets it for games whose program uses OpenGL); without it the driver reports
  * no OpenGL, as before. */
 #include "wine/opengl_driver.h"
@@ -3131,10 +3374,10 @@ static const struct opengl_driver_funcs winios_gl_driver_funcs =
     .p_pbuffer_bind = winios_gl_pbuffer_bind,
 };
 
-static UINT winios_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs,
-                               const struct opengl_driver_funcs **driver_funcs )
+static UINT winios_gl4es_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs,
+                                     const struct opengl_driver_funcs **driver_funcs )
 {
-    const char *want = getenv( "MADEIRA_OPENGL" );
+    const char *want = getenv( "MADEIRA_GL4ES" );
     if (version != WINE_OPENGL_DRIVER_VERSION) return STATUS_INVALID_PARAMETER;
     if (!want || *want != '1') return STATUS_NOT_IMPLEMENTED;
     if (!winios_gl_init || !winios_gl_init())
@@ -3147,8 +3390,8 @@ static UINT winios_OpenGLInit( UINT version, const struct opengl_funcs *opengl_f
     return STATUS_SUCCESS;
 }
 #else
-static UINT winios_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs,
-                               const struct opengl_driver_funcs **driver_funcs )
+static UINT winios_gl4es_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs,
+                                     const struct opengl_driver_funcs **driver_funcs )
 {
     return STATUS_NOT_IMPLEMENTED;
 }

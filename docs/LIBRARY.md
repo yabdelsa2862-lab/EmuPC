@@ -73,7 +73,8 @@ Removing an entry never removes the game's files or saves.
   shown in Settings (Ready to play) and in the developer interface's status row.
 - **Settings**: JIT and memory status, Enable JIT, JIT method and setup
   (StikDebug or the built-in helper), extended logging, pointer
-  mode (Absolute, Relative or Touch) and touch sensitivity, **Display** (hold
+  mode (Absolute, Relative or Touch) and touch sensitivity, **Graphics** (see
+  below), **Display** (hold
   the display at its maximum rate, off by default), **Memory & sync** (swap tier
   Off/1/2/4 GB, off by default; sync engine, Fastsync by default), the interface
   switch and **Credits** (the last section). Display applies from the next session or FPS limit change; Memory &
@@ -91,6 +92,21 @@ Removing an entry never removes the game's files or saves.
   cap, checked when a block is backed).
   Without the key, `swap-mode = 2` in madeira.cfg means broad and the picker
   shows it; choosing large allocations then writes `classic` explicitly.
+- **Graphics** (below Pointer; `GraphicsSettings` in `Library.swift`) puts the
+  graphics routes on the Settings page itself instead of All settings:
+  **Direct3D 9** (DXMT, the default; DXMT's native frontend for 32-bit games,
+  `d3d9 = native`; or Wine's wined3d on OpenGL, `d3d9 = wined3d`,
+  experimental, needs the Zink backend), **Direct3D 12** (madeira-d3d12, the
+  default; or vkd3d-proton on Vulkan, `d3d12 = vkd3d`, experimental, x64
+  only), **Vulkan driver** (Automatic: off, MoltenVK when vkd3d-proton is
+  chosen; `vulkan = moltenvk`; or `vulkan = kosmickrisp`, iOS 26 on an A14 or
+  newer, offered only when the bundle has `gl/libvulkan_kosmickrisp.dylib`). Each control
+  writes its key in `Documents/madeira.cfg` and the default removes it;
+  **Reset to defaults** removes all four. They apply at the next session
+  start. The rows show the global file; a game's **Advanced › This game's
+  config** lines still win for that game. While the section is shown, All
+  settings and the Settings search leave the four keys out;
+  `env.MADEIRA_GRAPHICS_SETTINGS = 0` hides it and puts them back.
 
 ## Game details
 
@@ -152,6 +168,21 @@ and check-frontend fails if a setting is hidden from it. A profile holds:
   choice exports `MADEIRA_FEX_AVX=1`, which makes the ARM64EC FEX module report
   and emulate AVX/AVX2 for a game built for AVX processors (64-bit games; WOW64
   has no AVX);
+- **Large memory reservations**: off by default; turned on, it adds
+  `oversize-reserve = 1` to the game's config lines (see **This game's config**
+  below), and ntdll serves a reservation of 64 GB or more that the app's
+  address map cannot hold with a real part (`oversize-reserve-mb`, 16 GB) and
+  reports the size that was asked for. It is for a game that quits at start
+  because such a reservation fails (Final Fantasy Tactics - The Ivalice
+  Chronicles reserves 256 GB); a program that falls back to a smaller
+  reservation when a huge one fails is better off without it;
+- **Pause threads fully** (Automatic, On or Off): `MADEIRA_REAL_SUSPEND` for
+  the session (ml730: a Wine SuspendThread really stops the thread instead of
+  only snapshotting it). Automatic follows madeira.cfg's `real-suspend` when
+  set, otherwise turns it on when `GameAssembly.dll` is in the game's folder
+  (Unity IL2CPP, whose garbage collector scans suspended threads' stacks:
+  Megabonk crashed while loading without it). The launch unsets it when
+  nothing chooses it, and wineserver reads it on every call;
 - **CPU cores reported** (Automatic, 1, 2, 4 or 6) and **D3D9 anisotropic
   filtering** (Application default, up to 1×, 2×, 4× or 8×): only a choice
   other than the default exports `MADEIRA_CPU_COUNT` (wine) or
@@ -173,6 +204,16 @@ and check-frontend fails if a setting is hidden from it. A profile holds:
 - performance overlay, live logs and touch controls for the session, with the
   controls' **opacity** and overall **size**. The touch layout itself is saved
   per game from the in-game editor;
+- **Settings files** (games only; the Desktop has no folder of its own): the
+  game's own .ini files, edited in the app instead of the Files app. **Add
+  .ini file** lists the .ini files in the game's folder and in
+  `Documents/My Games`; the editor shows each section's settings as switches,
+  numbers and text, with an ⓘ that says what a setting does (a sentence for
+  well-known Bethesda settings, otherwise what its name's type letter means).
+  Saving rewrites only the changed values and keeps line endings, encoding,
+  comments and order; a file the game rewrote since it was saved here is
+  noted when it opens. Close the game before saving, or it may write over the
+  change. `tests/host/check-ini-editor.py` covers the parser and the save.
 - **Advanced › This game's config**: lines in madeira.cfg's syntax for this
   game only. Each launch writes them to `Application Support/madeira-game.cfg`
   and exports `MADEIRA_CFG_GAME` (unset when there are none): a key set there
@@ -185,7 +226,8 @@ and check-frontend fails if a setting is hidden from it. A profile holds:
 
 A switch the game's page exports for a launch (the x87, AVX, CPU core,
 anisotropy and frame generation choices, the fastsync switches, the
-DirectInput controller choice) wins over the same `env.` key in madeira.cfg:
+DirectInput controller choice, and the launch's desktop mode) wins over the same
+`env.` key in madeira.cfg:
 that cfg line is skipped and logged as `[madeira-env] ml1184 KEY=... kept`.
 These keys are unset when the session ends (ml1184). The game's own config
 lines come after both and win.
@@ -204,6 +246,19 @@ and command are Dock's:
   shows. A `.bat`/`.cmd` runs as `cmd.exe /c "<file>"` directly, or
   `cmd /c "<file>"` inside the desktop. For **The game** the program is Steam's
   (or the one chosen under **Program**) with Steam's arguments.
+  Directly exports `MADEIRA_DESKTOP=0`, and the Wine desktop exports `1`, so a
+  global `env.MADEIRA_DESKTOP` cannot undo the choice. The game's own config
+  still wins over both. Desktop mode shows GDI windows; Directly presents
+  DirectX to the game display. A small window stays small inside the desktop:
+  choose fullscreen or a higher resolution in the game itself to enlarge it.
+  Enlarging the desktop alone does not increase the game's rendering resolution.
+  For a direct-mode game which draws in monitor pixels but leaves its original
+  small Windows client unchanged, its own config can set
+  `env.MADEIRA_DIRECT_WINDOW_SIZE = 1`. After creating its Metal view, Madeira
+  asks the window's owner thread to size its client to the selected resolution,
+  preserving its border widths, and repeats this if the engine shrinks it
+  again after startup. This is opt-in: ordinary windowed games keep
+  their requested size and use client-coordinate input mapping.
 - **Working folder** (`workingDirectory`): a `C:\` folder; empty means Steam's
   working folder for **The game**, else the program's own folder. It is
   exported as `MADEIRA_WORKDIR` (the bridge reads and clears it) whenever what
@@ -244,6 +299,11 @@ frames arrive (Metal presents or a desktop surface); after 30 seconds it offers
 until the game's own window is shown, and adds **Show desktop**
 (`docs/MADEIRA_DOCK.md`, "Starting screen"). A row of round glyph-only buttons (their words are
 VoiceOver labels) holds **Show live log**, which shows the most recent log lines.
+Lines known to be harmless in a normal session (Wine's other display drivers,
+Windows' sign-in packages, Steam's optional modules such as SDL3 and
+steamservice, the WoW64 CPU fallback, FEX's code-buffer mprotect note) show in
+grey as "harmless: …" instead of as errors; out of memory (c0000017) never does
+(`tests/host/check-harmless-warnings.py`).
 
 The small menu button (drag to move; it fades after three seconds) opens the
 in-game menu:
@@ -258,7 +318,10 @@ in-game menu:
    pointer settings;
 3. the performance overlay and its fields (FPS, average frame time, CPU load
    with the busiest thread, GPU load with GPU time per frame, memory
-   footprint, battery, and the thermal state: Cool, Warm, Hot or Critical; a
+   footprint, JIT memory (the JIT pool's use from its own log lines, such as
+   "JIT 374/560 MB", "(small)" when iPadOS gave the pool less room at launch,
+   "FULL" once a DLL did not fit; counted with Live logs off too), battery,
+   and the thermal state: Cool, Warm, Hot or Critical; a
    change is logged as `[thermal]` while the overlay is shown), then
    **Diagnostics**: **Capture the next frame** and **GPU sync** F1/F6/F5/F0,
    the developer overlay's CAP and F pills, for Direct3D 12 games (shown only with
@@ -411,6 +474,7 @@ menu owns input, the game sees a connected pad at rest.
 | `MADEIRA_UI_LOG_IDLE` | on | the log view keeps parsing while hidden |
 | `MADEIRA_LOG_VIA_STDERR` | on | Swift log lines use their own file handle |
 | `MADEIRA_RUNTIME_SETTINGS` | on | no Display and Memory & sync sections in Settings |
+| `MADEIRA_GRAPHICS_SETTINGS` | on | no Graphics section in Settings; `d3d9`, `d3d12`, `vulkan` and `windowed` are back in All settings |
 | `MADEIRA_SESSION_TOOLS` | on | no Aspect & scaling (a session does not save it) and no Diagnostics in the in-game menu |
 | `MADEIRA_SESSION_DIAGNOSTICS` | off | `1` shows the in-game menu's Diagnostics: frame capture (render-target pixels to `Documents/capture`) and GPU sync, for Direct3D 12 games |
 | `MADEIRA_FRONTEND_KEYBOARD` | on | Keyboard opens the game view's own keyboard instead of the key window |
@@ -430,6 +494,17 @@ Log tags: `[frontend]`, `[library]` (ml1163: each game's start mode, batch, serv
 `[session-once]`, `[library-surface]`, `[library-metadata]`, `[onboarding]`,
 `[frontend-controller]`, `[frontend-keyboard]`, `[device-load]`, `[promote]`, `[thermal-cap]`.
 
+**Session summary.** When a session returns to the library (or when Madeira
+goes to the background), `LogSummary` reads the log once and writes
+`Documents/madeira-summary.txt`: the program, the programs started and how
+each ended (exit code, or the Windows error in plain words and where it
+crashed), the JIT pool's size and use and whether it ran out, out-of-memory
+and wrong-architecture DLLs, other missing DLLs minus a known-harmless list,
+Quit game and force close, iPadOS refusing a second 32-bit program, and Madeira
+Dock's result in words. A session that never got back is summarised at the
+next launch from `madeira-log.prev.txt`. `tests/host/check-log-summary.py`
+covers it on synthetic logs.
+
 ## Tests
 
 `tests/host/check-frontend.py` (profiles incl. resolution and scaling,
@@ -440,6 +515,8 @@ math, controller commands, the exit hook, and the presence of the details and
 in-game menu options), `tests/host/check-runtime-settings.py`
 (`MadeiraConfig.set` and the Settings defaults) and
 `tests/host/check-library-api.py` (renderer detection and the badge).
+`tests/host/check-jit-pool-meter.py` covers the JIT memory field's parsing
+(split pools, the small-pool note) and that it counts with Live logs off.
 `tests/host/check-onboarding.py` covers first-run setup: the JIT choices,
 pairing import, pages with and without Dock, the done key, the
 `MADEIRA_ONBOARDING` switch, and the wiring (no Wine session, no pool or

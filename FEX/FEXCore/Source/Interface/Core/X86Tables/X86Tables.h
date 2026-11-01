@@ -225,6 +225,10 @@ struct DecodedInst {
   uint8_t SIB;
   uint8_t InstSize;
   int8_t REXIndex;
+
+  // The bytes the decoder read, so code validation compares against what was translated, not a
+  // second read of guest memory that a concurrent writer may already have changed.
+  uint8_t InstBytes[15];
 };
 
 union ModRMDecoded {

@@ -7,7 +7,7 @@ import Security
 import SwiftUI
 import WebKit
 
-// MABD local: GOG games, downloaded straight from GOG like the Steam ones.
+// EmuPC: GOG games, downloaded straight from GOG like the Steam ones.
 //
 // Sign-in is GOG's own web page (the GOG Galaxy client's sign-in, which every
 // third-party GOG client uses); its redirect carries a code that is exchanged
@@ -58,7 +58,7 @@ enum GOGAPI {
     }
 
     /// GOG serves its metadata and chunks zlib-wrapped; Foundation inflates raw DEFLATE.
-    /// MABD local: first-generation (v1) builds serve plain JSON, passed through as is.
+    /// EmuPC: first-generation (v1) builds serve plain JSON, passed through as is.
     static func inflate(_ data: Data) throws -> Data {
         if let first = data.first(where: { ![0x20, 0x09, 0x0a, 0x0d, 0xef, 0xbb, 0xbf].contains($0) }), first == UInt8(ascii: "{") { return data }
         guard data.count > 6, data[data.startIndex] & 0x0f == 8 else { throw GOGError.message("Bad compressed data from GOG.") }
@@ -456,7 +456,7 @@ struct GOGInstaller {
             }
         }
 
-        let root = LibraryModel.drive.appendingPathComponent(external ? "External/GOG Games" : "GOG Games", isDirectory: true)
+        let root = LibraryModel.drive.appendingPathComponent(external ? ExternalDrive.linkName + "/GOG Games" : "GOG Games", isDirectory: true)
         let folder = root.appendingPathComponent(folderName, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let need = files.reduce(Int64(0)) { $0 + $1.size }
@@ -554,7 +554,7 @@ struct GOGInstaller {
         }
     }
 
-    /// MABD local: v1 (GOG 1.0 builds, older games): no compression; every file is
+    /// EmuPC: v1 (GOG 1.0 builds, older games): no compression; every file is
     /// a byte range of one main.bin per product, fetched with Range requests and
     /// checked against the file's MD5. Follows Heroic's gogdl.
     private func downloadV1(build: [String: Any], link: URL) async throws -> (URL, String, Int64) {
@@ -581,7 +581,7 @@ struct GOGInstaller {
             }
         }
 
-        let root = LibraryModel.drive.appendingPathComponent(external ? "External/GOG Games" : "GOG Games", isDirectory: true)
+        let root = LibraryModel.drive.appendingPathComponent(external ? ExternalDrive.linkName + "/GOG Games" : "GOG Games", isDirectory: true)
         let folder = root.appendingPathComponent(folderName, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let need = files.reduce(Int64(0)) { $0 + $1.size }
@@ -927,7 +927,7 @@ struct GOGDownloadSection: View {
 }
 
 
-/// MABD local: the registry keys GOG's own installer writes
+/// EmuPC: the registry keys GOG's own installer writes
 /// (HKLM\\Software\\GOG.com\\Games\\<id>, both registry views). GOG launchers
 /// such as Quake II's Q2Launcher read the install folder from them and say
 /// "Game installation not found" without. Written into the prefix's system.reg
@@ -993,7 +993,7 @@ enum GOGRegistry {
 }
 
 
-/// MABD local: GOG games whose own program cannot run here start a better one.
+/// EmuPC: GOG games whose own program cannot run here start a better one.
 /// Quake II: Q2Launcher never starts the game, and the original quake2.exe needs
 /// OpenGL (not available) or its software renderer, which rewrites its own code
 /// (not allowed on iOS). Yamagi Quake II, an open-source engine for the same game
@@ -1058,7 +1058,7 @@ enum GOGLaunchOverride {
 }
 
 
-/// MABD local: Yamagi Quake II for GOG's Quake II, set up by EmuPC. The game's own
+/// EmuPC: Yamagi Quake II for GOG's Quake II, set up by EmuPC. The game's own
 /// quake2.exe cannot draw here (GOGLaunchOverride), so the first install or
 /// start fetches Yamagi Quake II (open source, GPL) from its official site,
 /// checks it against the SHA-256 of the release that was tested, and puts its

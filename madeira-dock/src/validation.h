@@ -6,6 +6,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+/* Extra LaunchApp arguments are one bounded UTF-8 string, never a shell command.
+ * The Swift library profile enforces the same byte/quote/token/control bounds. */
+#define SH_LAUNCH_ARGUMENTS_CAPACITY 4096u
+#define SH_LAUNCH_ARGUMENTS_MAX_TOKENS 64u
+bool sh_launch_arguments_valid(const char *arguments, size_t length);
 bool sh_subscription_list_contains(const uint32_t *apps, int32_t count,
                                    size_t capacity, uint32_t requested);
 bool sh_decode_launch_result(const void *payload, size_t size, uint64_t expected_game,

@@ -455,6 +455,9 @@ public:
   void NEGOp(OpcodeArgs);
   void DIVOp(OpcodeArgs);
   void IDIVOp(OpcodeArgs);
+#if defined(_WIN32)
+  void DivideErrorCheck(OpcodeArgs, bool Signed);
+#endif
   void BSFOp(OpcodeArgs);
   void BSROp(OpcodeArgs);
   void CMPXCHGOp(OpcodeArgs);

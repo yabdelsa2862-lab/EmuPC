@@ -1,8 +1,53 @@
 #include "dxmt_dynamic.hpp"
 #include "dxmt_texture.hpp"
 #include "dxmt_mem_census.hpp"
+#include "util_env.hpp"
+#include "log/log.hpp"
+#include <algorithm>
+#include <cstdlib>
+#include <string>
 
 namespace dxmt {
+
+/* DXMT_DYN_KEEP = <entries>, default unset/0 = off.
+ *
+ * Off, a DynamicBuffer keeps at most DYN_KEEP_ELIGIBLE (64) retired names. A constant
+ * buffer that the game renames once per draw (Dark Souls III: ~600 draws a frame)
+ * retires ~600 names a frame; as soon as the GPU catches up, the trim below frees all
+ * but 64, and the next frame mints ~540 brand-new Metal buffers for it again: 15-30k
+ * fresh MTLBuffers a second (~1000 a frame, avg 438 bytes), each a newBuffer plus a
+ * release on the game's own render threads.
+ *
+ * On, an instance keeps up to max(64, min(DXMT_DYN_KEEP, DXMT_DYN_KEEP_KB*1024/length))
+ * retired names (DXMT_DYN_KEEP_KB default 4096): a 256-byte constant buffer keeps up to
+ * DXMT_DYN_KEEP, a 64 KB buffer still 64. The O(depth) census walk (ml681 per-instance
+ * statistics) is skipped in this mode -- with ~1000 retained names it would cost more
+ * than it measures; [dyn-census] then shows stale per-instance rows, [trim] and
+ * "dynamic recycle" totals stay exact. */
+static uint32_t
+dynKeepFor(uint64_t length) {
+  static const uint32_t keep_n = [] {
+    const std::string v = env::getEnvVar("DXMT_DYN_KEEP");
+    long n = v.empty() ? 0 : std::strtol(v.c_str(), nullptr, 0);
+    if (n < 0) n = 0;
+    if (n > 65536) n = 65536;
+    if (n)
+      ERR("[dyn-keep] DXMT_DYN_KEEP=", n, " (retired names kept per dynamic buffer)");
+    return (uint32_t)n;
+  }();
+  static const uint64_t budget = [] {
+    const std::string v = env::getEnvVar("DXMT_DYN_KEEP_KB");
+    long kb = v.empty() ? 4096 : std::strtol(v.c_str(), nullptr, 0);
+    if (kb < 0) kb = 0;
+    return (uint64_t)kb * 1024;
+  }();
+  if (!keep_n)
+    return 0;
+  uint64_t by_bytes = length ? budget / length : keep_n;
+  uint64_t k = std::min<uint64_t>(keep_n, by_bytes);
+  return (uint32_t)std::max<uint64_t>(k, 64);
+}
+
 DynamicBuffer::DynamicBuffer(Buffer *buffer, Flags<BufferAllocationFlag> flags) :
     buffer(buffer),
     flags_(flags),
@@ -61,6 +106,25 @@ DynamicBuffer::allocate(uint64_t coherent_seq_id, bool *out_minted_fresh) {
    *
    * The walk and the trim now run for EVERY instance; only the statistics are
    * gated. Behaviour must never depend on diagnostic capacity. */
+  if (const uint32_t keep = dynKeepFor(buffer ? buffer->length() : 0)) {
+    /* DXMT_DYN_KEEP: fifo is in non-decreasing will_free_at order, so
+     * dropping from the front while the front is GPU-complete never touches a fenced
+     * entry; O(dropped), no walk. */
+    uint64_t freed = 0, freed_n = 0;
+    while (fifo.size() > keep && fifo.front().will_free_at <= coherent_seq_id) {
+      const QueueEntry &f = fifo.front();
+      freed += f.allocation.ptr() ? f.allocation->census_bytes_ : 0;
+      freed_n++;
+      fifo.pop_front();
+    }
+    if (freed_n) {
+      trimmed_last_ = true;
+      g_trim_total_n.fetch_add(freed_n, std::memory_order_relaxed);
+      g_trim_total_bytes.fetch_add(freed, std::memory_order_relaxed);
+    }
+    if (census_id_ < DYN_CENSUS_SLOTS)
+      g_dyn_stats[census_id_].depth.store(fifo.size(), std::memory_order_relaxed);
+  } else
   {
     const bool stats = census_id_ < DYN_CENSUS_SLOTS;
     uint64_t en = 0, eb = 0, in_n = 0, in_b = 0, lo = ~0ull, hi = 0, dup = 0;

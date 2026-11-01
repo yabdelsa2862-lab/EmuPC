@@ -366,7 +366,7 @@ void APIENTRY_GL4ES gl4es_glEnableClientStateIndexed(GLenum array, GLuint index)
         errorShim(GL_INVALID_ENUM);
     }
 }
-// MABD local: Apple has no symbol aliases
+// EmuPC: Apple has no symbol aliases
 void APIENTRY_GL4ES gl4es_glEnableClientStatei(GLenum array, GLuint index) { gl4es_glEnableClientStateIndexed(array, index); }
 
 void APIENTRY_GL4ES gl4es_glDisableClientStateIndexed(GLenum array, GLuint index) {
@@ -381,7 +381,7 @@ void APIENTRY_GL4ES gl4es_glDisableClientStateIndexed(GLenum array, GLuint index
         errorShim(GL_INVALID_ENUM);
     }
 }
-// MABD local: Apple has no symbol aliases
+// EmuPC: Apple has no symbol aliases
 void APIENTRY_GL4ES gl4es_glDisableClientStatei(GLenum array, GLuint index) { gl4es_glDisableClientStateIndexed(array, index); }
 
 void APIENTRY_GL4ES gl4es_glEnableVertexArray(GLuint vaobj, GLenum array) {

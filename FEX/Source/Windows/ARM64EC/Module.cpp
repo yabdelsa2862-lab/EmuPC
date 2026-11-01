@@ -103,7 +103,7 @@ extern "C" uint32_t IosCallRetStackElided;
 static uint32_t IosTebTsdImportFound = 0;
 uint64_t IosFfsBypassLog[4] {};
 /* ml1131: transition probe, written by Module.S and read by wine's ntdll-unix
- * sampler through this DATA export (libarm64ecfex.def). Layout in bytes:
+ * sampler through this DATA export (libarm64ecfex_ios.def). Layout in bytes:
  *   0     magic 'MADXPFEX' (set in ProcessInit)
  *   64    x64->EC calls, 16 shards x 64 bytes (shard = bits 16..19 of sp), LSE add
  *   1088  FPCR writes actually performed in ExitFunctionEC, 16 shards
@@ -205,6 +205,13 @@ fextl::unique_ptr<FEX::DummyHandlers::DummySignalDelegator> SignalDelegator;
 fextl::unique_ptr<Exception::ECSyscallHandler> SyscallHandler;
 fextl::unique_ptr<FEX::Windows::StatAlloc> StatAllocHandler;
 std::optional<FEX::Windows::InvalidationTracker> InvalidationTracker;
+/* iOS-Madeira: set by ProcessTerm when the process starts exiting
+ * (NtTerminateProcess(0)). The DLLs detached after this module still free
+ * and protect memory, and by then this module's own detach may have torn
+ * down CTX: a free notified at Rocket League's quit called through CTX's
+ * zeroed vtable. Code invalidation is pointless once the process is exiting,
+ * so the notifications below stop touching the tracker. */
+std::atomic<bool> ProcessTerminating {false};
 std::optional<FEX::Windows::CPUFeatures> CPUFeatures;
 std::optional<FEX::Windows::OvercommitTracker> OvercommitTracker;
 std::optional<FEX::Windows::ImageTracker> ImageTracker;
@@ -687,6 +694,7 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&
   Args->Context = StoreStateToPackedECContext(Thread, Context.Fpcr, Context.Fpsr);
   LogMan::Msg::DFmt("pc: {:X} rip: {:X}", Context.Pc, Args->Context.Pc);
 
+#ifdef FEX_IOS_HOST
   // ml341: same gap as #52 but on the exception path — the reconstructed rip can be a
   // module POOL-COPY alias (block metadata predating the CompileBlock redirect, or a
   // branch target captured mid-lookup). Handing a pool-band rip to KiUserExceptionDispatcher
@@ -702,6 +710,7 @@ static void RethrowGuestException(const EXCEPTION_RECORD& Rec, ARM64_NT_CONTEXT&
       Args->Context.Pc = PeRip;
     }
   }
+#endif
 
   // X64 Windows always clears TF, DF and AF when handling an exception, restoring after.
   // Current ARM64EC windows can only restore NZCV+SS when returning from an exception and other flags are left untouched from the handler context.
@@ -837,6 +846,17 @@ public:
     return Result;
   }
 
+  bool IsHotSMCCodePage(uint64_t Address) override {
+#ifdef FEX_IOS_HOST
+    // Code compiled from a pool-copy alias: the tracker knows the page by its PE address.
+    const uint64_t OrigAddr = IosJitReverseTranslate(Address);
+    if (OrigAddr != Address && InvalidationTracker->IsHotSMCPage(OrigAddr)) {
+      return true;
+    }
+#endif
+    return InvalidationTracker->IsHotSMCPage(Address);
+  }
+
   void PreCompile() override {
     ProcessPendingCrossProcessEmulatorWork();
   }
@@ -886,12 +906,22 @@ static bool IosSmcStoreFastPath(FEXCore::Core::InternalThreadState* Thread, ARM6
     return false;
   }
   constexpr uint32_t IosStrImmMask = 0x3FC0'0000, IosStrImmInst = 0x3900'0000;  // STR/STRB/STRH Rt, [Xn, #uimm12]
+  constexpr uint32_t IosSimdStrImmMask = 0x3FC0'0000, IosSimdStrImmInst = 0x3D00'0000;  // STR Bt/Ht/St/Dt, [Xn, #uimm12]
+  constexpr uint32_t IosSimdStrQImmMask = 0xBFC0'0000, IosSimdStrQImmInst = 0x3D80'0000;  // STR Qt, [Xn, #uimm12]
+  constexpr uint32_t IosSimdSturMask = 0x3FE0'0C00, IosSimdSturInst = 0x3C00'0000;  // STUR Bt/Ht/St/Dt, [Xn, #simm9]
+  constexpr uint32_t IosSimdSturQMask = 0xBFE0'0C00, IosSimdSturQInst = 0x3C80'0000;  // STUR Qt, [Xn, #simm9]
+  constexpr uint32_t IosSimdStpMask = 0x3E40'0000, IosSimdStpInst = 0x2C00'0000;  // STP St/Dt/Qt, [Xn, #imm7] (offset/pre/post/np)
   constexpr uint32_t IosSturMask = 0x3BE0'0C00, IosSturInst = 0x3800'0000;      // STUR*, including STURB
   constexpr uint32_t IosStrRegMask = 0x3FFF'FC00, IosStrRegInst = 0x383F'6800;  // STR* [Xn, xzr], the backpatch form
   constexpr uint32_t IosDmbIsh = 0xD503'3BBF;
   const auto* Pc = reinterpret_cast<const uint32_t*>(Context.Pc);
   const uint32_t Instr = __atomic_load_n(&Pc[0], __ATOMIC_ACQUIRE);
-  if ((Instr & IosStrImmMask) == IosStrImmInst) {
+  if ((Instr & IosStrImmMask) == IosStrImmInst ||
+      (Instr & IosSimdStrImmMask) == IosSimdStrImmInst ||
+      (Instr & IosSimdStrQImmMask) == IosSimdStrQImmInst ||
+      (Instr & IosSimdSturMask) == IosSimdSturInst ||
+      (Instr & IosSimdSturQMask) == IosSimdSturQInst ||
+      (Instr & IosSimdStpMask) == IosSimdStpInst) {
     return true;  // no handler family matches: it declines, Pc unchanged
   }
   if ((Instr & IosSturMask) != IosSturInst && (Instr & IosStrRegMask) != IosStrRegInst) {
@@ -1137,10 +1167,8 @@ NTSTATUS ProcessInit() {
   {
     const char *rw_env = getenv("WINE_IOS_JIT_RW");
     const char *rx_env = getenv("WINE_IOS_JIT_RX");
-    const char *size_env = getenv("WINE_IOS_JIT_SIZE");
     uint64_t rw = rw_env ? strtoull(rw_env, nullptr, 16) : 0;
     uint64_t rx = rx_env ? strtoull(rx_env, nullptr, 16) : 0;
-    uint64_t pool_size = size_env ? strtoull(size_env, nullptr, 16) : 0;
     int64_t off = (rw && rx) ? (int64_t)(rw - rx) : 0;
     HANDLE stderr_h = NtCurrentTeb()->ProcessEnvironmentBlock->ProcessParameters
         ? reinterpret_cast<HANDLE>(reinterpret_cast<RTL_USER_PROCESS_PARAMETERS64*>(
@@ -1159,15 +1187,9 @@ NTSTATUS ProcessInit() {
        * return (msvcp140 EH pre-splash, steam_api64 init), revert THIS
        * assignment to 0 but KEEP the NtFlushInstructionCache flush. */
       FEXCore::DualMap::WriteOffset = off;
-      if (pool_size) {
-        ios_fex_jit_pool_rx = static_cast<uintptr_t>(rx);
-        ios_fex_jit_pool_end = static_cast<uintptr_t>(rx + pool_size);
-      }
       int n = snprintf(buf, sizeof(buf),
-          "[FEX-iOS] fast-write ENABLED (WriteOffset=0x%llx RW=0x%llx RX=0x%llx pool=[0x%llx,0x%llx) SIZE=%s)\n",
-          (unsigned long long)off, (unsigned long long)rw, (unsigned long long)rx,
-          (unsigned long long)ios_fex_jit_pool_rx, (unsigned long long)ios_fex_jit_pool_end,
-          size_env ? size_env : "(null)");
+          "[FEX-iOS] fast-write ENABLED (WriteOffset=0x%llx RW=0x%llx RX=0x%llx)\n",
+          (unsigned long long)off, (unsigned long long)rw, (unsigned long long)rx);
       if (stderr_h) { ULONG w = 0; WriteFile(stderr_h, buf, n, &w, nullptr); }
     } else {
       int n = snprintf(buf, sizeof(buf),
@@ -1208,6 +1230,16 @@ NTSTATUS ProcessInit() {
   }
 #endif
   InvalidationTracker.emplace(*CTX, Threads);
+  {
+    // MADEIRA: hot SMC pages (InvalidationTracker::EnableHotSMCPages). MADEIRA_SMC_HOT_PAGE: unset = 64 write
+    // faults within a second, 0 = off (every write to a code page invalidates it), N = threshold.
+    uint32_t HotThreshold = 64;
+    if (const char* Hot = getenv("MADEIRA_SMC_HOT_PAGE"); Hot && *Hot) {
+      HotThreshold = static_cast<uint32_t>(strtoul(Hot, nullptr, 0));
+    }
+    InvalidationTracker->EnableHotSMCPages(HotThreshold);
+    LogMan::Msg::EFmt("[smc-hot] hot SMC pages {} (threshold {} write faults per second)", HotThreshold ? "on" : "off", HotThreshold);
+  }
   ImageTracker.emplace(*CTX, false);
 
   auto MainModule = reinterpret_cast<__TEB*>(NtCurrentTeb())->Peb->ImageBaseAddress;
@@ -1263,7 +1295,11 @@ NTSTATUS ProcessInit() {
   return STATUS_SUCCESS;
 }
 
-void ProcessTerm(HANDLE Handle, BOOL After, NTSTATUS Status) {}
+void ProcessTerm(HANDLE Handle, BOOL After, NTSTATUS Status) {
+  if (!After) {
+    ProcessTerminating.store(true, std::memory_order_relaxed);
+  }
+}
 
 class ScopedCallbackDisable {
 private:
@@ -1334,7 +1370,8 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
     std::scoped_lock Lock(ThreadCreationMutex);
     static std::atomic<uint64_t> IosSmcHandled {0};
     bool IosSmcSay = true;
-    if (InvalidationTracker && InvalidationTracker->HandleRWXAccessViolation(Thread, NativeContext->Pc, FaultAddress)) {
+    bool SmcHotPage = false;
+    if (InvalidationTracker && InvalidationTracker->HandleRWXAccessViolation(Thread, NativeContext->Pc, FaultAddress, &SmcHotPage)) {
       {
         const uint64_t N = IosSmcHandled.fetch_add(1, std::memory_order_relaxed) + 1;
         IosSmcSay = N <= 40 || (N % 1000) == 0;
@@ -1342,12 +1379,20 @@ bool ResetToConsistentStateImpl(const ThreadCPUArea CPUArea, EXCEPTION_RECORD* E
         if (IosSmcSay && N > 40) LogMan::Msg::DFmt("[smc] ml1055 {} self-modifying writes handled so far (lines sampled 1 in 1000)", N);
       }
       FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedSMCCount, 1);
-      if (CTX->IsAddressInCodeBuffer(Thread, NativeContext->Pc) && !CTX->IsCurrentBlockSingleInst(CPUArea.ThreadState()) &&
+      // MADEIRA: a hot page was not invalidated, and the blocks compiled from it check their own code, so
+      // its writes never need the inline single step.
+      if (!SmcHotPage && CTX->IsAddressInCodeBuffer(Thread, NativeContext->Pc) && !CTX->IsCurrentBlockSingleInst(CPUArea.ThreadState()) &&
           CTX->IsAddressInCurrentBlock(Thread, FaultAddress & FEXCore::Utils::FEX_PAGE_MASK, FEXCore::Utils::FEX_PAGE_SIZE)) {
         // If we are not patching ourself (single inst block case) and potentially patching the current block, this is inline SMC. Reconstruct the current context (before the SMC write) then single step the write to reduce it to regular SMC.
         Exception::ReconstructThreadState(Thread, *NativeContext);
-        LogMan::Msg::DFmt("Handled inline self-modifying code: pc: {:X} rip: {:X} fault: {:X}", NativeContext->Pc,
-                          Thread->CurrentFrame->State.rip, FaultAddress);
+        // MADEIRA: one line per fault flooded the log (a data write next to its code faults thousands of
+        // times a second); keep the first 16, then 1 in 4096.
+        static std::atomic<uint64_t> InlineSmcCount {0};
+        const uint64_t InlineN = InlineSmcCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (InlineN <= 16 || (InlineN % 4096) == 0) {
+          LogMan::Msg::DFmt("Handled inline self-modifying code #{}: pc: {:X} rip: {:X} fault: {:X}", InlineN, NativeContext->Pc,
+                            Thread->CurrentFrame->State.rip, FaultAddress);
+        }
         NativeContext->Pc = CPUArea.DispatcherLoopTopEnterECFillSRA();
         NativeContext->Sp = CPUArea.EmulatorStackBase();
         NativeContext->X11 = 1;                                        // Set ENTRY_FILL_SRA_SINGLE_INST_REG to force a single step
@@ -1573,7 +1618,7 @@ NTSTATUS ResetToConsistentState(EXCEPTION_RECORD* Exception, CONTEXT* GuestConte
  * required for its correctness. Drop the BEFORE/AFTER mutex entirely
  * and just call into the tracker directly on AFTER. */
 void NotifyMemoryAlloc(void* Address, SIZE_T Size, ULONG Type, ULONG Prot, BOOL After, NTSTATUS Status) {
-  if (!InvalidationTracker || !GetCPUArea().ThreadState()) {
+  if (!InvalidationTracker || ProcessTerminating.load(std::memory_order_relaxed) || !GetCPUArea().ThreadState()) {
     return;
   }
 
@@ -1586,7 +1631,7 @@ void NotifyMemoryAlloc(void* Address, SIZE_T Size, ULONG Type, ULONG Prot, BOOL 
 }
 
 void NotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL After, NTSTATUS Status) {
-  if (!InvalidationTracker || !GetCPUArea().ThreadState()) {
+  if (!InvalidationTracker || ProcessTerminating.load(std::memory_order_relaxed) || !GetCPUArea().ThreadState()) {
     return;
   }
 
@@ -1598,7 +1643,7 @@ void NotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL After, NT
 }
 
 void NotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After, NTSTATUS Status) {
-  if (!InvalidationTracker || !GetCPUArea().ThreadState()) {
+  if (!InvalidationTracker || ProcessTerminating.load(std::memory_order_relaxed) || !GetCPUArea().ThreadState()) {
     return;
   }
 
@@ -1641,7 +1686,7 @@ void NotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After, 
  * Idempotent: re-registering the same intervals is harmless, and the syscall path still
  * fires for the same module whenever its gate does let it through. */
 extern "C" void NotifyImageMap(void* Address) {
-  if (!InvalidationTracker || !Address) {
+  if (!InvalidationTracker || ProcessTerminating.load(std::memory_order_relaxed) || !Address) {
     return;
   }
 
@@ -1675,7 +1720,7 @@ NTSTATUS NotifyMapViewOfSection(void* Unk1, void* Address, void* Unk2, SIZE_T Si
    * (+0x1900733, +0x3b508f0), which is why CEF never finished initialising.
    *
    * Keep the tracker null-checks; only the thread-state requirement is wrong. */
-  if (!InvalidationTracker || !ImageTracker) {
+  if (!InvalidationTracker || ProcessTerminating.load(std::memory_order_relaxed) || !ImageTracker) {
     /* ml190: do not drop it — replay once ProcessInit has built the trackers. */
     QueuePendingImageMap(reinterpret_cast<uint64_t>(Address));
     return STATUS_SUCCESS;
@@ -1724,7 +1769,7 @@ NTSTATUS NotifyMapViewOfSection(void* Unk1, void* Address, void* Unk2, SIZE_T Si
 }
 
 void NotifyUnmapViewOfSection(void* Address, BOOL After, NTSTATUS Status) {
-  if (!InvalidationTracker || !GetCPUArea().ThreadState()) {
+  if (!InvalidationTracker || ProcessTerminating.load(std::memory_order_relaxed) || !GetCPUArea().ThreadState()) {
     return;
   }
 
@@ -1740,7 +1785,7 @@ void NotifyUnmapViewOfSection(void* Address, BOOL After, NTSTATUS Status) {
 }
 
 void FlushInstructionCacheHeavy(const void* Address, SIZE_T Size) {
-  if (!InvalidationTracker || !GetCPUArea().ThreadState()) {
+  if (!InvalidationTracker || ProcessTerminating.load(std::memory_order_relaxed) || !GetCPUArea().ThreadState()) {
     return;
   }
 
@@ -1749,7 +1794,7 @@ void FlushInstructionCacheHeavy(const void* Address, SIZE_T Size) {
 }
 
 void BTCpu64FlushInstructionCache(const void* Address, SIZE_T Size) {
-  if (!InvalidationTracker || !GetCPUArea().ThreadState()) {
+  if (!InvalidationTracker || ProcessTerminating.load(std::memory_order_relaxed) || !GetCPUArea().ThreadState()) {
     return;
   }
 
@@ -1758,7 +1803,7 @@ void BTCpu64FlushInstructionCache(const void* Address, SIZE_T Size) {
 }
 
 void BTCpu64NotifyMemoryDirty(void* Address, SIZE_T Size) {
-  if (!InvalidationTracker || !GetCPUArea().ThreadState()) {
+  if (!InvalidationTracker || ProcessTerminating.load(std::memory_order_relaxed) || !GetCPUArea().ThreadState()) {
     return;
   }
 
@@ -1812,7 +1857,7 @@ void BTCpu64NotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After
     return;
   }
 
-  if (!InvalidationTracker || !ThreadState) {
+  if (!InvalidationTracker || ProcessTerminating.load(std::memory_order_relaxed) || !ThreadState) {
     return;
   }
 
@@ -2012,6 +2057,10 @@ NTSTATUS ThreadInit() {
 #ifdef FEX_IOS_HOST
   IosTiLog("[FEX-iOS] TI:createthread\n");
 #endif
+  if (Thread->CurrentFrame->IosBlockRing) {
+    /* ml1205: TEB+0x1710 (ActivityId, unused by Wine) names this thread's block ring for ntdll's reporters. */
+    *reinterpret_cast<uint64_t**>(reinterpret_cast<uintptr_t>(IOSLoadTEB()) + 0x1710) = Thread->CurrentFrame->IosBlockRing;
+  }
 
   // Default segment setup.
   auto Frame = Thread->CurrentFrame;
@@ -2076,10 +2125,15 @@ NTSTATUS ThreadInit() {
      * a band that just proved it has nothing left to give. The caller releases
      * the loader lock and terminates only this thread, so the process survives
      * to report the failure instead of wedging. */
+#ifdef FEX_IOS_HOST
     LogMan::Msg::EFmt("[FEX-iOS] ThreadInit: call-ret stack unavailable (band [{:#x},{:#x}]) "
                       "-- unwinding thread {:#x} and returning STATUS_NO_MEMORY",
                       (unsigned long long)ios_fex_band_base, (unsigned long long)ios_fex_band_end,
                       (unsigned long long)GetCurrentThreadId());
+#else
+    LogMan::Msg::EFmt("ThreadInit: call-ret stack unavailable -- unwinding thread {:#x} and returning STATUS_NO_MEMORY",
+                      (unsigned long long)GetCurrentThreadId());
+#endif
 
     Frame->State.segment_arrays[FEXCore::Core::CPUState::SEGMENT_ARRAY_INDEX_GDT] = nullptr;
     Frame->State.segment_arrays[FEXCore::Core::CPUState::SEGMENT_ARRAY_INDEX_LDT] = nullptr;

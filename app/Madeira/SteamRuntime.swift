@@ -19,7 +19,7 @@ enum SteamRuntimeFiles {
         let sha256: String
     }
     static let origin = "https://client-update.akamai.steamstatic.com/"
-    // MABD local: Valve's 64-bit client 1792618285 (steam_client_win64). The
+    // EmuPC: Valve's 64-bit client 1792618285 (steam_client_win64). The
     // 32-bit channel (steam_client_win32) stopped at the January 2026 build,
     // whose steamclient64.dll lacks the interfaces newer games ask for
     // (SteamUtils011, SteamInput007, SteamNetworkingSockets013): Geometry
@@ -258,7 +258,7 @@ actor SteamRuntimeInstaller {
             SteamRuntimeFiles.lastConflict = "a linked Steam folder"
             throw SteamRuntimeFiles.Failure.conflict
         }
-        // Existing installs are retained; this trial prepares missing files. MABD local:
+        // Existing installs are retained; this trial prepares missing files. EmuPC:
         // an earlier pinned client is replaced by the current one instead.
         let upgrading = fm.fileExists(atPath: root.appendingPathComponent("steam.exe").path) && SteamRuntimeFiles.needsUpdate(root)
         guard upgrading || !fm.fileExists(atPath: root.appendingPathComponent("steam.exe").path) else {
@@ -355,7 +355,7 @@ actor SteamRuntimeInstaller {
 }
 #endif
 
-/// MABD local: one automatic update attempt per app run (ContentView's launch).
+/// EmuPC: one automatic update attempt per app run (ContentView's launch).
 enum SteamClientUpdate {
     nonisolated(unsafe) static var tried = false
 }

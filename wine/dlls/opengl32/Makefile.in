@@ -6,7 +6,12 @@ IMPORTS   = user32 gdi32 advapi32 win32u
 DELAYIMPORTS = glu32
 UNIX_LIBS    = -lwin32u
 
-EXTRADLLFLAGS = -Wl,--image-base,0x7a800000
+# Madeira: the fixed low base is for the x86 builds only. On iOS nothing can be
+# mapped below 4 GB, and an ARM64EC opengl32 based at 0x7a800000 is loaded as
+# an emulated "sub-floor" window, where its thunks lost the TEB (NULL teb in
+# every wgl call).
+i386_EXTRADLLFLAGS = -Wl,--image-base,0x7a800000
+x86_64_EXTRADLLFLAGS = -Wl,--image-base,0x7a800000
 
 VER_FILEDESCRIPTION_STR = "Wine OpenGL Client"
 VER_PRODUCTVERSION      = 5,1,2600,2082

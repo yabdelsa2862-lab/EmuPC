@@ -4,7 +4,7 @@
 import Foundation
 import SwiftUI
 
-// MABD local: one-tap tuning for a game.
+// EmuPC: one-tap tuning for a game.
 //
 // Graphics presets set the game's resolution and MetalFX upscaling together:
 // Performance renders at 480 lines and lets MetalFX scale it 1.5× (about 720
@@ -145,22 +145,16 @@ final class GameDeletion: ObservableObject {
         if parts.count >= 3, parts[0].caseInsensitiveCompare("Games") == .orderedSame {
             return .folder(drive.appendingPathComponent("Games/" + parts[1], isDirectory: true))
         }
-        if parts.count >= 4, parts[0] == "External", parts[1].caseInsensitiveCompare("Games") == .orderedSame {
-            return .folder(drive.appendingPathComponent("External/Games/" + parts[2], isDirectory: true))
+        if parts.count >= 4, parts[0] == ExternalDrive.linkName, parts[1].caseInsensitiveCompare("Games") == .orderedSame {
+            return .folder(drive.appendingPathComponent(ExternalDrive.linkName + "/Games/" + parts[2], isDirectory: true))
         }
-        // Epic downloads (Epic.swift): C:\Epic Games\<folder>, or the drive's.
-        if entry.epicApp != nil, parts.count >= 3, parts[0] == "Epic Games" {
-            return .folder(drive.appendingPathComponent("Epic Games/" + parts[1], isDirectory: true))
-        }
-        if entry.epicApp != nil, parts.count >= 4, parts[0] == "External", parts[1] == "Epic Games" {
-            return .folder(drive.appendingPathComponent("External/Epic Games/" + parts[2], isDirectory: true))
-        }
+        // Epic games are uninstalled from their Epic page (EpicLibrary.swift).
         // GOG downloads (GOG.swift): C:\GOG Games\<folder>, or the drive's.
         if entry.gogID != nil, parts.count >= 3, parts[0] == "GOG Games" {
             return .folder(drive.appendingPathComponent("GOG Games/" + parts[1], isDirectory: true))
         }
-        if entry.gogID != nil, parts.count >= 4, parts[0] == "External", parts[1] == "GOG Games" {
-            return .folder(drive.appendingPathComponent("External/GOG Games/" + parts[2], isDirectory: true))
+        if entry.gogID != nil, parts.count >= 4, parts[0] == ExternalDrive.linkName, parts[1] == "GOG Games" {
+            return .folder(drive.appendingPathComponent(ExternalDrive.linkName + "/GOG Games/" + parts[2], isDirectory: true))
         }
         return .entryOnly
     }
@@ -239,7 +233,7 @@ struct GameDeleteDialog: ViewModifier {
 
 // MARK: - Controller button layout
 
-/// MABD local: controller remapping, one global layout and an optional one per
+/// EmuPC: controller remapping, one global layout and an optional one per
 /// game. Applied to the pad state the game sees (GamepadInput), never to what
 /// EmuPC's own menus read, so the guide and its chords keep working. A layout maps
 /// each physical button to the button the game gets, or to nothing.
@@ -376,7 +370,7 @@ struct ButtonLayoutGameSection: View {
 
 // MARK: - Low-memory devices
 
-/// MABD local: a profile for devices with 4 GB of RAM or less (iPad Air 4,
+/// EmuPC: a profile for devices with 4 GB of RAM or less (iPad Air 4,
 /// older iPhones), where the defaults sized for 8 GB phones run out of memory.
 /// Applied once, at the first start on such a device, and only to keys the
 /// player has not set: a smaller JIT pool, a 1 GB video memory budget (games
@@ -409,7 +403,7 @@ enum LowMemoryDevice {
 
 // MARK: - Known games
 
-/// MABD local: settings a game is known to need, put on its library entry when
+/// EmuPC: settings a game is known to need, put on its library entry when
 /// it is first added (a Steam download finishing, or its first details page).
 /// Only games tested on this phone are listed; the player can change any of it.
 enum KnownGameProfiles {
@@ -446,7 +440,7 @@ enum KnownGameProfiles {
 
 // MARK: - Controller layout editor
 
-/// MABD local: the layout editor of the controller home, in the style of
+/// EmuPC: the layout editor of the controller home, in the style of
 /// Steam's controller settings: a drawn pad in the middle, what each shoulder,
 /// trigger and View/Menu does beside it, and the sticks, d-pad and A/B/X/Y as
 /// groups underneath. The d-pad moves, A opens, LB/RB switch this game / all
@@ -932,21 +926,27 @@ struct LayoutEditorView: View {
 
 // MARK: - OpenGL games
 
-/// MABD local: a game whose program draws with OpenGL starts with the OpenGL
-/// driver on (env.MADEIRA_OPENGL = 1 in its config: gl4es on OpenGL ES,
-/// driver_ios.c and build/gl4es-ios). Other games keep it off, so Direct3D
-/// games and Steam behave as before. A player's own "env.MADEIRA_OPENGL = 0"
-/// stays and turns it off for that game.
+/// EmuPC: a game whose program draws with OpenGL starts with the gl4es
+/// backend (env.MADEIRA_GL4ES = 1 in its config: desktop OpenGL 2.1 on OpenGL ES,
+/// driver_ios.c and build/gl4es-ios). Other games keep upstream's OpenGL routes
+/// (opengl_ios.c; env.MADEIRA_OPENGL is upstream's switch for Mesa on D3D12).
+/// A player's own "env.MADEIRA_GL4ES = 0" stays and turns it off for that game.
 enum OpenGLGames {
-    static let line = "env.MADEIRA_OPENGL = 1"
+    static let line = "env.MADEIRA_GL4ES = 1"
+    /// What earlier EmuPC builds wrote for the same thing, before upstream gave
+    /// MADEIRA_OPENGL its own meaning (2026-10-29 merge): replaced on sight.
+    static let oldLine = "env.MADEIRA_OPENGL = 1"
     /// Bring-up tracing lines of earlier builds, removed from configs on sight.
     static let oldTraces: Set<String> = [
         "env.WINEDEBUG = err+all,err-virtual,fixme-d3dcompiler,trace+wgl,trace+opengl,warn+win,warn+system,warn+monitor,trace+display",
         "env.WINEDEBUG = err+all,err-virtual,fixme-d3dcompiler,warn+all,warn-virtual,warn-seh,warn-module,warn-file,warn-heap,trace+wgl,trace+opengl,trace+dialog,trace+msgbox",
+        oldLine,
     ]
 
     static func uses(_ entry: LibraryEntry) -> Bool {
         entry.graphicsAPI?.localizedCaseInsensitiveContains("OpenGL") == true
+            // DirectDraw and Direct3D 1-7 draw through Wine's wined3d, which needs OpenGL
+            || entry.graphicsAPI?.localizedCaseInsensitiveContains("DirectDraw") == true
             || GOGLaunchOverride.wantsOpenGL(entry)
             || folderImportsOpenGL(entry)
     }
@@ -961,14 +961,18 @@ enum OpenGLGames {
         guard fm.fileExists(atPath: folder.path, isDirectory: &isDir) else { return false }
         if !isDir.boolValue { folder.deleteLastPathComponent() }
         let programs = (try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
-        return programs.contains { $0.pathExtension.lowercased() == "exe" && LibraryModel.importNames($0).contains("opengl32.dll") }
+        return programs.contains {
+            guard $0.pathExtension.lowercased() == "exe" else { return false }
+            let names = LibraryModel.importNames($0)
+            return names.contains("opengl32.dll") || names.contains("ddraw.dll")
+        }
     }
 
     /// True when the config changed.
     static func apply(_ entry: inout LibraryEntry) -> Bool {
         var lines = entry.config?.components(separatedBy: "\n").filter { !$0.isEmpty } ?? []
         let key = { (l: String) in l.split(separator: "=").first.map { $0.trimmingCharacters(in: .whitespaces) } ?? l }
-        let own = lines.first { key($0) == "env.MADEIRA_OPENGL" }
+        let own = lines.first { key($0) == "env.MADEIRA_GL4ES" }
         let traced = lines.contains(where: oldTraces.contains)
         lines.removeAll(where: oldTraces.contains)
         if uses(entry) {

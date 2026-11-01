@@ -1,5 +1,5 @@
 #!/bin/zsh
-# MABD local: gl4es (desktop OpenGL 2.1 on OpenGL ES, MIT, ../../gl4es) for
+# EmuPC: gl4es (desktop OpenGL 2.1 on OpenGL ES, MIT, ../../gl4es) for
 # iOS, plus the iOS glue (winios_gl.m: EAGL contexts, IOSurface-backed
 # window buffers, Metal present). Output: build/gl4es-ios/out/libgl4es_ios.a,
 # merged into libwin32u_unix.a by build/win32u-unix/build.sh.

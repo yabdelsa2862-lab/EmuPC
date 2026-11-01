@@ -4,7 +4,7 @@
 import PhotosUI
 import SwiftUI
 
-// MABD local: the controller home's look, console style. An accent colour for
+// EmuPC: the controller home's look, console style. An accent colour for
 // focus and selection, a background behind the home, and a startup animation
 // when Madeira opens in the controller interface. Settings › Theme (controller
 // and touch) chooses; stored in UserDefaults.

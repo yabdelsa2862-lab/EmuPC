@@ -24,7 +24,7 @@ static const struct dock_client_layout layouts[] = {
         0x7612c0, 0x720330, 0x81dad0
     },
     {
-        /* MABD local: Valve's 64-bit client 1792618285 (steam_client_win64,
+        /* EmuPC: Valve's 64-bit client 1792618285 (steam_client_win64,
          * bins_win64), October 2026. Same slots as 202601; every pinned RVA
          * re-read by RTTI and method name, see docs/CLIENT_LAYOUTS.md. */
         "253e0a11a4415b38c78a42f7bdd6ecc426455f06c1ba6453a48090df3142dbbc", 202610,

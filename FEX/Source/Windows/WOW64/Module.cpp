@@ -391,6 +391,9 @@ FrontendThreadData* GetFrontendThreadData(FEXCore::Core::InternalThreadState* Th
   return static_cast<FrontendThreadData*>(Thread->FrontendPtr);
 }
 
+/* MADEIRA: the code-buffer sweeper exists only in the iOS host build (CPUBackend.cpp), so the
+ * ml1430 syscall parking for it is compiled only there too. */
+#ifdef FEX_IOS_HOST
 /* MADEIRA ml1430: WOW64 SYSCALL PARKING FOR THE CODE-BUFFER SWEEPER.
  *
  * The emitted code of every process shares one code buffer that is replaced by a new
@@ -452,6 +455,7 @@ static void IosWowUnpark(FrontendThreadData* TD) {
     __asm volatile("yield");
   }
 }
+#endif
 
 // Returns the HOST address of the 32-bit TEB paired with the given 64-bit TEB.
 uint64_t GetWowTEBHost(void* TEB) {
@@ -881,10 +885,14 @@ public:
       // inside that parameter block is still a guest address and must be converted by the unixlib
       // thunk that owns the struct layout, exactly as wow64.dll's `*_32to64` helpers do for
       // syscalls. FEX cannot do it - it does not know the layout.
+#ifdef FEX_IOS_HOST
       auto* TD = GetFrontendThreadData(TLS.ThreadState());
       IosWowPark(TD); // ml1430
+#endif
       ReturnRAX = static_cast<uint64_t>(WineUnixCall(StackArgs->Handle, StackArgs->ID, GuestWindow::ToHostPtr(StackArgs->Args)));
+#ifdef FEX_IOS_HOST
       IosWowUnpark(TD);
+#endif
       Context::LockJITContext(TLS);
     } else if (Frame->State.rip == (uint64_t)BridgeInstrs::Syscall) {
       const uint64_t EntryRAX = Frame->State.gregs[FEXCore::X86State::REG_RAX];
@@ -898,11 +906,15 @@ public:
       // wow64.dll reads the argument block directly, so it needs a host pointer. The 32-bit values
       // *inside* the block stay guest and are converted by wow64.dll's own get_ptr/*_32to64
       // helpers, which the design makes window-aware.
+#ifdef FEX_IOS_HOST
       auto* TD = GetFrontendThreadData(TLS.ThreadState());
       IosWowPark(TD); // ml1430
+#endif
       ReturnRAX = static_cast<uint64_t>(
         Wow64SystemServiceEx(static_cast<UINT>(EntryRAX), reinterpret_cast<UINT*>(GuestWindow::ToHost(ReturnRSP + 4))));
+#ifdef FEX_IOS_HOST
       IosWowUnpark(TD);
+#endif
       Context::LockJITContext(TLS);
     }
     // If a new context has been set, use it directly and don't return to the syscall caller
@@ -995,6 +1007,7 @@ public:
 
 };
 
+#ifdef FEX_IOS_HOST
 /* MADEIRA ml1430: the syscall entry emitted blocks call (Pointers.SyscallHandlerFunc, set
  * per thread in BTCpuThreadInit). IosWowSyscallC arms parking for an outermost-level syscall
  * and, when the sweeper moved the thread while it was blocked, answers where to resume: the
@@ -1070,6 +1083,7 @@ extern "C" __attribute__((naked)) void IosWowSyscallEntry() {
       "br x16;"
       ".seh_endproc;");
 }
+#endif
 
 void BTCpuProcessInit() {
   FEX::Windows::InitCRTProcess();
@@ -1478,6 +1492,7 @@ void BTCpuThreadInit() {
 
   Thread->FrontendPtr = new FrontendThreadData();
 
+#ifdef FEX_IOS_HOST
   // MADEIRA ml1430: route this thread's syscalls through the parking entry and let the
   // code-buffer sweeper see it (see IosWowPark).
   if (IosWowSweepEnabled()) {
@@ -1486,6 +1501,7 @@ void BTCpuThreadInit() {
     IosSweepRegisterThreadEx(Thread, &TD->IosInSim, &TD->IosMigrated);
     TD->IosSweepRegistered = true;
   }
+#endif
 
   auto ThreadTID = GetCurrentThreadId();
   Threads.emplace(ThreadTID, Thread);
@@ -1548,11 +1564,13 @@ void BTCpuThreadTerm(HANDLE Thread, LONG ExitCode) {
   }
   auto ThreadState = TLS.ThreadState();
 
+#ifdef FEX_IOS_HOST
   // MADEIRA ml1430: the sweeper's registry points into the frontend data; leave it (and
   // wait out any sweep in flight) before that is freed. No locks are held here.
   if (GetFrontendThreadData(ThreadState)->IosSweepRegistered) {
     IosSweepUnregisterThread(ThreadState);
   }
+#endif
   delete GetFrontendThreadData(ThreadState);
 
   // GDT and LDT are mirrored, only free one.
@@ -1706,9 +1724,11 @@ __attribute__((naked)) void BTCpuSimulate() {
 
 extern "C" void BTCpuSimulateImpl(CONTEXT* entry_context) {
   const auto TLS = GetTLS();
+#ifdef FEX_IOS_HOST
   // MADEIRA ml1430: a callback can re-enter simulation from inside a parked syscall; it runs
   // emitted code, so the sweeper must see it as in-simulation again (and any sweep finish).
   IosWowUnpark(GetFrontendThreadData(TLS.ThreadState()));
+#endif
   TLS.EntryContext() = entry_context;
   TLS.CachedCallRetSp() = TLS.ThreadState()->CurrentFrame->State.callret_sp;
 

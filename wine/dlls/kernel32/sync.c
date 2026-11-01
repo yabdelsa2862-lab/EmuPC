@@ -42,7 +42,6 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(sync);
 
-static const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)0x7ffe0000;
 
 
 static void get_create_object_attributes( OBJECT_ATTRIBUTES *attr, UNICODE_STRING *nameW,
@@ -78,31 +77,12 @@ static BOOL get_open_object_attributes( OBJECT_ATTRIBUTES *attr, UNICODE_STRING 
     return TRUE;
 }
 
-/******************************************************************************
- *           GetTickCount64       (KERNEL32.@)
- */
-ULONGLONG WINAPI DECLSPEC_HOTPATCH GetTickCount64(void)
-{
-    ULONG high, low;
-
-    do
-    {
-        high = user_shared_data->TickCount.High1Time;
-        low = user_shared_data->TickCount.LowPart;
-    }
-    while (high != user_shared_data->TickCount.High2Time);
-    /* note: we ignore TickCountMultiplier */
-    return (ULONGLONG)high << 32 | low;
-}
-
-/***********************************************************************
- *           GetTickCount       (KERNEL32.@)
- */
-DWORD WINAPI DECLSPEC_HOTPATCH GetTickCount(void)
-{
-    /* note: we ignore TickCountMultiplier */
-    return user_shared_data->TickCount.LowPart;
-}
+/* iOS-Madeira ml1381: GetTickCount and GetTickCount64 are forwarded to kernelbase
+ * (kernel32.spec -import). kernel32's own copies read KUSER_SHARED_DATA at
+ * 0x7ffe0000, which iOS cannot map, so every call trapped and was serviced by the
+ * sub-floor fault path (thousands of Mach exceptions a second in a game that polls
+ * the tick count); kernelbase's ml1232 versions read the same clock with one system
+ * call and no fault. */
 
 /***********************************************************************
  *           RegisterWaitForSingleObject   (KERNEL32.@)

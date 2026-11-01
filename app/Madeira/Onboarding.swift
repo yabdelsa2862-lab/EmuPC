@@ -658,7 +658,7 @@ struct OnboardingView: View {
         }
     }
 
-    /// MABD local: the player's name and picture (Profile.swift).
+    /// EmuPC: the player's name and picture (Profile.swift).
     private var profilePage: some View {
         VStack(alignment: .leading, spacing: 18) {
             header("Create your profile", symbol: "person.crop.circle.badge.plus")
@@ -713,6 +713,8 @@ struct SteamSettingsSection: View {
         Section {
             if let name = signIn.accountName {
                 LabeledContent("Signed in as", value: name)
+                // EmuPC: friends and game invites (SteamFriends.swift).
+                Button { open(.steamFriends) } label: { Label("Friends & invites", systemImage: "person.2") }
                 Button("Sign out of Steam", role: .destructive) { confirmSignOut = true }
             } else {
                 Button { open(.steamSignIn) } label: { Label("Sign in to Steam", systemImage: "person.crop.circle.badge.plus") }

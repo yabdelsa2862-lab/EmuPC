@@ -38,6 +38,11 @@ class SteamSession {
     private var idleDisconnectTask: Task<Void, Never>?
     /// How long to stay connected after the last activity before auto-disconnecting (seconds)
     private let idleTimeout: TimeInterval = 60
+    var customIdleTimeout: TimeInterval?
+    /// True for the companion Friends & Overlay chat session, which uses a distinct
+    /// LoginID mask and chat/mobile UI mode so it can run alongside a running game's
+    /// desktop Steamworks session without session collision.
+    var isChatSession = false
     private var jobIDCounter: UInt64 = 0
     private var pendingJobs: [UInt64: CheckedContinuation<SteamMessageCodec.IncomingMessage, Error>] = [:]
     private var messageHandlers: [UInt32: (SteamMessageCodec.IncomingMessage) -> Void] = [:]
@@ -180,8 +185,9 @@ class SteamSession {
     /// Reset the idle disconnect timer — called after each activity
     private func resetIdleTimer() {
         idleDisconnectTask?.cancel()
+        let timeout = customIdleTimeout ?? idleTimeout
         idleDisconnectTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64((self?.idleTimeout ?? 60) * 1_000_000_000))
+            try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
             guard !Task.isCancelled else { return }
             guard let self, self.connectionState == .authenticated else { return }
             SteamLog.trace("Idle timeout — disconnecting to release the server-side session")
@@ -256,6 +262,13 @@ class SteamSession {
         logon.accessToken = accessToken
         logon.machineName = SteamDevice.name
         logon.clientOSType = -102  // macOS
+        if isChatSession {
+            logon.clientOSType = -600  // iOS companion session
+            logon.shouldRememberPassword = false
+            logon.chatMode = 2         // New Steam Chat
+            logon.uiMode = 4           // Chat/Web UI mode (coexists with desktop game session)
+            logon.loginIDMask = 0x4D4F564C
+        }
 
         let logonData = SteamMessageCodec.encodeClientMessage(
             eMsg: .clientLogon,

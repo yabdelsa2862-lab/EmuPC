@@ -26,6 +26,7 @@
 
 #include <dlfcn.h>
 #include <pthread.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 #include "ntstatus.h"
@@ -1941,6 +1942,25 @@ static VkResult win32u_vkAcquireNextImageKHR( VkDevice client_device, VkSwapchai
     return res;
 }
 
+/* The host surface can measure its size in other units than the client rect (an iOS CAMetalLayer
+ * reports points), so the host may call a swapchain suboptimal although it matches the window's
+ * client rect. The application cannot fix that: a new swapchain gets the same size and the same
+ * result, and recreating it on every frame costs the whole frame. When the swapchain matches the
+ * client rect, such a host VK_SUBOPTIMAL_KHR is reported as VK_SUCCESS. The client rect check
+ * below still reports real resizes. MADEIRA_VK_HOST_SUBOPTIMAL=1 passes it through again. */
+static BOOL ignore_host_suboptimal(void)
+{
+    static int ignore = -1;
+    if (ignore < 0)
+    {
+        const char *env = getenv( "MADEIRA_VK_HOST_SUBOPTIMAL" );
+        ignore = !(env && *env == '1');
+        ERR( "[winios-vk] ml1390 host VK_SUBOPTIMAL_KHR for a swapchain that matches its client rect is %s"
+             " (MADEIRA_VK_HOST_SUBOPTIMAL=1 passes it through)\n", ignore ? "reported as VK_SUCCESS" : "passed through" );
+    }
+    return ignore;
+}
+
 static VkResult win32u_vkQueuePresentKHR( VkQueue client_queue, const VkPresentInfoKHR *client_present_info )
 {
     VkPresentInfoKHR *present_info = (VkPresentInfoKHR *)client_present_info; /* cast away const, it has been copied in the thunks */
@@ -1948,6 +1968,7 @@ static VkResult win32u_vkQueuePresentKHR( VkQueue client_queue, const VkPresentI
     VkSwapchainKHR swapchains_buffer[16], *swapchains = swapchains_buffer;
     struct vulkan_device *device = queue->device;
     const VkSwapchainKHR *client_swapchains;
+    BOOL host_suboptimal_ignored = FALSE, suboptimal_kept = FALSE;
     VkResult res;
 
     TRACE( "queue %p, present_info %p\n", queue, present_info );
@@ -1997,16 +2018,27 @@ static VkResult win32u_vkQueuePresentKHR( VkQueue client_queue, const VkPresentI
             if (present_info->pResults) present_info->pResults[i] = VK_ERROR_OUT_OF_DATE_KHR;
             if (res >= VK_SUCCESS) res = VK_ERROR_OUT_OF_DATE_KHR;
         }
+        else if (swapchain_res == VK_SUBOPTIMAL_KHR && extents_equals( &swapchain->extents, &client_rect ) &&
+                 ignore_host_suboptimal())
+        {
+            if (present_info->pResults) present_info->pResults[i] = VK_SUCCESS;
+            host_suboptimal_ignored = TRUE;
+        }
         else if (swapchain_res)
+        {
             WARN( "Present returned status %d for swapchain %p\n", swapchain_res, swapchain );
+            if (swapchain_res == VK_SUBOPTIMAL_KHR) suboptimal_kept = TRUE;
+        }
         else if (!extents_equals( &swapchain->extents, &client_rect ))
         {
             WARN( "Swapchain size %dx%d does not match client rect %s, returning VK_SUBOPTIMAL_KHR\n",
                   swapchain->extents.width, swapchain->extents.height, wine_dbgstr_rect( &client_rect ) );
             if (present_info->pResults) present_info->pResults[i] = VK_SUBOPTIMAL_KHR;
             if (!res) res = VK_SUBOPTIMAL_KHR;
+            suboptimal_kept = TRUE;
         }
     }
+    if (res == VK_SUBOPTIMAL_KHR && host_suboptimal_ignored && !suboptimal_kept) res = VK_SUCCESS;
 
     if (swapchains != swapchains_buffer) free( swapchains );
 

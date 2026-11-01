@@ -6,17 +6,26 @@ struct MadeiraApp: App {
     /// The external display's scene (ExternalDisplay.swift).
     @UIApplicationDelegateAdaptor(MadeiraAppDelegate.self) private var appDelegate
     init() {
-        ImageCache.configure()   // MABD local: before any artwork loads
+        ImageCache.configure()   // EmuPC: before any artwork loads
+        // Opt-in iPhone pointer experiments (PhonePointer.m): before any scene exists.
+        madeira_phone_pointer_setup()
         // madeira-bcd: the Metal Performance HUD's performance insights (the
         // notes that stack up left of its panel: shader compiles, similar render
         // passes, blit encoders) cover the game. Off unless madeira.cfg says
         // env.MTL_HUD_INSIGHTS_ENABLED = 1, which is exported later and wins.
         setenv("MTL_HUD_INSIGHTS_ENABLED", "0", 0)
+        // Host pads as Windows.Gaming.Input gamepads (upstream's opt-in provider, willfaust/wine #40):
+        // on by default here; madeira.cfg env.MADEIRA_WGI_HOST_PADS = 0 is exported later and wins.
+        setenv("MADEIRA_WGI_HOST_PADS", "1", 0)
         // ml1172: read the screen on the main thread; library entries, whose
         // default Resolution comes from it, are also made on other threads.
         _ = ResolutionChoices.screen
-        // The new library grid builds its first page before any view's onAppear, so the account's cached library and
-        // playtime are read now: its cards carry their played lines from the first page.
+        // A sign-in an installer left goes into the Keychain before anything else runs
+        // (SigningRefresh.swift).
+        SigningAccountStore.takeIn()
+        // Use one profile before Wine or Steam Cloud reads the prefix.
+        ProfileUnification.run()
+        // Read the cached library before the first grid page is built.
         if LibraryGridArm.enabled, SteamOwnedLibrary.enabled { SteamOwnedLibrary.shared.start() }
     }
 
@@ -29,6 +38,7 @@ struct MadeiraApp: App {
                 .modifier(ClaimGamepadEvents())
                 .onAppear {
                     LowMemoryDevice.applyIfNeeded()   // 4 GB devices (GameTuning.swift)
+                    ExternalDrives.shared.mountAll()
                     GamepadInput.shared.start()
                     HardwareInput.shared.start()
                     JITNetworkShortcut.shared.restoreLeftover()   // also starts its network path monitor
@@ -42,7 +52,7 @@ struct MadeiraApp: App {
                 // else madeira://play?exe=... (Home Screen shortcuts, SavesAndShortcuts.swift).
                 .onOpenURL { url in if !JITNetworkShortcut.shared.handle(url) { ShortcutRouter.shared.handle(url) } }
         }
-        // MABD local: tracks whether a close would be unexpected (AppRelaunch.wantedKey).
+        // EmuPC: tracks whether a close would be unexpected (AppRelaunch.wantedKey).
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { AppRelaunch.scene(active: true) }
             else if phase == .background { AppRelaunch.scene(active: false) }

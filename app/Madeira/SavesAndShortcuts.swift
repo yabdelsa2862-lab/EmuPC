@@ -26,6 +26,24 @@ final class ShortcutRouter: ObservableObject {
 
     /// A Windows path waiting for the library to launch it.
     @Published var pendingExe: String?
+    /// A library entry waiting to start: the Shortcuts app's Open Game (GameShortcuts.swift).
+    @Published var pendingEntry: UUID?
+    /// Starts an entry when the library can (ContentView); false = not yet.
+    @MainActor var entryLauncher: ((UUID) -> Bool)?
+
+    /// Open Game runs as EmuPC comes to the front, often before the library is up:
+    /// keep trying for 20 s instead of relying on one change notification.
+    @MainActor func start(entry id: UUID) {
+        pendingEntry = id
+        Task { @MainActor in
+            for _ in 0..<80 {
+                if pendingEntry != id { return }   // started, or replaced by a newer request
+                if entryLauncher?(id) == true { pendingEntry = nil; return }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            LogStore.shared.log("[game-shortcuts] the library was not ready in 20 s: not started", level: .error)
+        }
+    }
 
     static func link(for windowsPath: String) -> String {
         var c = URLComponents()
@@ -41,6 +59,24 @@ final class ShortcutRouter: ObservableObject {
                 .queryItems?.first(where: { $0.name == "exe" })?.value, !exe.isEmpty else { return }
         LogStore.shared.log("[shortcut] asked to start \(exe)")
         pendingExe = exe
+    }
+}
+
+/// The Steam game a game in the last Dock session asked to start (LibraryModel.steamRunRequest).
+/// The next app run starts it once, if that run begins within 30 minutes.
+enum NextSteamApp {
+    private static let key = "madeira.nextSteamApp"
+    static func set(_ appID: Int) {
+        UserDefaults.standard.set(["app": appID, "at": Date().timeIntervalSince1970], forKey: key)
+    }
+    static func take() -> Int? {
+        guard let saved = UserDefaults.standard.dictionary(forKey: key) else { return nil }
+        UserDefaults.standard.removeObject(forKey: key)
+        guard let app = saved["app"] as? Int, app > 0, app <= Int(UInt32.max),
+              let at = saved["at"] as? Double else { return nil }
+        let age = Date().timeIntervalSince1970 - at
+        guard age >= 0, age < 30 * 60 else { return nil }
+        return app
     }
 }
 

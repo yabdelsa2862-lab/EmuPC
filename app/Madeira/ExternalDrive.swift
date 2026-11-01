@@ -18,7 +18,7 @@ import UniformTypeIdentifiers
 final class ExternalDrive: ObservableObject, @unchecked Sendable {
     static let shared = ExternalDrive()
     /// The link's name in drive_c: games there are C:\External\...
-    static let linkName = "External"
+    static let linkName = "EmuPC Drive"   // upstream's ExternalDrives own C:\External
     private static let bookmarkKey = "madeiraExternalDriveBookmark"
 
     /// The chosen folder, resolved, while it is reachable.

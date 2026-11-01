@@ -31,6 +31,22 @@ bool sh_launch_option_missing(const void *payload, size_t size, uint32_t option)
     int length = snprintf(expected, sizeof(expected), "entry for launch option %u not found", (unsigned)option);
     return length > 0 && (size_t)length < sizeof(expected) && strstr(detail, expected) != NULL;
 }
+bool sh_launch_arguments_valid(const char *arguments, size_t length)
+{
+    if (!arguments || length >= SH_LAUNCH_ARGUMENTS_CAPACITY) return false;
+    bool quoted = false, in_token = false;
+    unsigned tokens = 0, slashes = 0;
+    for (size_t i = 0; i < length; ++i) {
+        unsigned char c = (unsigned char)arguments[i];
+        if ((c < 32 && c != '\t') || c == 127) return false;
+        if (c == '"' && !(slashes & 1)) quoted = !quoted;
+        if (!quoted && (c == ' ' || c == '\t')) in_token = false;
+        else if (!in_token) { ++tokens; in_token = true; }
+        slashes = c == '\\' ? slashes + 1 : 0;
+    }
+    return !quoted && tokens <= SH_LAUNCH_ARGUMENTS_MAX_TOKENS;
+}
+
 bool sh_subscription_list_contains(const uint32_t *apps, int32_t count,
                                    size_t capacity, uint32_t requested)
 {

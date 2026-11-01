@@ -140,6 +140,9 @@ struct context
     const char **extension_array;  /* array of supported extensions */
     size_t extension_count;        /* size of supported extensions */
     BOOL use_pinned_memory;        /* use GL_AMD_pinned_memory to emulate persistent maps */
+#ifdef WINE_IOS
+    BOOL is_gles;                  /* host context is OpenGL ES (Madeira winios driver) */
+#endif
 
     /* semi-stub state tracker for wglCopyContext */
     GLbitfield used;                            /* context state used bits */
@@ -499,10 +502,51 @@ static const char *legacy_extensions[] =
     NULL,
 };
 
+#ifdef WINE_IOS
+/* GLES extensions whose entry points exist only in the GLES registry
+ * (OES/APPLE/EXT-suffixed names), so opengl32 has no thunks for them and
+ * wglGetProcAddress cannot return them. Advertising them makes loaders such as
+ * glad set the extension flag with NULL function pointers. Hiding them sends
+ * apps down the core OpenGL ES 3.0 paths, which opengl32 does thunk. */
+static const char *const gles_unthunked_extensions[] =
+{
+    "GL_APPLE_copy_texture_levels",
+    "GL_APPLE_framebuffer_multisample",
+    "GL_APPLE_sync",
+    "GL_EXT_discard_framebuffer",
+    "GL_EXT_disjoint_timer_query",
+    "GL_EXT_draw_buffers",
+    "GL_EXT_instanced_arrays",
+    "GL_EXT_map_buffer_range",
+    "GL_EXT_multisampled_render_to_texture",
+    "GL_EXT_occlusion_query_boolean",
+    "GL_EXT_robustness",
+    "GL_EXT_separate_shader_objects",
+    "GL_KHR_debug",
+    "GL_OES_EGL_image",
+    "GL_OES_EGL_image_external",
+    "GL_OES_get_program_binary",
+    "GL_OES_mapbuffer",
+    "GL_OES_texture_3D",
+    "GL_OES_vertex_array_object",
+};
+
+static BOOL is_gles_unthunked_extension( const char *name )
+{
+    for (int i = 0; i < ARRAY_SIZE(gles_unthunked_extensions); i++)
+        if (!strcmp( gles_unthunked_extensions[i], name )) return TRUE;
+    return FALSE;
+}
+#endif
+
 static const char *parse_gl_version( const char *gl_version, int *major, int *minor )
 {
     const char *ptr = gl_version;
 
+#ifdef WINE_IOS
+    /* GLES contexts report "OpenGL ES major.minor ..." */
+    if (!strncmp( ptr, "OpenGL ES ", 10 )) ptr += 10;
+#endif
     *major = atoi( ptr );
     if (*major <= 0)
         ERR( "Invalid OpenGL major version %d.\n", *major );
@@ -692,12 +736,33 @@ static char *append_extension( char *ptr, const char *name )
     return ptr;
 }
 
+#ifdef WINE_IOS
+/* Madeira: id Tech 2/3 era games print or copy GL_EXTENSIONS into a fixed
+ * stack buffer (Jedi Academy: Com_Printf's 4 KB), and Zink's list is ~9 KB,
+ * so the copy overwrote the return address. Mesa lists extensions oldest
+ * first for exactly these games, so a 32-bit process gets the string cut at
+ * the last whole extension that fits. MADEIRA_GL_EXTENSIONS_MAX sets the byte
+ * limit (0 = no limit). glGetStringi, which newer programs use, is unaffected. */
+static size_t max_extensions_length( struct context *ctx )
+{
+    const char *env = getenv( "MADEIRA_GL_EXTENSIONS_MAX" );
+
+    if (env && *env) return strtoul( env, NULL, 10 );
+    return ctx->buffers ? 3072 : 0;   /* ctx->buffers: a wow64 (32-bit) context */
+}
+#endif
+
 /* build the extension string by filtering out the disabled extensions */
 static GLubyte *filter_extensions( struct context *ctx, const char *extensions, const struct opengl_funcs *funcs )
 {
     const char *end, **extra;
     size_t size;
     char *p, *str;
+#ifdef WINE_IOS
+    size_t max_len = max_extensions_length( ctx ), reserve = 0;
+
+    for (extra = legacy_extensions; *extra; extra++) reserve += strlen( *extra ) + 1;
+#endif
 
     size = strlen( extensions ) + 2;
     if (funcs->p_glImportMemoryWin32HandleEXT) size += strlen( "GL_EXT_memory_object_win32" ) + 1;
@@ -716,6 +781,14 @@ static GLubyte *filter_extensions( struct context *ctx, const char *extensions, 
         memcpy( p, extensions, end - extensions );
         p[end - extensions] = 0;
 
+#ifdef WINE_IOS
+        if (max_len && (size_t)(p - str) + (end - extensions) + 1 + reserve > max_len)
+        {
+            ERR( "[winios-gl] GL_EXTENSIONS cut at %u bytes before %s (MADEIRA_GL_EXTENSIONS_MAX)\n",
+                 (unsigned)(p - str), p );
+            break;
+        }
+#endif
         if (is_extension_supported( ctx, p ))
         {
             TRACE( "++ %s\n", p );
@@ -964,6 +1037,14 @@ PROC wrap_wglGetProcAddress( TEB *teb, LPCSTR name )
     {
         void *driver_func = funcs->p_wglGetProcAddress( name );
 
+#ifdef WINE_IOS
+        /* GLES versions do not map onto the GL_VERSION_x_y gates (ES 3.0 has
+         * functions from desktop 3.0 through 4.3). The winios driver resolves
+         * names with dlsym, so a non-NULL result means the entry point exists. */
+        if (ctx->is_gles && driver_func)
+            TRACE( "%s provided by the OpenGL ES driver\n", name );
+        else
+#endif
         if (!is_any_extension_supported( ctx, found->extension ))
         {
             WARN( "Extension %s required for %s not supported\n", found->extension, name );
@@ -1204,6 +1285,10 @@ static void make_context_current( TEB *teb, const struct opengl_funcs *funcs, HD
     if (version) rest = parse_gl_version( version, &ctx->major_version, &ctx->minor_version );
     if (!ctx->major_version) ctx->major_version = 1;
     TRACE( "context %p version %d.%d\n", ctx, ctx->major_version, ctx->minor_version );
+#ifdef WINE_IOS
+    /* Room for the ES compatibility extensions appended below. */
+    if ((ctx->is_gles = version && !strncmp( version, "OpenGL ES", 9 ))) size += 2;
+#endif
 
     if (funcs->p_glImportMemoryWin32HandleEXT) size++;
     if (funcs->p_glImportSemaphoreWin32HandleEXT) size++;
@@ -1266,6 +1351,25 @@ static void make_context_current( TEB *teb, const struct opengl_funcs *funcs, HD
 
     if (funcs->p_glImportMemoryWin32HandleEXT) extensions[count++] = "GL_EXT_memory_object_win32";
     if (funcs->p_glImportSemaphoreWin32HandleEXT) extensions[count++] = "GL_EXT_semaphore_win32";
+#ifdef WINE_IOS
+    if (ctx->is_gles)
+    {
+        for (i = 0, j = 0; i < count; i++)
+        {
+            if (is_gles_unthunked_extension( extensions[i] )) TRACE( "-- %s (GLES-only entry points)\n", extensions[i] );
+            else extensions[j++] = extensions[i];
+        }
+        count = j;
+    }
+    /* A GLES context provides the ES entry points these extensions describe on
+     * desktop GL. SDL reads GL_ARB_ES3_compatibility to decide that WGL (rather
+     * than ANGLE's EGL) can create an OpenGL ES 3 context. */
+    if (ctx->is_gles)
+    {
+        extensions[count++] = "GL_ARB_ES2_compatibility";
+        if (ctx->major_version >= 3) extensions[count++] = "GL_ARB_ES3_compatibility";
+    }
+#endif
     for (i = 0; legacy_extensions[i]; i++) extensions[count++] = legacy_extensions[i];
     qsort( extensions, count, sizeof(*extensions), string_array_cmp );
     ctx->extension_array = extensions;
@@ -1293,6 +1397,21 @@ static void make_context_current( TEB *teb, const struct opengl_funcs *funcs, HD
         }
         ctx->extension_count = j;
     }
+#ifdef WINE_IOS
+    /* Madeira ml1340: once per process, how this 32-bit context will serve
+     * persistent buffer maps, and whether wined3d will see query buffers. */
+    if (is_win64 && ctx->buffers)
+    {
+        static LONG logged;
+        if (!InterlockedExchange( &logged, 1 ))
+            ERR( "[winios-gl] ml1340 32-bit GL %d.%d context: persistent maps via %s; GL_ARB_buffer_storage %s, "
+                 "GL_ARB_query_buffer_object %s\n", ctx->major_version, ctx->minor_version,
+                 ctx->buffers->vk_device && ctx->buffers->vk_device->vk_device ? "Vulkan memory" :
+                 ctx->use_pinned_memory ? "GL_AMD_pinned_memory" : "nothing (extension hidden)",
+                 is_extension_supported( ctx, "GL_ARB_buffer_storage" ) ? "listed" : "hidden",
+                 is_extension_supported( ctx, "GL_ARB_query_buffer_object" ) ? "listed" : "not listed" );
+    }
+#endif
 
     if (TRACE_ON(opengl)) for (i = 0; i < count; i++) TRACE( "++ %s\n", extensions[i] );
 }
@@ -2041,9 +2160,6 @@ GLsync wrap_glImportSyncEXT( TEB *teb, GLenum external_sync_type, GLintptr exter
 
 NTSTATUS process_attach( void *args )
 {
-#ifdef WINE_IOS
-    dprintf( 2, "[gl] opengl32 unix side attached\n" );
-#endif
     struct process_attach_params *params = args;
     call_gl_debug_message_callback = params->call_gl_debug_message_callback;
     if (is_win64 && is_wow64())
@@ -2130,7 +2246,7 @@ NTSTATUS return_wow64_string( const void *str, PTR32 *wow64_str )
     else if (wow64_strings[i].wow64_str) *wow64_str = wow64_strings[i].wow64_str;
     else if (*wow64_str)
     {
-        strcpy( UlongToPtr(*wow64_str), str );
+        strcpy( ios_wow_host_ptr(*wow64_str), str );
         wow64_strings[i].wow64_str = *wow64_str;
     }
 
@@ -2415,6 +2531,58 @@ static struct buffer *create_buffer_storage( TEB *teb, GLenum target, GLuint nam
     return buffer;
 }
 
+/* A glGetQueryObject*v result pointer: an OFFSET into the buffer bound at
+ * GL_QUERY_BUFFER while one is bound (ARB_query_buffer_object), a guest pointer
+ * otherwise. wined3d (d3d9/d3d8 on OpenGL) reads each occlusion query through
+ * a persistently mapped buffer, asking for the result at offsets 0 and 8 and
+ * treating the query as done once both agree. Converting 8 as a guest address
+ * sent the second write out of the buffer, so the query never completed and a
+ * 32-bit program waiting on it spun in GetData until its own timeout.
+ * Madeira: MADEIRA_GL_QUERY_BUFFER_OFFSETS=0 converts every value as a guest
+ * pointer again (the behaviour before ml1340). */
+void *wow64_query_buffer_ptr( TEB *teb, ULONG value )
+{
+    const struct opengl_funcs *funcs = teb->glTable;
+    GLint name = 0;
+#ifdef WINE_IOS
+    static int enabled = -1;
+    static LONG logged;
+
+    if (enabled < 0)
+    {
+        const char *env = getenv( "MADEIRA_GL_QUERY_BUFFER_OFFSETS" );
+        enabled = !(env && env[0] == '0');
+    }
+    if (!enabled) return ios_wow_host_ptr( value );
+#endif
+    /* Guest memory never lies in the first 64 KB: smaller values are offsets. */
+    if (value >= 0x10000)
+    {
+        if (funcs && funcs->p_glGetIntegerv) funcs->p_glGetIntegerv( GL_QUERY_BUFFER_BINDING, &name );
+        if (!name) return ios_wow_host_ptr( value );
+    }
+#ifdef WINE_IOS
+    if (value && !InterlockedExchange( &logged, 1 ))
+        ERR( "[winios-gl] ml1340 32-bit query result goes to offset %#x of the bound query buffer "
+             "(MADEIRA_GL_QUERY_BUFFER_OFFSETS=0 disables)\n", (unsigned int)value );
+#endif
+    return ULongToPtr( value );
+}
+
+#ifdef WINE_IOS
+/* Madeira ml1340: once per process, how the first persistent (GL_MAP_PERSISTENT_BIT)
+ * map of a 32-bit caller was served. wined3d's query buffers depend on it. */
+static void log_wow64_persistent_map( GLbitfield access, const char *how, const void *ptr, size_t size )
+{
+    static LONG logged;
+    if (!(access & GL_MAP_PERSISTENT_BIT) || InterlockedExchange( &logged, 1 )) return;
+    ERR( "[winios-gl] ml1340 first 32-bit persistent buffer map: %s (guest %#x, %zu bytes, access %#x)\n",
+         how, ios_wow_guest_ptr32( ptr ), size, access );
+}
+#else
+static inline void log_wow64_persistent_map( GLbitfield access, const char *how, const void *ptr, size_t size ) { }
+#endif
+
 static void *wow64_map_buffer( TEB *teb, struct buffer *buffer, GLenum target, GLuint name, GLintptr offset,
                                size_t length, GLbitfield access, void *ptr )
 {
@@ -2452,6 +2620,7 @@ static void *wow64_map_buffer( TEB *teb, struct buffer *buffer, GLenum target, G
         }
         assert( buffer->host_ptr == buffer->vm_ptr );
         buffer->map_ptr = (char *)buffer->vm_ptr + offset;
+        log_wow64_persistent_map( access, "Vulkan memory placed in the guest window", buffer->map_ptr, buffer->size );
         TRACE( "returning vk mapping %p\n", buffer->map_ptr );
         return buffer->map_ptr;
     }
@@ -2459,11 +2628,16 @@ static void *wow64_map_buffer( TEB *teb, struct buffer *buffer, GLenum target, G
     if (buffer && buffer->pinned)
     {
         buffer->map_ptr = (char *)buffer->vm_ptr + offset;
+        log_wow64_persistent_map( access, "pinned guest memory (GL_AMD_pinned_memory)", buffer->map_ptr, buffer->size );
         TRACE( "returning pinned ptr %p\n", buffer->map_ptr );
         return buffer->map_ptr;
     }
 
-    if (!ptr) return NULL;
+    if (!ptr)
+    {
+        log_wow64_persistent_map( access, "FAILED, the driver returned no mapping", NULL, length );
+        return NULL;
+    }
 
     if (!buffer)
     {
@@ -2478,8 +2652,9 @@ static void *wow64_map_buffer( TEB *teb, struct buffer *buffer, GLenum target, G
 
     buffer->host_ptr = ptr;
     if (!offset && !length) length = buffer->size;
-    if (ULongToPtr(PtrToUlong(ptr)) == ptr) /* we're lucky */
+    if (ios_wow_host_ptr(PtrToUlong(ptr)) == ptr) /* we're lucky: already in the guest's 4 GB */
     {
+        log_wow64_persistent_map( access, "driver mapping inside the guest window", ptr, length );
         buffer->map_ptr = ptr;
         TRACE( "returning %p\n", buffer->map_ptr );
         return buffer->map_ptr;
@@ -2487,6 +2662,8 @@ static void *wow64_map_buffer( TEB *teb, struct buffer *buffer, GLenum target, G
 
     if (access & GL_MAP_PERSISTENT_BIT)
     {
+        log_wow64_persistent_map( access, "FAILED, driver mapping outside the guest window and no pinned/Vulkan path",
+                                  NULL, length );
         FIXME( "GL_MAP_PERSISTENT_BIT not supported!\n" );
         goto unmap;
     }
@@ -2862,7 +3039,7 @@ NTSTATUS wow64_get_pixel_formats( void *args )
     {
         .teb = get_teb64(params32->teb),
         .hdc = ULongToPtr(params32->hdc),
-        .formats = ULongToPtr(params32->formats),
+        .formats = ios_wow_host_ptr(params32->formats),
         .max_formats = params32->max_formats,
     };
     NTSTATUS status;

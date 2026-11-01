@@ -179,7 +179,7 @@ Wine's service manager reachable, prints one line and exits.
 ## Limits
 
 - **Windows program, 64-bit session.** The 32-bit build supports only the bootstrap test.
-- **Launch entries from Steam's configuration.** No custom arguments.
+- **Launch entries from Steam's configuration.** Bounded user arguments are passed to the selected entry.
 - **One Steam session.** While Dock runs it is the account's Steam client; Madeira closes its own
   Steam connection first, because a second sign-in of the same account would replace this one.
 - **Not crash-safe.** If the host is killed, the `ActiveProcess` values it wrote are not
@@ -190,6 +190,17 @@ Wine's service manager reachable, prints one line and exits.
   during play have not been tested systematically. Setting up Steam's overlay is known to fail
   under Dock; nothing is patched to hide that.
 - **A client update needs a new verified layout.** Until then Dock refuses the new build.
+
+## Extra launch arguments
+
+`MADEIRA_STEAM_HOST_ARGUMENTS` adds bounded UTF-8 arguments to Valve's own
+`LaunchApp` user-arguments parameter. It is supplied on the first request and
+on retries alongside the selected original Steam launch entry key. It never
+enters the installer command and only its byte count is logged. Unbalanced
+quotes, control characters, more than 64 tokens or 4095 bytes fail closed;
+missing input preserves Valve's normal arguments. The app exports the value
+from the selected library profile before starting this host. The client still
+checks authentication, subscription and the original game DRM.
 
 ## Running it
 
@@ -251,6 +262,7 @@ logged; other configuration waits and the sign-in and licence checks are unchang
 | 49 | CEG preparation failed. |
 | 50 | Offline: Valve's client cannot log this account on offline (no valid offline logon ticket), or this client build has no verified offline logon. |
 | 51 | Offline: Valve's client refused the offline logon. |
+| 54 | Extra launch arguments are malformed or too long. |
 | 52 | Offline: signed in offline, but the client's cached licences did not list the game within 60 seconds. |
 
 The report (`[steam-host] <round> <stage>=<number>` lines) is documented field by field in

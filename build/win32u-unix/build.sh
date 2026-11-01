@@ -19,6 +19,12 @@ APP_LIB="$REPO_ROOT/app/Madeira/libwin32u_unix.a"
 
 mkdir -p "$OBJ_DIR"
 
+# Optional Vulkan route; do not change the normal native build.
+VULKAN_FLAGS=()
+if [ "${MADEIRA_MOLTENVK:-0}" = 1 ]; then
+    VULKAN_FLAGS=(-DMADEIRA_MOLTENVK=1)
+fi
+
 SUCCEEDED=0
 FAILED=0
 FAILED_FILES=""
@@ -34,6 +40,7 @@ compile_one() {
     if xcrun -sdk iphoneos clang \
         -arch arm64 -isysroot "$SDK" -miphoneos-version-min=17.0 \
         -O2 -fPIC -fvisibility=hidden -fno-stack-protector -fno-strict-aliasing \
+        "${VULKAN_FLAGS[@]}" \
         -Wno-implicit-function-declaration -Wno-int-conversion \
         -include "$BUILD_DIR/config_ios.h" \
         -include "$REPO_ROOT/build/ntdll-unix/shims/wine_ios_exit.h" \
@@ -111,6 +118,13 @@ for src in $WINE_SRC/dlls/win32u/*.c $WINE_SRC/dlls/win32u/dibdrv/*.c; do
             compile_one "$BUILD_DIR/d3dkmt_ios.c" "d3dkmt"
             continue
             ;;
+        vulkan)
+            # Wraps upstream vulkan.c: loads $MADEIRA_VULKAN_LIBRARY (set by the
+            # app only when the session asks for Vulkan) and adds the winios
+            # Vulkan surface driver (see the header comment in vulkan_ios.c).
+            compile_one "$BUILD_DIR/vulkan_ios.c" "vulkan"
+            continue
+            ;;
         syscall)
             # Wraps upstream syscall.c and adds win32u_zero_bits(), the
             # allocation ceiling of the calling pseudo-process (see the
@@ -132,15 +146,9 @@ for src in $WINE_SRC/dlls/win32u/*.c $WINE_SRC/dlls/win32u/dibdrv/*.c; do
     compile_one "$src" "$name"
 done
 
-# MABD local: opengl32's unix side (Wine's OpenGL front end: wgl, contexts,
-# the GL thunks), bound by name in build/ntdll-unix/virtual_ios.c when
-# MADEIRA_OPENGL=1. Its table names are renamed so they do not collide.
-for src in unix_wgl unix_thunks; do
-    compile_one "$WINE_SRC/dlls/opengl32/$src.c" "opengl32_$src" \
-        -I"$WINE_SRC/dlls/opengl32" -D_OPENGL32_ \
-        -D__wine_unix_call_funcs=opengl32_unix_call_funcs \
-        -D__wine_unix_call_wow64_funcs=opengl32_unix_call_wow64_funcs
-done
+# winios OpenGL driver: WGL over Apple's OpenGL ES (EAGL half in
+# app/Madeira/Winios/WiniosGL.m).
+compile_one "$BUILD_DIR/opengl_ios.c" "opengl_ios"
 
 echo ""
 echo "Results: $SUCCEEDED succeeded, $FAILED failed"
@@ -168,7 +176,7 @@ else
     echo "WARNING: no libfreetype.a — fonts will be disabled"
 fi
 
-# MABD local: OpenGL (gl4es + the iOS glue, build/gl4es-ios/build.sh). Without
+# EmuPC: OpenGL (gl4es + the iOS glue, build/gl4es-ios/build.sh). Without
 # it the driver's weak winios_gl_* references stay NULL and OpenGL stays off.
 GL4ES_LIB="$REPO_ROOT/build/gl4es-ios/out/libgl4es_ios.a"
 if [ -f "$GL4ES_LIB" ]; then

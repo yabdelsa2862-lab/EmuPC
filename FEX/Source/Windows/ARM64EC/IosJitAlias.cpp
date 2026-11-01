@@ -32,8 +32,7 @@ struct IosAliasEntry {
   uint64_t Size;
   uint64_t _Padding;  // Keeps the struct 32-byte to make array stride a power of 2.
 };
-// Match the native image-mapping table in build/ntdll-unix/virtual_ios.c.
-constexpr int kMaxEntries = 512;
+constexpr int kMaxEntries = 256;
 
 // extern "C" storage (not anonymous-namespace) so Module.S's ExitFunctionEC
 // can reach the table via adrp/:lo12: — it translates the branch target
@@ -413,19 +412,6 @@ void BTCpu64IosAddAliasMapping(uint64_t PeBase, uint64_t JitBase, uint64_t Size)
     /* madeira-bcd: a reused JIT range retires the dead entry too
      * (tools/patch-fex-ios-alias-retire-jit.py). */
     if ((pb < PeBase + Size && PeBase < pb + sz) || (jb < JitBase + Size && JitBase < jb + sz)) {
-      g_Entries[i].Size = 0;
-      __sync_synchronize();
-      continue;
-    }
-    // MABD local: the same holds for the pool copy. A pool range is reused once
-    // the image that had it is gone (another pseudo-process's, unloaded), and
-    // its entry stayed: IosJitReverseTranslate then found the dead image first
-    // and sent a RIP in the new copy to the old PE VA, a wild jump. Seen in GTA V
-    // (RockstarService.exe: wintrust.dll's copy at 0x160368000 over a retired
-    // program image's at 0x16036a000, [pool-rip-fix] to 0x12b4047f1, then an
-    // execute fault on the stack).
-    const uint64_t jb = g_Entries[i].JitBase;
-    if (jb < JitBase + Size && JitBase < jb + sz) {
       g_Entries[i].Size = 0;
       __sync_synchronize();
     }

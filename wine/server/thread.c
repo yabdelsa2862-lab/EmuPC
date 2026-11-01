@@ -1100,15 +1100,16 @@ void stop_thread( struct thread *thread )
 #ifdef WINE_IOS
     if (thread->context)
     {
-        /* WoW64 processes: a cached Mach snapshot is not a context (see below) */
-        if (ios_process_is_wow64( thread->process )) ios_wow_ctx_refresh( thread );
+        /* A cached Mach snapshot must be refreshed on every stop_thread() so
+         * 2nd+ GC cycles and thread inspections see the thread's current
+         * registers and stack rather than its first-ever suspend snapshot. */
+        ios_wow_ctx_refresh( thread );
         return;
     }
 #endif
     if (thread->context) return;  /* already suspended, no need for a signal */
     if (!(thread->context = create_thread_context( thread ))) return;
 #ifdef WINE_IOS
-    if (ios_process_is_wow64( thread->process ))
     {
         /* Mark it refreshable BEFORE the first capture, so a capture that fails
          * (no port yet, init not finished) does not wedge the context in
@@ -1765,11 +1766,13 @@ static inline int is_in_apc_wait( struct thread *thread )
  * to another thread of the process when the issuer has exited), and the server wakes one alerted
  * async per queue at a time, so ordering on a socket is unchanged. So instead of dropping it: give
  * it to a thread of the same process that is waiting in the server. If none is, it is dropped as
- * before. It is never left queued on the busy thread: that thread's next wait may be an in-process
- * one (on the very event this I/O will set), which a system APC does not interrupt, since only
- * user APCs signal alert_sync. Explorer's first RPC call to services.exe hung that way on every
- * virtual desktop start, and the taskbar never painted. Only this failure path changes, and only
- * for APC_ASYNC_IO; other system APCs are unchanged. [apc-requeue] logs the first 16 handovers
+ * before, except for a pending synchronous request with a live wait handle: its issuer always
+ * enters wait_async() on that handle after the request reply, so keep the APC queued there until
+ * that server wait processes it. Otherwise that thread's next wait may be an in-process one (on
+ * the very event this I/O will set), which a system APC does not interrupt, since only user APCs
+ * signal alert_sync. Explorer's first RPC call to services.exe hung that way on every virtual
+ * desktop start, and the taskbar never painted. Only this failure path changes, and only for
+ * APC_ASYNC_IO; other system APCs are unchanged. [apc-requeue] logs the first 16 handovers
  * (then every 1024th) with the APC's status and thread ids only.
  * MADEIRA_APC_REQUEUE=0 restores the drop. */
 static int ios_apc_requeue_enabled( void )
@@ -1788,7 +1791,7 @@ static int ios_apc_requeue_enabled( void )
     return enabled;
 }
 
-/* the thread to queue an undeliverable async I/O APC on, or NULL to drop it as before */
+/* A waiting thread, the synchronous request's future waiter, or NULL to drop. */
 static struct thread *ios_apc_requeue_target( struct thread *thread, const struct thread_apc *apc )
 {
     static unsigned int count;
@@ -1804,11 +1807,13 @@ static struct thread *ios_apc_requeue_target( struct thread *thread, const struc
             break;
         }
     }
+    if (!target && async_can_defer_to_issuer( apc->owner, thread )) target = thread;
     count++;
     if (count <= 16 || !(count & 1023))
         fprintf( stderr, "[apc-requeue] #%u async I/O APC status=%08x for busy thread %04x -> %s %04x\n",
                  count, apc->call.async_io.status, thread->id,
-                 target ? "waiting thread" : "dropped, no waiting thread", target ? target->id : 0 );
+                 target == thread ? "issuing thread" : target ? "waiting thread" : "dropped, no waiting thread",
+                 target ? target->id : 0 );
     return target;
 }
 
@@ -2168,7 +2173,7 @@ DECL_HANDLER(new_thread)
             thread->suspend++;
 #ifdef WINE_IOS
             /* see the start-context note in stop_thread() */
-            if (ios_process_is_wow64( process ) && ios_ctx_switch( &ctx_start_wait, "MADEIRA_CTX_START_WAIT" ))
+            if (ios_ctx_switch( &ctx_start_wait, "MADEIRA_CTX_START_WAIT" ))
                 thread->ios_start_pending = 1;
 #endif
         }
