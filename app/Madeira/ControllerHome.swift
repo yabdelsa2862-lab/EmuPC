@@ -553,7 +553,10 @@ struct ControllerHome: View {
                 HStack(spacing: 22) {
                     // The row's start (the island margin) as a target: the first game
                     // cannot be centred, so it scrolls here instead.
-                    Color.clear.frame(width: max(side - 22, 0), height: 1).id(Self.shelfStart)
+                    // Plus half of what the first tile grows when focused (1.1×), so its
+                    // grown edge still clears the island.
+                    let firstWidth = ids.first == wideID ? height * 16 / 9 : width
+                    Color.clear.frame(width: max(side - 22, 0) + firstWidth * 0.05 + 4, height: 1).id(Self.shelfStart)
                     ForEach(ids, id: \.self) { id in
                         let on = id == focusedID
                         art(id)
