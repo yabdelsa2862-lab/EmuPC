@@ -612,6 +612,7 @@ extension LibraryCoverCache.Source {
 
     @MainActor static func coverFileChanged(named name: String) {
         modificationTimes[URL(fileURLWithPath: name, isDirectory: false).lastPathComponent] = nil
+        ArtworkImages.forget(name)
     }
 
     /// A chosen cover's file and the key its art is cached under. The key carries the file's modification time, so a replaced file is a different cover (a missing file is time 0).

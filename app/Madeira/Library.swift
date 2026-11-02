@@ -2025,22 +2025,59 @@ enum SteamCatalog {
     static func hero(_ id: Int) -> URL? { URL(string: "https://cdn.cloudflare.steamstatic.com/steam/apps/\(id)/library_hero.jpg") }
 }
 
+/// Decoded covers, so a redraw (every move on the controller home) never reads and
+/// decodes the file again on the main thread; and small copies of them, which drawn
+/// full screen look blurred without a live blur.
+@MainActor enum ArtworkImages {
+    private static let full: NSCache<NSString, UIImage> = { let c = NSCache<NSString, UIImage>(); c.totalCostLimit = 96 * 1024 * 1024; return c }()
+    private static let small = NSCache<NSString, UIImage>()
+
+    static func cover(_ name: String) -> UIImage? {
+        let leaf = URL(fileURLWithPath: name).lastPathComponent
+        if let hit = full.object(forKey: leaf as NSString) { return hit }
+        guard let image = UIImage(contentsOfFile: LibraryModel.documents.appendingPathComponent("madeira-art/" + leaf).path) else { return nil }
+        let ready = image.preparingForDisplay() ?? image
+        full.setObject(ready, forKey: leaf as NSString, cost: Int(ready.size.width * ready.size.height * ready.scale * ready.scale * 4))
+        return ready
+    }
+
+    /// 40 px wide: stretched over the screen it is the soft backdrop.
+    static func soft(_ name: String) -> UIImage? {
+        let leaf = URL(fileURLWithPath: name).lastPathComponent
+        if let hit = small.object(forKey: leaf as NSString) { return hit }
+        guard let image = cover(name), image.size.width > 0 else { return nil }
+        let size = CGSize(width: 40, height: max(1, 40 * image.size.height / image.size.width))
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let tiny = UIGraphicsImageRenderer(size: size, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
+        small.setObject(tiny, forKey: leaf as NSString)
+        return tiny
+    }
+
+    static func forget(_ name: String) {
+        let leaf = URL(fileURLWithPath: name).lastPathComponent as NSString
+        full.removeObject(forKey: leaf); small.removeObject(forKey: leaf)
+    }
+}
+
 struct LibraryArtwork: View {
     let entry: LibraryEntry
     var backdrop = false
+    /// The blurred backdrop: a small copy of a cover file stretched (no live blur), or a
+    /// blurred store image when there is no file.
+    var soft = false
     var body: some View {
         GeometryReader { geometry in
         ZStack {
             Color(uiColor: .secondarySystemFill)
             Image(systemName: entry.desktop == true ? "desktopcomputer" : "gamecontroller.fill").font(.largeTitle).foregroundStyle(.secondary)
-            if let name = entry.coverFile,
-               let image = UIImage(contentsOfFile: LibraryModel.documents.appendingPathComponent("madeira-art/" + URL(fileURLWithPath: name).lastPathComponent).path) {
-                Image(uiImage: image).resizable().scaledToFill()
+            if let name = entry.coverFile, let image = soft ? ArtworkImages.soft(name) : ArtworkImages.cover(name) {
+                Image(uiImage: image).resizable().interpolation(soft ? .medium : .high).scaledToFill()
                     .frame(width: geometry.size.width, height: geometry.size.height, alignment: .center).clipped()
             } else if let id = entry.steamID ?? entry.steamAppID {   // a store match, else the Steam game itself
                 AsyncImage(url: backdrop ? SteamCatalog.hero(id) : SteamCatalog.cover(id)) { image in
                     image.resizable().scaledToFill()
                         .frame(width: geometry.size.width, height: geometry.size.height, alignment: .center).clipped()
+                        .blur(radius: soft ? 26 : 0)
                 } placeholder: { Color.clear }
             }
         }

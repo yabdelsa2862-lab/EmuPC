@@ -357,7 +357,7 @@ struct ControllerHome: View {
                 || (section == .games && current == nil) || (section == .download && focusedStore == nil) {
                 ThemeBackdrop()
             } else if section == .games, let game = current {
-                LibraryArtwork(entry: game, backdrop: true).blur(radius: 26).scaleEffect(1.12).id(game.id).transition(.opacity)
+                LibraryArtwork(entry: game, backdrop: true, soft: true).scaleEffect(1.12).id(game.id).transition(.opacity)
             } else if section == .download, let item = focusedStore {
                 switch item {
                 case .steam(let id):
@@ -564,7 +564,8 @@ struct ControllerHome: View {
                             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                             .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(.white.opacity(on ? 0.95 : 0.08), lineWidth: on ? 3 : 1))
                             .shadow(color: on ? .white.opacity(0.35) : .clear, radius: 16)
-                            .shadow(color: .black.opacity(on ? 0.6 : 0.35), radius: on ? 22 : 8, y: 10)
+                            // Only the focused cover casts a shadow: one per cover was a blur pass each, every frame of a move.
+                            .shadow(color: .black.opacity(on ? 0.6 : 0), radius: on ? 22 : 0, y: on ? 10 : 0)
                             .scaleEffect(on ? 1.1 : 0.86)
                             .opacity(on ? 1 : 0.6)
                             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: on)
