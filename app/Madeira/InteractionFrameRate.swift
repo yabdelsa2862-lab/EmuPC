@@ -32,8 +32,12 @@ extension UITouch: LiveTouch {
     static let shared = InteractionFrameRate()
     nonisolated static let grace: CFTimeInterval = 0.6
 
-    /// On with the "New library grid" setting; off, nothing in this file runs (no touch recognizer is installed).
-    static var switchedOn: Bool { LibraryGridArm.enabled }
+    /// On by default for every screen (EmuPC: the controller home's shelf and the store grid coasted at 80 Hz and
+    /// felt laggy, mostly in portrait); env.MADEIRA_UI_120HZ=0 leaves it to the "New library grid" setting. Off,
+    /// nothing in this file runs (no touch recognizer is installed).
+    static var switchedOn: Bool {
+        LibraryGridArm.enabled || (MadeiraConfig.get("env.MADEIRA_UI_120HZ") ?? ProcessInfo.processInfo.environment["MADEIRA_UI_120HZ"]) != "0"
+    }
 
     static var gameRunning: Bool { LibraryModel.shared.current != nil || wine_process_is_running() != 0 }
 
