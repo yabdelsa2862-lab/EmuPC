@@ -136,7 +136,7 @@ import SwiftUI
         let paths = EpicSavePaths(drive: drive, userFolder: user,
                                   installFolder: drive.appendingPathComponent(record.folder, isDirectory: true), accountID: account)
         guard let folder = paths.resolve(config.folder) else {
-            throw EpicContentError.invalid("This game keeps its saves in a place Madeira does not know yet.")
+            throw EpicContentError.invalid("This game keeps its saves in a place EmuPC does not know yet.")
         }
         return Context(record: record, config: config, folder: folder, account: account,
                        transport: EpicCloudHTTP(token: token, accountID: account))
@@ -341,7 +341,7 @@ struct EpicCloudSection: View {
             } header: {
                 Text("Epic Cloud saves")
             } footer: {
-                Text("Sync runs when Madeira starts and when this page opens. Replaced files are kept in Files › Madeira › Epic Cloud Backups. Sync now uploads newer device saves\(setting.autoUpload ? "; automatic upload is also on" : ""). If both sides changed, choose which saves to keep.")
+                Text("Sync runs when EmuPC starts and when this page opens. Replaced files are kept in Files › EmuPC › Epic Cloud Backups. Sync now uploads newer device saves\(setting.autoUpload ? "; automatic upload is also on" : ""). If both sides changed, choose which saves to keep.")
             }
             .task { await cloud.check(appName, automatic: true) }
         }

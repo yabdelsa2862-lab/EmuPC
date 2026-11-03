@@ -355,8 +355,8 @@ struct DownloadGamesView: View {
 
     /// EmuPC: one store at a time, picked at the top, instead of every
     /// store stacked down the page.
-    private enum Source: String, CaseIterable { case steam, gog, epic, own
-        var label: String { ["Steam", "GOG", "Epic", "Your own"][Self.allCases.firstIndex(of: self)!] }
+    private enum Source: String, CaseIterable { case steam, gog, epic, ea, itch, own
+        var label: String { ["Steam", "GOG", "Epic", "EA", "itch.io", "Own"][Self.allCases.firstIndex(of: self)!] }
     }
     @AppStorage("madeiraDownloadSource") private var sourceRaw = Source.steam.rawValue
     private var source: Source { Source(rawValue: sourceRaw) ?? .steam }
@@ -373,8 +373,10 @@ struct DownloadGamesView: View {
             }
             switch source {
             case .steam: steamSection
-            case .gog: GOGDownloadSection(search: search)
+            case .gog: GOGGamesSection(search: search, open: { _ in })   // upstream's GOG list: install from each game's sheet
             case .epic: EpicGamesSection(search: search, open: { _ in })   // upstream's Epic list: install from each game's sheet
+            case .ea: EAGamesSection(search: search, open: { _ in })
+            case .itch: ItchGamesSection(search: search, open: { _ in })
             case .own: linkSection
             }
             installToSection
@@ -692,7 +694,7 @@ final class GameCompatibility: ObservableObject {
             .appendingPathComponent("madeira-compat", isDirectory: true)
     }
     /// Versioned with the rules in judge(): a rule change drops the old verdicts.
-    private static var reportsURL: URL { folder.appendingPathComponent("reports-v3.json") }
+    private static var reportsURL: URL { folder.appendingPathComponent("reports-v4.json") }
     private static var antiCheatURL: URL { folder.appendingPathComponent("anticheat.json") }
 
     private init() {
@@ -730,10 +732,13 @@ final class GameCompatibility: ObservableObject {
         while !pending.isEmpty {
             let appID = pending.removeFirst()
             inFlight.insert(appID)
-            let requirements = await Self.fetchRequirements(appID)
+            async let fetched = Self.fetchRequirements(appID)
+            async let proton = Self.fetchProtonDB(appID)
+            let (requirements, protonDB) = await (fetched, proton)
             inFlight.remove(appID)
             let cheat = antiCheat?[appID]
-            reports[appID] = Self.judge(anticheats: cheat?.names ?? [], status: cheat?.status, requirements: requirements)
+            reports[appID] = Self.judge(anticheats: cheat?.names ?? [], status: cheat?.status, requirements: requirements,
+                                        protonDB: protonDB)
             save()
             // The store API allows about 200 requests in 5 minutes.
             try? await Task.sleep(nanoseconds: 1_600_000_000)
@@ -778,6 +783,19 @@ final class GameCompatibility: ObservableObject {
 
     struct Requirements { var memoryGB: Double?; var directX: Int?; var text: String }
 
+    /// EmuPC: how the game runs under Wine on Linux PCs (ProtonDB's player reports).
+    /// EmuPC runs games through Wine too, so a game that fails there rarely runs here.
+    struct ProtonDB { var tier: String; var reports: Int }
+
+    nonisolated static func fetchProtonDB(_ appID: Int) async -> ProtonDB? {
+        guard let url = URL(string: "https://www.protondb.com/api/v1/reports/summaries/\(appID).json"),
+              let (data, response) = try? await URLSession.shared.data(from: url),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tier = root["tier"] as? String, tier != "pending" else { return nil }
+        return ProtonDB(tier: tier, reports: root["total"] as? Int ?? 0)
+    }
+
     nonisolated static func fetchRequirements(_ appID: Int) async -> Requirements? {
         guard let url = URL(string: "https://store.steampowered.com/api/appdetails?appids=\(appID)&cc=us&l=english"),
               let (data, _) = try? await URLSession.shared.data(from: url),
@@ -809,7 +827,8 @@ final class GameCompatibility: ObservableObject {
         return Requirements(memoryGB: memory, directX: directX, text: text)
     }
 
-    nonisolated static func judge(anticheats: [String], status: String? = nil, requirements: Requirements?) -> Report {
+    nonisolated static func judge(anticheats: [String], status: String? = nil, requirements: Requirements?,
+                                  protonDB: ProtonDB? = nil) -> Report {
         var verdict = Verdict.likely
         var reasons: [String] = []
         func worsen(_ v: Verdict) {
@@ -867,6 +886,20 @@ final class GameCompatibility: ObservableObject {
             }
         } else {
             reasons.append("Steam didn't list system requirements, so this is a guess.")
+        }
+        if let p = protonDB {
+            let from = p.reports > 0 ? " (\(p.reports) player reports)" : ""
+            switch p.tier {
+            case "platinum", "gold":
+                reasons.append("ProtonDB \(p.tier.capitalized): runs well under Wine on Linux PCs\(from).")
+            case "silver", "bronze":
+                worsen(.maybe)
+                reasons.append("ProtonDB \(p.tier.capitalized): runs with problems under Wine on Linux PCs\(from).")
+            case "borked":
+                worsen(.unlikely)
+                reasons.append("ProtonDB Borked: it doesn't run under Wine on Linux PCs either\(from).")
+            default: break
+            }
         }
         if verdict == .likely { reasons.insert("No known blockers. Performance varies from game to game.", at: 0) }
         return Report(verdict: verdict, reasons: reasons, checked: Date())

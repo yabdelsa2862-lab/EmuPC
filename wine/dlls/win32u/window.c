@@ -32,6 +32,14 @@
 #include "wine/server.h"
 #include "wine/debug.h"
 
+#ifdef WINE_IOS
+/* iOS-Madeira: a 32-bit program's ATOM can arrive here with its guest window base added; build/win32u-unix/class_ios.c
+ * gives it back (the wow64win.dll that does the adding is a prebuilt binary). Anything else is returned as it came. */
+extern const WCHAR *ios_atom_arg( const WCHAR *ptr );
+#else
+static inline const WCHAR *ios_atom_arg( const WCHAR *ptr ) { return ptr; }
+#endif
+
 WINE_DEFAULT_DEBUG_CHANNEL(win);
 
 #define USER_HANDLE_TO_INDEX(hwnd) ((LOWORD(hwnd) - FIRST_USER_HANDLE) >> 1)
@@ -1649,6 +1657,8 @@ HANDLE WINAPI NtUserGetProp( HWND hwnd, const WCHAR *str )
 {
     ULONG_PTR ret = 0;
 
+    str = ios_atom_arg( str );
+
     SERVER_START_REQ( get_window_property )
     {
         req->window = wine_server_user_handle( hwnd );
@@ -1669,6 +1679,8 @@ HANDLE WINAPI NtUserGetProp( HWND hwnd, const WCHAR *str )
 BOOL WINAPI NtUserSetProp( HWND hwnd, const WCHAR *str, HANDLE handle )
 {
     BOOL ret;
+
+    str = ios_atom_arg( str );
 
     SERVER_START_REQ( set_window_property )
     {
@@ -1692,6 +1704,8 @@ BOOL WINAPI NtUserSetProp( HWND hwnd, const WCHAR *str, HANDLE handle )
 HANDLE WINAPI NtUserRemoveProp( HWND hwnd, const WCHAR *str )
 {
     ULONG_PTR ret = 0;
+
+    str = ios_atom_arg( str );
 
     SERVER_START_REQ( remove_window_property )
     {
@@ -5662,6 +5676,8 @@ HWND WINAPI NtUserCreateWindowEx( DWORD ex_style, UNICODE_STRING *class_name,
     INT sw = SW_SHOW;
     RECT surface_rect;
     WND *win;
+
+    class = ios_atom_arg( class );   /* iOS-Madeira: a class ATOM stays an atom (the TRACE below and IS_INTRESOURCE(class) read it) */
 
     TRACE( "ex_style %#x, class_name %s, version %s, window_name %s, style %#x, x %u, y %u, cx %u, cy %u, "
            "parent %p, menu %p, class_instance %p, params %p, flags %#x, instance %p, class %s, ansi %u\n",

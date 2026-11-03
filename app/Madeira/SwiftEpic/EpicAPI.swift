@@ -175,7 +175,7 @@ actor EpicAPI {
     static func correctiveMessage(_ action: String) -> String {
         let what = action.contains("EULA") ? "accept Epic's license agreement"
             : action.contains("PRIVACY") ? "accept Epic's privacy policy" : "complete a step on your account"
-        return "Epic needs you to \(what) before it gives Madeira a sign-in code. Sign in at store.epicgames.com in Safari and accept it (or sign in once with the Epic Games Launcher on a computer), then reload this page."
+        return "Epic needs you to \(what) before it gives EmuPC a sign-in code. Sign in at store.epicgames.com in Safari and accept it (or sign in once with the Epic Games Launcher on a computer), then reload this page."
     }
 
     private let http: URLSession

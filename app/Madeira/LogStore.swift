@@ -106,7 +106,7 @@ final class LogStore: ObservableObject {
                 UIApplication.shared.endBackgroundTask(finished)
             }
             DispatchQueue.global(qos: .utility).async {
-                LogSummary.write(from: logFileURL, source: "madeira-log.txt (this session, up to when Madeira went to the background)")
+                LogSummary.write(from: logFileURL, source: "madeira-log.txt (this session, up to when EmuPC went to the background)")
                 DispatchQueue.main.async {
                     guard task != .invalid else { return }
                     let finished = task; task = .invalid

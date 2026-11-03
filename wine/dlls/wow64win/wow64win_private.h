@@ -121,6 +121,26 @@ static inline void *get_str_or_atom( UINT **args )
     return (void *)(ULONG_PTR)v;
 }
 
+/* iOS-Madeira: the same rule for a value held in a 32-bit field. A UNICODE_STRING32 whose Buffer is an atom (user32's
+ * CreateWindowExW, FindWindowExW, UnregisterClassW and GetClassInfoExW pass a MAKEINTATOM class as Buffer with Length 0) and a
+ * CREATESTRUCT's lpszClass are string pointers OR INTRESOURCE values, and win32u tells them apart with IS_INTRESOURCE().  guest_ptr32()
+ * adds the window base, so an atom such as 0x8002 arrived as 0x7100008002 and the callee read a string there: 32-bit programs
+ * died in their first CreateWindowEx on `ldrh w9,[x8],#2` in wine_dbgstr_wn
+ * (NtUserCreateWindowEx+0x100) at guest 0x8002, a fault on the unix stack that the SEH dispatcher refuses to deliver
+ * ("Exception frame is not in stack limits"), exit code 0x696d696c.  A value below 64 KB cannot be a pointer in a Windows process (the
+ * assumption IS_INTRESOURCE is built on) and goes through unchanged, both ways; every other value converts exactly as before. */
+static inline void *guest_ptr_or_intres32( ULONG value )
+{
+    if (!value || (value >> 16)) return guest_ptr32( value );
+    return (void *)(ULONG_PTR)value;
+}
+
+static inline ULONG host_ptr_or_intres32( const void *value )
+{
+    if ((ULONG_PTR)value >> 16) return host_ptr32( value );
+    return (ULONG)(ULONG_PTR)value;
+}
+
 static inline void **addr_32to64( void **addr, ULONG *addr32 )
 {
     if (!addr32) return NULL;
@@ -150,7 +170,7 @@ static inline UNICODE_STRING *unicode_str_32to64( UNICODE_STRING *str, const UNI
     if (!str32) return NULL;
     str->Length = str32->Length;
     str->MaximumLength = str32->MaximumLength;
-    str->Buffer = guest_ptr32( str32->Buffer );
+    str->Buffer = guest_ptr_or_intres32( str32->Buffer );   /* iOS-Madeira: an atom stays an atom */
     return str;
 }
 

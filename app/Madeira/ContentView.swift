@@ -48,8 +48,15 @@ final class MetalHostView: UIView {
         // silently dropping them (presentedTime==0 on all but occasional
         // frames) at our sub-1Hz game present cadence. MeloNX (shipping
         // Switch emulator) sets exactly this pair on its layer.
+        // ml2021 A/B (env.MADEIRA_DISPLAY_SYNC = 1): leave the layer in display-sync
+        // scheduling. Log 74 ran a 32-bit title with the 120 Hz link honoured (the link
+        // itself ticked at 120 Hz) and still parked 18-72 ms a frame in nextDrawable with
+        // the GPU idle; a layer taken OUT of display sync is one of the two remaining
+        // suspects for drawables that come back late (the other is MADEIRA_PROMOTE_KICK).
         let syncSel = NSSelectorFromString("setDisplaySyncEnabled:")
-        if metalLayer.responds(to: syncSel) {
+        if MadeiraConfig.flag("MADEIRA_DISPLAY_SYNC", fallback: false) {
+            LogStore.shared.log("MetalLayer: displaySyncEnabled left on (env.MADEIRA_DISPLAY_SYNC = 1)")
+        } else if metalLayer.responds(to: syncSel) {
             metalLayer.perform(syncSel, with: NSNumber(value: false))
             LogStore.shared.log("MetalLayer: displaySyncEnabled=false (private API, MeloNX pattern)")
         }
@@ -2244,7 +2251,9 @@ struct ContentView: View {
         .sheet(item: $devSheet) { sheet in
             switch sheet {
             case .steamSignIn: SteamSignInView()
+            case .gogSignIn: GOGSignInView()
             case .epicSignIn: EpicSignInView()
+            case .eaSignIn: EASignInView()
             case .dock: MadeiraDockView { startDock($0, compactPool: $1) }
             case .allSettings: AllSettingsView()
             case .steamFriends: SteamFriendsView()
@@ -2704,10 +2713,25 @@ struct ContentView: View {
 
     /// The rest of Play, with JIT on: checks the entry's launch profile and starts it.
     /// An Epic game first gets Epic's sign-in arguments with a fresh one-use code
-    /// (EpicLibrary.launchArguments), for this launch only.
-    private func startLibraryEntry(_ entry: LibraryEntry, epicReady: Bool = false) {
+    /// (EpicLibrary.launchArguments), for this launch only. An EA game first gets its
+    /// licence, the EA app's environment and Madeira's stand-in for the EA app's local
+    /// service (EALibrary.prepareLaunch); every other launch starts without that environment.
+    private func startLibraryEntry(_ entry: LibraryEntry, epicReady: Bool = false, eaReady: Bool = false) {
         guard !EpicCloud.shared.isBusy else {
             library.error = "Wait for Epic Cloud save sync to finish before starting a game."
+            return
+        }
+        if entry.eaOfferID == nil { EALibrary.clearEnvironment() }
+        if let offer = entry.eaOfferID, !eaReady {
+            Task { @MainActor in
+                do {
+                    try await EALibrary.shared.prepareLaunch(entry)
+                    startLibraryEntry(entry, epicReady: epicReady, eaReady: true)
+                } catch {
+                    LogStore.shared.log("[ea-launch] offer=\(offer) not started: \(error.localizedDescription)", level: .error)
+                    library.error = "This EA game could not be prepared: \(error.localizedDescription)"
+                }
+            }
             return
         }
         if let app = entry.epicAppName, !epicReady {
@@ -2723,17 +2747,33 @@ struct ContentView: View {
             }
             return
         }
+        // ml2021: Big Picture's batch exists only once written; the preflight checks the file.
+        if entry.bigPicture == true, !LibraryEntry.writeBigPictureBatch() {
+            library.error = "Big Picture needs Madeira Dock's Steam components (Settings › Steam) to start from."
+            return
+        }
+        // A GOG game's install-script registry values (The Witcher's launcher needs its
+        // InstallFolder), for its own entry or a program added from its folder.
+        GOGLibrary.shared.writeInstallScriptRegistry(for: entry)
+        if entry.gogProductID != nil {
+            // A GOG game: its redistributable installers still to run, before the game
+            // (from the services batch), and GOG's game services while it runs.
+            LibraryEntry.setGOGSetup(GOGLibrary.shared.setupBatch(for: entry), for: entry.id)
+            GOGGalaxy.shared.prepare(entry)
+        }
         do { if entry.desktop != true { _ = try LibraryModel.executable(entry.launchRelativePath) }; try entry.validate() }
         catch {
             LibraryEntry.setTransientArguments(nil, for: entry.id)
             library.error = error.localizedDescription
             logStore.log("[launch-preflight] profile validation failed: \(error.localizedDescription)", level: .error)
+            GOGGalaxy.shared.stop()
             return
         }
         // launchArguments carries the whole ml1163 command (explorer's /desktop=, the quoted
         // program, its arguments); validate() and the bridge's tokenizer take 4 KB.
         guard entry.launchWindowsPath.utf8.count < 1024, entry.launchArguments.utf8.count < 4096 else {
             LibraryEntry.setTransientArguments(nil, for: entry.id)
+            GOGGalaxy.shared.stop()
             library.error = "The executable path or launch arguments are too long."; return
         }
         entry.configureLaunch()
@@ -2758,12 +2798,26 @@ struct ContentView: View {
         var on: [String] = []
         if LibraryPrefs.avx(path) { setenv("MADEIRA_FEX_AVX", "1", 1); on.append("avx") }
         if LibraryPrefs.wineVCRT(path) { setenv("MADEIRA_WINE_VCRT", "1", 1); on.append("wine-vcrt") }
-        if LibraryPrefs.nvidia(path) {
+        let card = GPUCards.card(LibraryPrefs.gpuCard(path))
+        if LibraryPrefs.nvidia(path), card == nil {
             setenv("DXMT_ENABLE_NVEXT", "1", 1)
             setenv("DXMT_WSI_MONITOR_IDENTITY", "1", 1)
             setenv("DXMT_WSI_MODE_TABLE", "1", 1)
             if entry.desktop == true, getenv("MADEIRA_DXMT_EXTRA") == nil { setenv("MADEIRA_DXMT_EXTRA", "dxgi.customDeviceId=2544", 1) }
             on.append("nvidia")
+        }
+        // "Graphics card the game sees" replaces the NVIDIA switch (BCDLaunch.applyExtras);
+        // applyEnvironment unset its NVAPI and monitor switches. The Desktop entry gets
+        // the card's DXMT options here, as it gets the switch's device id above.
+        if let card {
+            let metalName = MTLCreateSystemDefaultDevice()?.name
+            for (name, value) in GPUCards.environment(card, metalName: metalName) {
+                if let value { setenv(name, value, 1) } else { unsetenv(name) }
+            }
+            if entry.desktop == true {   // applyLibrary left the Desktop entry without any
+                setenv("MADEIRA_DXMT_EXTRA", GPUCards.dxmtOptions(card, metalName: metalName).joined(separator: ";"), 1)
+            }
+            on.append("gpu-card=\(card.id)")
         }
         if !on.isEmpty { LogStore.shared.log("[bcd] game switches: \(on.joined(separator: " "))") }
     }
@@ -2792,7 +2846,10 @@ struct ContentView: View {
         // Steam downloads wait for the session, and the app's own Steam connection closes
         // before Valve's client signs in with the same account (SteamOwnedLibrary).
         SteamOwnedLibrary.shared.sessionChanged(active: true)
+        GOGLibrary.shared.sessionChanged(active: true)
+        ItchLibrary.shared.sessionChanged(active: true)
         EpicLibrary.shared.sessionChanged(active: true)
+        EALibrary.shared.sessionChanged(active: true)
         /* ml1095: one config file. Written once from any legacy madeira-*.txt. */
         MadeiraConfig.migrateLegacy { self.logStore.log($0) }
         MadeiraConfig.deleteLegacyFiles { self.logStore.log($0) }   /* ml1096: the old files go once the cfg exists */
@@ -3086,6 +3143,16 @@ struct ContentView: View {
                     dxmtOptions.append(option)
                 }
                 if !extra.isEmpty { logStore.log("DXMT config: \(extra.joined(separator: ";")) via the game's settings") }
+            }
+            // Past DXMT's limit (below) every option is lost; the adapter names (a chosen
+            // graphics card's, GPUCards.swift) go first, as the ids are what a game's table
+            // reads: DXGI's, then Direct3D 9's (older games read the name more often).
+            for key in GPUCards.nameKeys where dxmtOptions.joined(separator: ";").utf16.count > 259 {
+                let before = dxmtOptions.count
+                dxmtOptions.removeAll { GPUCards.optionKey($0) == key }
+                if dxmtOptions.count != before {
+                    logStore.log("DXMT config: \(key) left out, to stay within DXMT's 259 characters", level: .error)
+                }
             }
             // Unset otherwise, so a previous session's options in this app process do not apply.
             if !dxmtOptions.isEmpty { setenv("DXMT_CONFIG", dxmtOptions.joined(separator: ";"), 1) } else { unsetenv("DXMT_CONFIG") }
@@ -3659,11 +3726,63 @@ struct ContentView: View {
             } else {
                 unsetenv("MADEIRA_DOCK_INSTALLS_SESSION")
             }
-            // Only a start that runs installers turns madsync off, for its own session
-            // (build/madsync/madsync.c reads MADEIRA_MADSYNC_SESSION once, when the server starts).
-            if DockInstallers.serverSync {
+            // ml2020: a launcher's own automatic-start service needs a service manager in the
+            // game session, which the host starts when asked (DockGameSession: the game's
+            // MADEIRA_DOCK_GAME_SCM, else the prefix's system.reg decides). Decided here, before
+            // the session, because such a session must also leave madsync (below).
+            let scm = DockGameSession.decide(prefix: MadeiraDock.prefix,
+                                             gameConfig: profile.map { GameProfile(windowsPath: $0.windowsPath).text },
+                                             thirdPartyInstalls: DockInstallers.thirdPartyInstalls)
+            setenv("MADEIRA_DOCK_GAME_SCM", scm.exported, 1)
+            logStore.log(scm.logLine)
+            let scmServerSync = DockGameSession.serverSyncOff(scm, madsyncConfigured: DockInstallers.madsyncConfigured)
+            // ml2020: a 32-bit program behind a 64-bit launcher chain needs its 4 GB guest window
+            // late in the session, when the launcher's browser helper has taken most of the map
+            // (two device runs found no slot). ntdll holds one placeholder at session start.
+            // env.MADEIRA_WOW_HOLD_WINDOWS in madeira.cfg or the game's file, exported after this, wins.
+            let gameFolder = MadeiraDock.drive.appendingPathComponent(game.library + "/common/" + game.installDir, isDirectory: true)
+            if DockGameSession.has32BitProgram(in: gameFolder, machine: DockInstallers.machine) {
+                setenv("MADEIRA_WOW_HOLD_WINDOWS", "1", 1)
+                logStore.log("[dock-wow] the game's folder holds a 32-bit program: one guest-window placeholder is held from session start (MADEIRA_WOW_HOLD_WINDOWS=1)")
+                // The held window goes only to the game's own 32-bit programs: Valve's 32-bit client service,
+                // demand-started seconds into the session once a CEG game installed it, took it and the game
+                // found no slot (2026-11-02). A program from elsewhere still gets any other free slot.
+                if MadeiraConfig.flag("MADEIRA_WOW_HOLD_FOR_GAME") {   // 0: any 32-bit program may take the held window, as before 2026-11-02
+                    setenv("MADEIRA_WOW_HOLD_FOR", game.windowsInstallPath + "\\", 1)
+                } else {
+                    unsetenv("MADEIRA_WOW_HOLD_FOR")
+                }
+            } else {
+                unsetenv("MADEIRA_WOW_HOLD_WINDOWS")
+                unsetenv("MADEIRA_WOW_HOLD_FOR")
+            }
+            // A 64-bit title beside its 32-bit helpers: its memory takes donor RAM first even while
+            // a 32-bit program is in the session (virtual_ios.c ios_swap_x64_policy, swap-x64 unset).
+            // env.MADEIRA_DOCK_X64_TITLE = 0 leaves the swap file first, as before 2026-10-28.
+            if MadeiraConfig.flag("MADEIRA_DOCK_X64_TITLE"),   // 0: a 32-bit helper in the game's folder keeps the 64-bit title's memory on the swap file first
+               DockGameSession.largestProgramMachine(in: gameFolder, machine: DockInstallers.machine) == 0x8664 {
+                setenv("MADEIRA_SWAP_X64_TITLE", "1", 1)
+                logStore.log("[dock-wow] the game's largest program is 64-bit: its memory takes donor RAM first, then the swap file (MADEIRA_SWAP_X64_TITLE=1; env.MADEIRA_DOCK_X64_TITLE = 0 keeps the file first)")
+            } else {
+                unsetenv("MADEIRA_SWAP_X64_TITLE")
+            }
+            // Only a start that runs installers, or one that starts the service manager, turns
+            // madsync off, for its own session (build/madsync/madsync.c reads
+            // MADEIRA_MADSYNC_SESSION once, when the server starts).
+            if DockInstallers.serverSync || scmServerSync {
                 setenv("MADEIRA_MADSYNC_SESSION", "0", 1)
-                logStore.log("[dock-installers] installer/launcher startup: madsync off for this session only (MADEIRA_MADSYNC_SESSION=0)")
+                logStore.log(DockInstallers.serverSync
+                    ? "[dock-installers] this session runs one-time installs: madsync off for this session only (MADEIRA_MADSYNC_SESSION=0)"
+                    : "[dock-game-scm] this session starts the service manager: madsync off for this session only (MADEIRA_MADSYNC_SESSION=0; env.MADEIRA_DOCK_GAME_SCM_SERVER_SYNC = 0 keeps madsync)")
+                // A game session that gives madsync up for the service manager runs fastsync, which
+                // leaves every object's state with the server, instead of Wine's standard sync: a
+                // job-system game otherwise sent ~33,000 waits and wakes a second to the server
+                // (device log 2026-10-28). A game's own fastsync switch, when set, is kept.
+                if scmServerSync, !DockInstallers.serverSync, getenv("MADEIRA_FASTSYNC") == nil,
+                   MadeiraConfig.flag("MADEIRA_DOCK_GAME_SCM_FASTSYNC") {   // 0: such a session runs Wine's standard sync, as before 2026-10-28
+                    setenv("MADEIRA_FASTSYNC", "auto", 1)
+                    logStore.log("[dock-game-scm] fastsync for this session in madsync's place (MADEIRA_FASTSYNC=auto; env.MADEIRA_DOCK_GAME_SCM_FASTSYNC = 0 keeps Wine's standard sync)")
+                }
             } else {
                 unsetenv("MADEIRA_MADSYNC_SESSION")
             }
@@ -4330,6 +4449,10 @@ struct TouchControlsOverlay: View {
                     TVCompanionView()
                     LibraryHUD()
                 } else if landscape && !(library.enabled && !session && !m.editing) {
+                    if m.editing {
+                        Color.clear.contentShape(editorCanvas(geo.size))
+                            .onTapGesture { m.selected = nil; zones.selected = nil }
+                    }
                     if (m.visible || m.editing) && !library.blocksGameplayTouch {
                         if GestureZonesModel.enabled {
                             GestureZonesLayer(screen: geo.size, editing: m.editing)
@@ -4362,6 +4485,22 @@ struct TouchControlsOverlay: View {
         .ignoresSafeArea()
         .statusBarHidden(library.current != nil)
         .persistentSystemOverlays(library.current != nil ? .hidden : .automatic)
+    }
+
+    /// The dismissal gesture must never take a control's drag on iOS 26.
+    private func editorCanvas(_ screen: CGSize) -> Path {
+        var area = Path(CGRect(origin: .zero, size: screen))
+        for control in m.controls {
+            let size = TouchControlsModel.size(control)
+            let frame = CGRect(x: CGFloat(control.nx) * screen.width - size.width / 2,
+                               y: CGFloat(control.ny) * screen.height - size.height / 2,
+                               width: size.width, height: size.height)
+            area = area.subtracting(Path(frame))
+        }
+        if GestureZonesModel.enabled {
+            for zone in zones.zones { area = area.subtracting(Path(zone.rect(in: screen))) }
+        }
+        return area
     }
 
     /// Every control in ONE GlassEffectContainer: on iOS 26 the system merges
@@ -4825,6 +4964,7 @@ struct MappingPanel: View {
     let screen: CGSize
     @ObservedObject private var m = TouchControlsModel.shared
     @State private var tab = 0                    // 0 keyboard, 1 controller
+    @State private var resizeDiameter: CGFloat?
 
 
     var body: some View {
@@ -4843,6 +4983,31 @@ struct MappingPanel: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(control.locked == true ? "Unlock control" : "Lock control")
             }
+            HStack(spacing: 8) {
+                Text("Size").font(.system(size: 12))
+                Slider(value: Binding(get: { control.scale }, set: { value in
+                    if let i = m.index(of: control.id), m.controls[i].locked != true {
+                        m.controls[i].scale = value
+                    }
+                }), in: 0.5...3.0, onEditingChanged: { resizing in
+                    if resizing {
+                        if resizeDiameter == nil { resizeDiameter = TouchControlsModel.diameter(control) }
+                    } else if resizeDiameter != nil {
+                        // Let the slider finish tracking before the panel moves.
+                        DispatchQueue.main.async { resizeDiameter = nil }
+                    }
+                })
+                    .id(control.id)
+                    .disabled(control.locked == true)
+                    .accessibilityLabel("Control size")
+                    .accessibilityValue("\(Int(control.scale * 100)) percent")
+                Text("\(Int(control.scale * 100))%")
+                    .font(.system(size: 12).monospacedDigit())
+                    .frame(width: 42, alignment: .trailing)
+            }
+            .padding(.horizontal, 12)
+            .frame(minHeight: 44)
+            .foregroundStyle(.white)
             Rectangle().fill(.white.opacity(0.15)).frame(height: 1)
             LayerButtons { mv in if let i = m.index(of: control.id) { mv.apply(&m.controls, i) } }
                 .padding(.horizontal, 10)
@@ -4856,6 +5021,8 @@ struct MappingPanel: View {
         .background(GlassShape())
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(.white.opacity(0.18), lineWidth: 1))
+        .contentShape(Rectangle())
+        .onTapGesture { } // Panel gaps must not dismiss the selection beneath them.
         .position(layout.center)
     }
 
@@ -4875,7 +5042,7 @@ struct MappingPanel: View {
     private var layout: Placement {
         let cx = CGFloat(control.nx) * screen.width
         let cy = CGFloat(control.ny) * screen.height
-        let r  = TouchControlsModel.diameter(control) / 2
+        let r  = (resizeDiameter ?? TouchControlsModel.diameter(control)) / 2
         let gap: CGFloat = 14, edge: CGFloat = 8
 
         for size in [CGSize(width: 340, height: 236),

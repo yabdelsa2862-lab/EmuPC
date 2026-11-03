@@ -262,9 +262,17 @@ void ios_fex_mono_count_helper(int Miss) {
  * call and crashed every launch). The discriminator is self-identifying and
  * disjoint: a real JIT alias's PeBase is a mapped PE image base, which on iOS
  * is always >= 4GB; a sub-floor window's low base is by definition < 4GB.
+ *
+ * ml2240: the task's floor sits a slide ABOVE 4GB, so an image based between
+ * 4GB and the floor (an old x64 linker's default 0x100000000) cannot be mapped
+ * there either. ntdll registers such a window only after proving the range is
+ * outside the task's map, and marks it with bit 63 (kIosSubfloorHighMark), which
+ * no PE base can carry. g_SubfloorCeiling is the end of the highest window.
  */
 static constexpr uint64_t kIosSubfloorFloor = 0x100000000ull;
+static constexpr uint64_t kIosSubfloorHighMark = 1ull << 63;
 static constexpr int kMaxSubfloorEntries = 8;
+static uint64_t g_SubfloorCeiling = kIosSubfloorFloor;
 
 struct IosSubfloorEntry {
   uint64_t LowBase;   // what the guest uses (below the floor)
@@ -277,7 +285,7 @@ static int g_SubfloorCount;
 
 // low -> real, or Addr unchanged when it is not in a window.
 uint64_t IosSubfloorToReal(uint64_t Addr) {
-  if (Addr >= kIosSubfloorFloor) {
+  if (Addr >= __atomic_load_n(&g_SubfloorCeiling, __ATOMIC_ACQUIRE)) {
     return Addr; // fast reject: the overwhelmingly common case
   }
   const int count = g_SubfloorCount;
@@ -354,8 +362,16 @@ uint64_t IosSubfloorClipSize(uint64_t LowAddr, uint64_t Size) {
   return Size;
 }
 
+static void IosSubfloorRaiseCeiling(uint64_t LowBase, uint64_t Size) {
+  const uint64_t End = LowBase + Size;
+  if (End > LowBase && End > __atomic_load_n(&g_SubfloorCeiling, __ATOMIC_ACQUIRE)) {
+    __atomic_store_n(&g_SubfloorCeiling, End, __ATOMIC_RELEASE);
+  }
+}
+
 static bool IosSubfloorAdd(uint64_t LowBase, uint64_t RealBase, uint64_t Size) {
   const int count = g_SubfloorCount;
+  IosSubfloorRaiseCeiling(LowBase, Size); // ml2240: before the entry is published
   for (int i = 0; i < count; i++) {
     if (g_Subfloor[i].LowBase == LowBase) {
       // Re-registration: a second pseudo-process mapped the same image. Last
@@ -386,6 +402,11 @@ void BTCpu64IosAddAliasMapping(uint64_t PeBase, uint64_t JitBase, uint64_t Size)
    * Module.S uses to rewrite branch targets. */
   if (PeBase < kIosSubfloorFloor) {
     IosSubfloorAdd(PeBase, JitBase, Size);
+    return;
+  }
+  /* ml2240: a window between 4GB and the task's floor, marked by ntdll. */
+  if (PeBase & kIosSubfloorHighMark) {
+    IosSubfloorAdd(PeBase & ~kIosSubfloorHighMark, JitBase, Size);
     return;
   }
 

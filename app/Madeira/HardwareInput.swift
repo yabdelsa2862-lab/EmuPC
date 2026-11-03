@@ -86,7 +86,8 @@ import ObjectiveC
 // relative there; MADEIRA_POINTER_ABSOLUTE=0 keeps motion relative
 // everywhere; MADEIRA_POINTER_LOCK=0 never locks the pointer;
 // MADEIRA_POINTER_AUTOLOCK=0 locks it only on request (Ctrl+Alt+P or the lock
-// button). Documents/madeira-input.json holds the settings: `sensMouse` (mouse
+// button); a game's MADEIRA_POINTER_HIDDEN_ABSOLUTE=1 keeps motion absolute
+// and the pointer unlocked while the program hides its cursor. Documents/madeira-input.json holds the settings: `sensMouse` (mouse
 // gain, default 1.0), `padRightStickMouse` (default false) and
 // `ignoreTouchesWithMouse` (default true; false disables the AssistiveTouch
 // click filter). The driver side has MADEIRA_NAV_KEYS_E0. Log tag:
@@ -118,7 +119,7 @@ struct PasteText {
 
     static func interval(milliseconds: String?) -> Double {
         guard let raw = milliseconds, let value = Double(raw), value.isFinite else { return 0.01 }
-        return min(100, max(5, value)) / 1000
+        return min(100, max(1, value)) / 1000
     }
 
     init(_ text: String) {
@@ -615,12 +616,15 @@ enum PointerRoute: String {
 }
 
 enum PointerPolicy {
+    /// - hiddenAbsolute: MADEIRA_POINTER_HIDDEN_ABSOLUTE; a direct game that hides
+    ///   the Windows cursor to draw its own still follows the pointer's position.
     static func cursorShown(desktop: Bool, directEnabled: Bool, reports: UInt32, shown: Bool,
-                            routingEnabled: Bool = true, relative: Bool = false) -> Bool {
-        if !routingEnabled { return desktop || (directEnabled && shown) }
+                            routingEnabled: Bool = true, relative: Bool = false,
+                            hiddenAbsolute: Bool = false) -> Bool {
+        if !routingEnabled { return desktop || (directEnabled && (shown || hiddenAbsolute)) }
         if relative { return false }
         if desktop { return reports == 0 || shown }
-        return directEnabled && shown
+        return directEnabled && (shown || hiddenAbsolute)
     }
     /// - focused: the mouse belongs to the program right now;
     /// - hover: the system reports where the pointer is (iPad, not AssistiveTouch);
@@ -727,11 +731,26 @@ final class HardwareInput: ObservableObject {
     /// and ignores it. No API reports this, so the idiom is the detection.
     static var pointerLockAvailable: Bool { lockEnabled && UIDevice.current.userInterfaceIdiom != .phone }
 
+    /// iPhone: the mouse arrives only through AssistiveTouch.
+    static var isPhone: Bool { UIDevice.current.userInterfaceIdiom == .phone }
+
     /// The desktop session (explorer on a virtual desktop). Read per use: the
     /// app sets MADEIRA_DESKTOP for each launch.
     static var desktopMode: Bool {
         guard let v = getenv("MADEIRA_DESKTOP") else { return false }
         return v.pointee == 49  // '1'
+    }
+
+    /// MADEIRA_POINTER_HIDDEN_ABSOLUTE=1 (a game's own config): the program's
+    /// cursor follows the iOS pointer's position even while it hides the Windows
+    /// cursor, and the pointer never locks by itself. For a game that hides the
+    /// cursor only to draw its own at the cursor position (STONKS-9800): relative
+    /// HID deltas lack the iOS pointer's acceleration, so its cursor lagged the
+    /// pointer and stopped short of the screen edges. Read per use: the app sets
+    /// a game's env lines for each launch. Default off.
+    static var hiddenCursorAbsolute: Bool {
+        guard let v = getenv("MADEIRA_POINTER_HIDDEN_ABSOLUTE") else { return false }
+        return String(cString: v) == "1"
     }
 
     /// The desktop's live size in guest pixels (IOSDisplayShim): the session
@@ -765,7 +784,13 @@ final class HardwareInput: ObservableObject {
     /// True while a hardware keyboard delivers raw key events. The text bridge
     /// (MetalBackedView's UIKeyInput) receives the same presses from UIKit, so
     /// it stands aside while this is true instead of typing every key twice.
-    var handlesTyping: Bool { Self.enabled && keyboardConnected }
+    /// An explicit test session can route UIKit's synthetic typing while the
+    /// library keyboard owns first responder. Raw gameplay resumes on Done.
+    private var libraryTypingOwnsKeys: Bool {
+        getenv("MADEIRA_XCTEST_TYPING").map { String(cString: $0) } == "1"
+            && LibraryKeyboard.input?.isFirstResponder == true
+    }
+    var handlesTyping: Bool { Self.enabled && keyboardConnected && !libraryTypingOwnsKeys }
 
     // MARK: focus (main thread)
 
@@ -1044,8 +1069,11 @@ final class HardwareInput: ObservableObject {
     private func evaluateFocus(_ why: String) {
         installTouchObserver()
         let base = computeBaseFocus()
-        let keyboard = base && !typingElsewhere()
-        let over = hoverSeen ? pointerOver : clickFocus.onGame
+        let keyboard = base && !typingElsewhere() && !libraryTypingOwnsKeys
+        // iPhone: the AssistiveTouch pointer's hover ends whenever it stops
+        // against a screen edge, while GCMouse deltas keep coming; following
+        // hover there dropped mouse-look at every edge. Clicks decide instead.
+        let over = hoverSeen && !Self.isPhone ? pointerOver : clickFocus.onGame
         let mouse = base && (!Self.focusEnabled || pointerLocked || over || !gameButtons.isEmpty)
         baseFocused = base
         updateButtonPolling(active: Self.mouseRoutingEnabled && appActive && mouseConnected)
@@ -1127,7 +1155,7 @@ final class HardwareInput: ObservableObject {
         guard Self.enabled, let game = MetalBackedView.keyboardTarget else { return }
         let onGame = t.view.map { $0.isDescendant(of: game) } ?? false
         clickFocus.touchBegan(onGame: onGame, at: CACurrentMediaTime())
-        if !hoverSeen { refreshFocus(onGame ? "tap on the game view" : "tap elsewhere") }
+        if !hoverSeen || Self.isPhone { refreshFocus(onGame ? "tap on the game view" : "tap elsewhere") }
     }
 
     // MARK: - keyboard
@@ -1663,7 +1691,8 @@ final class HardwareInput: ObservableObject {
     private var cursorShownForRoute: Bool {
         PointerPolicy.cursorShown(desktop: Self.desktopMode, directEnabled: Self.directCursorEnabled,
                                   reports: cursorState.reports, shown: cursorState.shown != 0,
-                                  routingEnabled: Self.mouseRoutingEnabled, relative: InputSettings.shared.relative)
+                                  routingEnabled: Self.mouseRoutingEnabled, relative: InputSettings.shared.relative,
+                                  hiddenAbsolute: Self.hiddenCursorAbsolute)
     }
 
     private func updateRoute() {
@@ -1733,7 +1762,8 @@ final class HardwareInput: ObservableObject {
     private func updateAutoLock() {
         // Fork: the desktop session has its own rule (no program cursor to follow).
         if Self.desktopMode { updateDesktopAutoLock(); return }
-        guard Self.autoLockEnabled, (Self.mouseRoutingEnabled ? Self.directCursorEnabled : directCursorLive),
+        guard Self.autoLockEnabled, !Self.hiddenCursorAbsolute,
+              (Self.mouseRoutingEnabled ? Self.directCursorEnabled : directCursorLive),
               Self.pointerLockAvailable, mousePath == .gcmouse else {
             if pointerLocked && lockedByUs { setPointerLocked(false, byUs: true, why: "automatic lock unavailable") }
             return
@@ -2702,8 +2732,7 @@ struct HardwareInputSettings: View {
     /// device is routed through AssistiveTouch.
     private var hint: some View {
         HStack(alignment: .top, spacing: 8) {
-            Text("Mouse detected. iPhone needs AssistiveTouch: "
-                 + "Settings > Accessibility > Touch > AssistiveTouch > On, then Devices")
+            Text("Using a mouse? Turn on AssistiveTouch (Settings > Accessibility > Touch), then reopen EmuPC.")
                 .font(.system(size: 12))
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

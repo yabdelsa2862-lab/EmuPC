@@ -203,15 +203,15 @@ private let secondFactorCallback: MadeiraAppleTwoFactorCallback = { context, req
         /// The sign-in Madeira keeps, for the team this copy was signed by: a profile
         /// from any other team does not renew it.
         func account(appleID: String, signedBy team: String?, through servers: [String]) throws -> SigningAccount {
-            guard let team else { throw Failure.failed("This copy of Madeira has no provisioning profile to renew.") }
+            guard let team else { throw Failure.failed("This copy of EmuPC has no provisioning profile to renew.") }
             guard teams.contains(where: { $0.id == team }) else {
-                throw Failure.failed("That is not the Apple ID this copy of Madeira was signed with (team \(team)). "
+                throw Failure.failed("That is not the Apple ID this copy of EmuPC was signed with (team \(team)). "
                     + "Sign in with the Apple ID it was installed with.")
             }
             let account = SigningAccount(version: SigningAccount.version, teamID: team, adsID: adsID, token: token,
                                          tokenExpires: tokenExpires, anisetteIdentifier: anisetteIdentifier,
                                          anisetteProvisioning: anisetteProvisioning, anisetteServers: servers, appleID: appleID)
-            guard account.usable else { throw Failure.failed("Apple's answer held no sign-in Madeira can use.") }
+            guard account.usable else { throw Failure.failed("Apple's answer held no sign-in EmuPC can use.") }
             return account
         }
     }
@@ -288,7 +288,7 @@ private let secondFactorCallback: MadeiraAppleTwoFactorCallback = { context, req
             madeira_rppairing_string_free(error)
             switch code {
             case 0:
-                guard let answer = answer.flatMap(Answer.init(json:)) else { throw Failure.failed("Apple's answer held no sign-in Madeira can use.") }
+                guard let answer = answer.flatMap(Answer.init(json:)) else { throw Failure.failed("Apple's answer held no sign-in EmuPC can use.") }
                 return (answer, server)
             case 1: throw Failure.cancelled
             case 2: failure = .anisette(why)
@@ -323,7 +323,7 @@ private let secondFactorCallback: MadeiraAppleTwoFactorCallback = { context, req
         case .success(let account):
             guard SigningAccountStore.store(account) else {
                 phase = .entering
-                failure = "Madeira couldn't keep the sign-in in this device's Keychain."
+                failure = "EmuPC couldn't keep the sign-in in this device's Keychain."
                 LogStore.shared.log("[signing] sign-in failed: keychain", level: .error)
                 return
             }
@@ -427,7 +427,7 @@ struct AppleSignInSheet: View {
                 Label(failure, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red)
             }
         } footer: {
-            Text("Sign in with the Apple ID this copy of Madeira was installed with. Madeira signs in to Apple itself: your password does not leave this device and is not kept. What is kept, in this device's Keychain, is a token for Apple's developer service. An anisette server (\(URL(string: AppleSignIn.anisetteServers[0])?.host ?? "") first) supplies the device data Apple asks for, and sees neither your Apple ID nor your password.")
+            Text("Sign in with the Apple ID this copy of EmuPC was installed with. EmuPC signs in to Apple itself: your password does not leave this device and is not kept. What is kept, in this device's Keychain, is a token for Apple's developer service. An anisette server (\(URL(string: AppleSignIn.anisetteServers[0])?.host ?? "") first) supplies the device data Apple asks for, and sees neither your Apple ID nor your password.")
         }
         .disabled(signIn.working)
     }

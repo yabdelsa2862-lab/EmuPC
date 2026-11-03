@@ -357,6 +357,20 @@ static unsigned int madeira_heap_policy;
 #define MADEIRA_HEAP_RECLAIM 4
 #define MADEIRA_HEAP_STATS 8
 
+/* A heap created with HEAP_CREATE_ENABLE_EXECUTE hands freed bytes out again, and the
+ * program writes new code into them without telling anyone: x86 needs no instruction
+ * cache flush. Wine Mono's dynamic methods live in such a heap. FEX has turned off its
+ * write trap for Mono's process by then (FEX's ml1280), so it would run what it translated
+ * from the old code. Each block handed out from such a heap is flushed from the
+ * translator's cache. MADEIRA_HEAP_EXEC_FLUSH=0 turns this off. */
+static BOOL madeira_heap_exec_flush = TRUE;
+
+static inline void madeira_heap_flush_exec( const struct heap *heap, void *ptr, SIZE_T size )
+{
+    if (madeira_heap_exec_flush && ptr && (heap->flags & HEAP_CREATE_ENABLE_EXECUTE))
+        NtFlushInstructionCache( NtCurrentProcess(), ptr, size );
+}
+
 void heap_init_madeira_policy(void)
 {
     static const WCHAR * const names[] = { L"MADEIRA_HEAP_COMPACT", L"MADEIRA_HEAP_COMBINED",
@@ -373,6 +387,11 @@ void heap_init_madeira_policy(void)
         if (!RtlQueryEnvironmentVariable_U( NULL, &name, &value ) &&
             value.Length == sizeof(WCHAR) && buffer[0] == '1') madeira_heap_policy |= 1u << i;
     }
+    RtlInitUnicodeString( &name, L"MADEIRA_HEAP_EXEC_FLUSH" );
+    value.Buffer = buffer;
+    value.MaximumLength = sizeof(buffer);
+    if (!RtlQueryEnvironmentVariable_U( NULL, &name, &value ) &&
+        value.Length == sizeof(WCHAR) && buffer[0] == '0') madeira_heap_exec_flush = FALSE;
     if (madeira_heap_policy)
         ERR( "[heap-policy] compact=%u combined=%u reclaim=%u stats=%u\n",
              !!(madeira_heap_policy & MADEIRA_HEAP_COMPACT), !!(madeira_heap_policy & MADEIRA_HEAP_COMBINED),
@@ -2305,6 +2324,7 @@ retry:
         heap_unlock( heap, heap_flags );
         if (released) goto retry;
     }
+    if (!status) madeira_heap_flush_exec( heap, ptr, size );
 #endif
     if (!status) valgrind_notify_alloc( ptr, size, flags & HEAP_ZERO_MEMORY );
 
@@ -2499,6 +2519,10 @@ void *WINAPI RtlReAllocateHeap( HANDLE handle, ULONG flags, void *ptr, SIZE_T si
             status = STATUS_SUCCESS;
         }
     }
+#ifdef __i386__
+    /* A block grown in place takes in freed bytes too; a moved one was flushed by RtlAllocateHeap. */
+    else madeira_heap_flush_exec( heap, ret, size );
+#endif
 
     TRACE( "handle %p, flags %#lx, ptr %p, size %#Ix, return %p, status %#lx.\n", handle, flags, ptr, size, ret, status );
     heap_set_status( heap, flags, status );

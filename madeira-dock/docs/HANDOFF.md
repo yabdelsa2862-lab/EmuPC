@@ -18,6 +18,51 @@ complete. Existing installs need Madeira's Repair to apply that filesystem fix.
 The UI reports readiness rather than claiming installation progress and gives
 that recovery step. Rebuild both Dock and the app. Phone launch validation is
 still outstanding; host tests do not establish third-party launcher compatibility.
+## Game-session service manager and the hold (ml2020, 2026-10-23)
+
+Two launch mechanisms for games whose own launcher does more than start the
+game, both decided by the host from what it can observe, with switches to
+force or disable them. Madeira's app half (its `MadeiraDock.swift` report
+allow-list) already accepted `game-scm`, `game-scm-timeout` and
+`launch-keep-alive` from willfaust/Madeira#315; this adds `game-scm-services`
+and `launch-keep-alive-held`, and the round `ml2020`.
+
+**Service manager** (`src/launch.c`, `src/scm.c`): after the install-folder
+check and before CEG, `MADEIRA_DOCK_GAME_SCM` is read: `0` off, `1` on, unset
+auto. Auto counts, read-only, the automatic and on-demand Win32 services under
+`HKLM\System\CurrentControlSet\Services` whose image is not Windows' own
+(`sh_service_is_foreign_autostart`: type 0x10/0x20, start 2 or 3, image neither in
+the Windows folder nor `%SystemRoot%`/`\SystemRoot`/`System32\`/`SysWOW64\`
+relative), reports `game-scm-services=<n>`, and starts the manager only for
+n > 0. The start is `sh_install_scm_start` (the `--start-services` one, so
+`MADEIRA_DOCK_INSTALL_SCM=0` turns it off too) on a worker thread with a quiet
+observer, waited for at most 20 s: `game-scm=<outcome>` or
+`game-scm-timeout=1`; a timed-out worker is left to its blocked RPC call and
+reports nothing. The launch proceeds either way.
+
+**Hold** (`src/hold.c`): `sh_hold_poll`, called every loop iteration once the
+game was seen running, takes one process snapshot a second (two passes, so a
+child listed before its parent joins at once), adds processes whose parent is
+this host or a non-Windows member, or whose image name is in
+`MADEIRA_DOCK_KEEP_ALIVE`, records each one's image path (Windows or not) and
+start time (`GetProcessTimes`, else first sighting), keeps gone members for
+30 s so a relaunch's child still finds its parent, enumerates visible windows,
+and counts members that hold: not a Windows image and (visible window or
+younger than 60 s). While Valve's client reports the game as not running and
+a member holds, the 3 s end is postponed; `launch-keep-alive=<holders>` once,
+`launch-keep-alive-held=<seconds>` before `launch-game-ended`.
+`MADEIRA_DOCK_KEEP_ALIVE=0` restores the previous end. Dock only observes:
+no process is created, signalled or ended by this code.
+
+Tests: the decisions are in `validation.c` (`tools/check.sh`, ASan/UBSan on
+Linux); `hold.c` and the registry scan are Windows-only and covered by the
+x64 and i386 `-Werror` builds. Madeira's side (`DockGameSession.swift`)
+makes the same auto decision from `system.reg` before the session starts, so
+it can turn madsync off for a session that will start the manager
+(`MADEIRA_DOCK_GAME_SCM_SERVER_SYNC=0` keeps madsync) and export an explicit
+0/1 to the host. Device evidence: none yet; the first logs to read are
+`game-scm-services`, `game-scm`, and whether `launch-keep-alive` appears in a
+launcher-chain session that previously ended early.
 
 ## Original launch entry keys (2026-10-05)
 

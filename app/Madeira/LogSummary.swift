@@ -88,6 +88,8 @@ enum LogSummary {
         var poolWantedMB: Int?
         var poolMB: Int?
         var smallPool = false
+        var poolAllocationFailed = false
+        var guestWindowFailed = false
         var poolPeak: UInt64 = 0
         var poolTotal: UInt64 = 0
         var exhausted = 0
@@ -223,6 +225,15 @@ enum LogSummary {
             }
             if line.contains("[frontend] force close") { facts.forceClosed = true }
             if line.contains("[WineProc] the main process exited while"), line.contains("(steam.exe)") { facts.handedToSteam = true }
+            if line.contains("JIT pool allocation FAILED — not starting Wine.") {
+                facts.sawSession = true
+                facts.poolAllocationFailed = true
+            }
+            if line.contains("[wow-window] main-process reserve FAILED ")
+                || line.contains("[wow-window] refused: map too small") {
+                facts.sawSession = true
+                facts.guestWindowFailed = true
+            }
             if let r = line.range(of: "no hole fits a ") {
                 facts.poolWantedMB = Int(line[r.upperBound...].prefix { $0.isNumber })
                 facts.smallPool = true
@@ -259,7 +270,7 @@ enum LogSummary {
     // MARK: Writing
 
     static func text(_ f: Facts, source: String) -> String {
-        var out = ["=== Madeira session summary ===",
+        var out = ["=== EmuPC session summary ===",
                    "From \(source)" + (f.firstTime.map { ", \($0)" } ?? "") + (f.lastTime.map { " to \($0)" } ?? "")
                    + ". The full log has the details; this lists what usually explains a problem.", ""]
         if let game = f.game { out.append("Program: \(game)" + (f.dock.isEmpty ? "" : " (Steam, through Madeira Dock)")) }
@@ -272,11 +283,17 @@ enum LogSummary {
         }
 
         var problems: [String] = []
+        if f.poolAllocationFailed {
+            problems.append("The JIT pool could not be allocated, so Wine was not started. See the JIT pool lines in the full log for the reason.")
+        }
+        if f.guestWindowFailed {
+            problems.append("A 32-bit program could not reserve its 4 GB guest-memory window. See the [wow-window] lines in the full log for the reservation failure.")
+        }
         if f.smallPool, let mb = f.poolMB {
             problems.append("The JIT pool (the memory games' code runs from) got \(mb) MB"
                 + (f.poolWantedMB.map { " instead of \($0) MB" } ?? "")
                 + ": iPadOS had no larger free space at launch. Big games may run out of it."
-                + " Relaunching Madeira can give a bigger one; `pool-split = 1` in the game's config lets Madeira join two free spaces.")
+                + " Relaunching EmuPC can give a bigger one; `pool-split = 1` in the game's config lets EmuPC join two free spaces.")
         }
         if f.exhausted > 0 {
             problems.append("The JIT pool ran out \(f.exhausted)x" + (f.exhaustedWant > 0 ? " (largest request \(mb(f.exhaustedWant)) MB)" : "")
@@ -295,7 +312,7 @@ enum LogSummary {
         }
         if f.madeiraEnded, f.execRefused {
             let started = f.processes.last.map { " The last program started was \($0.image)." } ?? ""
-            problems.append("Madeira closed: iPadOS refused to run a program's code. Madeira can start only one 32-bit program"
+            problems.append("EmuPC closed: iPadOS refused to run a program's code. EmuPC can start only one 32-bit program"
                             + " per session, so this usually means a launcher started the game.\(started)"
                             + " For a Steam game, pick the game's own program in Game details > Steam > Steam starts.")
         }
@@ -320,7 +337,7 @@ enum LogSummary {
                 out.append("  \(p.image) ended itself with \(words)" + (p.endedAt.map { " around \($0)" } ?? ""))
             }
             if let asked = f.quitAsked { out.append("  Quit game was pressed at \(asked)") }
-            if f.forceClosed { out.append("  Madeira was force-closed") }
+            if f.forceClosed { out.append("  EmuPC was force-closed") }
         }
 
         let other = f.missing.filter { $0.status != "c0000017" }
@@ -366,11 +383,28 @@ enum LogSummary {
         let out = log.deletingLastPathComponent().appendingPathComponent(fileName)
         do {
             try text(f, source: source).write(to: out, atomically: true, encoding: .utf8)
+            keepGameLog(log)
             return true
         } catch {
             fputs("[log-summary] could not write \(fileName): \(error.localizedDescription)\n", stderr)
             return false
         }
+    }
+
+    /// Documents/madeira-last-game-log.txt: a copy of the last log that had a game
+    /// session in it, which Get Help from Claude shares (ClaudeHelp.swift). Without
+    /// it, opening Madeira twice after a game leaves only logs with no game in them.
+    static let gameLogName = "madeira-last-game-log.txt"
+    static func keepGameLog(_ log: URL) {
+        guard log.lastPathComponent != gameLogName else { return }
+        let fm = FileManager.default
+        let target = log.deletingLastPathComponent().appendingPathComponent(gameLogName)
+        let temp = log.deletingLastPathComponent().appendingPathComponent(gameLogName + ".part")
+        try? fm.removeItem(at: temp)
+        guard (try? fm.copyItem(at: log, to: temp)) != nil else { return }
+        // The copy is complete before it takes the old one's place.
+        try? fm.removeItem(at: target)
+        if (try? fm.moveItem(at: temp, to: target)) == nil { try? fm.removeItem(at: temp) }
     }
 
     /// In the background: logs never block the UI.

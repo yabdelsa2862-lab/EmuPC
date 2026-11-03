@@ -304,3 +304,77 @@ int32_t sh_install_scm_start(const struct sh_observer *o)
     o->event("install-scm", outcome);
     return outcome;
 }
+
+/* ml2020: the game session's service manager (scm.h). */
+int32_t sh_game_scm_foreign_services(void)
+{
+    wchar_t windows[MAX_PATH];
+    UINT length = GetWindowsDirectoryW(windows, MAX_PATH);
+    if (!length || length >= MAX_PATH) wcscpy(windows, L"C:\\windows");
+    HKEY services = NULL;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"System\\CurrentControlSet\\Services", 0,
+                      KEY_READ, &services) != ERROR_SUCCESS) return -1;
+    int32_t foreign = 0;
+    static wchar_t image[8192], expanded[8192];
+    for (DWORD index = 0; index < 4096; ++index) {
+        wchar_t name[256];
+        DWORD name_length = 256;
+        LSTATUS status = RegEnumKeyExW(services, index, name, &name_length, NULL, NULL, NULL, NULL);
+        if (status == ERROR_NO_MORE_ITEMS) break;
+        if (status != ERROR_SUCCESS) continue;
+        HKEY service = NULL;
+        if (RegOpenKeyExW(services, name, 0, KEY_QUERY_VALUE, &service) != ERROR_SUCCESS) continue;
+        DWORD type = 0, start = 0, size = sizeof(DWORD), kind = 0;
+        bool known = RegQueryValueExW(service, L"Type", NULL, &kind, (BYTE *)&type, &size) == ERROR_SUCCESS &&
+                     kind == REG_DWORD && size == sizeof(DWORD);
+        size = sizeof(DWORD);
+        known = known && RegQueryValueExW(service, L"Start", NULL, &kind, (BYTE *)&start, &size) == ERROR_SUCCESS &&
+                kind == REG_DWORD && size == sizeof(DWORD);
+        /* Only automatic Win32 services need the image read at all. */
+        if (known && (type & 0x30u) && start == 2) {
+            size = sizeof(image) - sizeof(wchar_t);
+            const wchar_t *path = NULL;
+            if (RegQueryValueExW(service, L"ImagePath", NULL, &kind, (BYTE *)image, &size) == ERROR_SUCCESS &&
+                (kind == REG_SZ || kind == REG_EXPAND_SZ) && size >= sizeof(wchar_t)) {
+                image[size / sizeof(wchar_t)] = 0;
+                path = image;
+                if (kind == REG_EXPAND_SZ) {
+                    DWORD got = ExpandEnvironmentStringsW(image, expanded, 8192);
+                    if (got && got < 8192) path = expanded;
+                }
+            }
+            if (sh_service_is_foreign_autostart(type, start, path, windows)) foreign++;
+        }
+        RegCloseKey(service);
+    }
+    RegCloseKey(services);
+    return foreign;
+}
+
+struct game_scm_work { const struct sh_observer *o; volatile LONG outcome; };
+
+/* The worker's events would interleave with the host's after a timeout, so
+ * it reports nothing; the host reports the outcome. */
+static void quiet_event(const char *stage, int32_t value) { (void)stage; (void)value; }
+
+static DWORD WINAPI game_scm_worker(void *parameter)
+{
+    struct game_scm_work *work = parameter;
+    struct sh_observer quiet = {work->o->now_ms, work->o->sleep_ms, quiet_event};
+    InterlockedExchange(&work->outcome, sh_install_scm_start(&quiet));
+    return 0;
+}
+
+int32_t sh_game_scm_start(const struct sh_observer *o, bool *timed_out)
+{
+    /* Static: a timed-out worker may still write to it after this returns. */
+    static struct game_scm_work work;
+    *timed_out = false;
+    work.o = o;
+    InterlockedExchange(&work.outcome, SH_INSTALL_SCM_FAILED);
+    HANDLE worker = CreateThread(NULL, 0, game_scm_worker, &work, 0, NULL);
+    if (!worker) return sh_install_scm_start(o);
+    if (WaitForSingleObject(worker, SH_GAME_SCM_STEP_MS) != WAIT_OBJECT_0) *timed_out = true;
+    CloseHandle(worker);
+    return *timed_out ? SH_INSTALL_SCM_FAILED : InterlockedCompareExchange(&work.outcome, 0, 0);
+}

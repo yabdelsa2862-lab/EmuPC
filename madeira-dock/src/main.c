@@ -26,7 +26,8 @@ static const struct dock_client_layout *client_layout;
 
 static void event(const char *stage, int32_t value)
 {
-    const char *round = !strncmp(stage, "install-scm", 11) ? "ml2014" :
+    const char *round = !strncmp(stage, "game-scm", 8) || !strncmp(stage, "launch-keep-alive", 17) ? "ml2020" :
+        !strncmp(stage, "install-scm", 11) ? "ml2014" :
         !strncmp(stage, "ceg-scm", 7) || !strncmp(stage, "ceg-service-", 12) ? "ml2000" :
         !strncmp(stage, "ceg-", 4) ? "ml1990" :
         !strncmp(stage, "launch-update-", 14) ? "ml1970" :

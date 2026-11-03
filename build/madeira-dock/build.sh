@@ -26,6 +26,9 @@ OUT="$REPO_ROOT/app/Madeira/arm64ec-windows"
 [ -f "$SRC/src/main.c" ] || { echo "madeira-dock is missing: git submodule update --init madeira-dock" >&2; exit 1; }
 [ -x "$CC" ] || { echo "missing cross compiler: $CC (set LLVM_MINGW)" >&2; exit 1; }
 
+# This repository's Dock changes (build/dock-patches/README.md) go in before the compile.
+bash "$REPO_ROOT/build/dock-patches/apply.sh"
+
 if [ "${1:-}" = "--check" ]; then
     (cd "$SRC" && bash tools/check.sh)
 fi
@@ -38,7 +41,7 @@ trap 'rm -rf "$TMP"' EXIT
 # stripped. -Wl,--no-insert-timestamp keeps the output reproducible.
 "$CC" -std=c11 -O2 -Wall -Wextra -Werror -Wno-cast-function-type \
     -static -Wl,--strip-all -Wl,--no-insert-timestamp \
-    -o "$TMP/dockhost.exe" "$SRC"/src/*.c -ladvapi32
+    -o "$TMP/dockhost.exe" "$SRC"/src/*.c -ladvapi32 -luser32
 
 section() { printf '\n\n==== %s ====\n\n' "$1"; }
 {

@@ -6918,11 +6918,12 @@ MTLD3D9Device::BeginStateBlock() {
   // DXVK allocates m_recorder the same way at BeginStateBlock).
   //
   // Seed-capture the coarse-masked categories from live state. Exact per
-  // element: render states, transforms, clip planes, textures and streams
+  // element: render states, sampler/texture-stage states, transforms, clip
+  // planes, textures and streams
   // (per slot), and F constants (range-tracked). KNOWN DIVERGENCE from the
   // per-element tracking wined3d and DXVK do, for what is left: where the
-  // changed mask is still one bit per category (sampler states, texture stage
-  // states, lights, VS/PS I+B constant files, gaps inside the recorded
+  // changed mask is still one bit per category (lights, VS/PS I+B constant
+  // files, gaps inside the recorded
   // F-constant range), recording ONE element marks the whole category and
   // Apply restores the un-recorded siblings to these Begin-time values rather
   // than the live values at Apply time. The seed is what makes that survivable:
@@ -7130,7 +7131,7 @@ MTLD3D9Device::SetTextureStageState(DWORD Stage, D3DTEXTURESTAGESTATETYPE Type, 
     return D3D_OK;
   if (m_inStateBlockRecord) {
     m_recordingBlock->m_snapTextureStageStates[Stage][Type] = Value;
-    m_recordingBlock->m_changes.texture_stage_states = true;
+    m_recordingBlock->m_changes.texture_stage_states[Stage] |= 1ull << Type;
     return D3D_OK;
   }
   if (m_textureStageStates[Stage][Type] == Value)
@@ -7195,7 +7196,7 @@ MTLD3D9Device::SetSamplerState(DWORD Sampler, D3DSAMPLERSTATETYPE Type, DWORD Va
     return D3D_OK;
   if (m_inStateBlockRecord) {
     m_recordingBlock->m_snapSamplerStates[slot][Type] = Value;
-    m_recordingBlock->m_changes.sampler_states = true;
+    m_recordingBlock->m_changes.sampler_states[slot] |= 1u << Type;
     return D3D_OK;
   }
   // FETCH4 magic rides the LOD-bias state: 'GET4' arms the sampler's

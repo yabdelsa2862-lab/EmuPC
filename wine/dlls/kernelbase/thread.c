@@ -586,9 +586,26 @@ DWORD WINAPI DECLSPEC_HOTPATCH SetThreadIdealProcessor( HANDLE thread, DWORD pro
 BOOL WINAPI DECLSPEC_HOTPATCH SetThreadIdealProcessorEx( HANDLE thread, PROCESSOR_NUMBER *ideal,
                                                          PROCESSOR_NUMBER *previous )
 {
-    FIXME( "(%p %p %p): stub\n", thread, ideal, previous );
-    SetLastError( ERROR_CALL_NOT_IMPLEMENTED );
-    return FALSE;
+    DWORD prev;
+
+    TRACE( "(%p %p %p)\n", thread, ideal, previous );
+
+    /* The ideal processor is a scheduling hint. Windows succeeds for any valid
+     * processor; Intel Embree (Counter-Strike 2) treats a failure as fatal. */
+    if (!ideal || ideal->Group || ideal->Number >= MAXIMUM_PROCESSORS)
+    {
+        SetLastError( ERROR_INVALID_PARAMETER );
+        return FALSE;
+    }
+    prev = SetThreadIdealProcessor( thread, ideal->Number );
+    if (prev == ~0u) return FALSE;
+    if (previous)
+    {
+        previous->Group = 0;
+        previous->Number = prev;
+        previous->Reserved = 0;
+    }
+    return TRUE;
 }
 
 

@@ -239,10 +239,10 @@ struct DeveloperPortal {
 
         var errorDescription: String? {
             switch self {
-            case .anisette(let why): return "No anisette server gave an answer Madeira can use (\(why)). Try again later."
+            case .anisette(let why): return "No anisette server gave an answer EmuPC can use (\(why)). Try again later."
             case .signInRefused: return SigningRefresh.signInRefusedMessage
             case .apple(let code, let message): return "Apple did not issue a new profile: \(message) (error \(code))."
-            case .unreachable(let why): return "Madeira couldn't reach Apple (\(why)). Check the internet connection, then try again."
+            case .unreachable(let why): return "EmuPC couldn't reach Apple (\(why)). Check the internet connection, then try again."
             case .unexpected(let what): return what
             }
         }
@@ -355,7 +355,7 @@ struct DeveloperPortal {
                                                          body: PropertyListSerialization.data(fromPropertyList: body, format: .xml, options: 0)))
         guard (200..<300).contains(status),
               let result = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any] else {
-            throw Failure.unexpected("Apple answered \(action) with HTTP \(status) and nothing Madeira can read.")
+            throw Failure.unexpected("Apple answered \(action) with HTTP \(status) and nothing EmuPC can read.")
         }
         let code = (result["resultCode"] as? NSNumber)?.intValue ?? 0
         guard code == 0 else {
@@ -476,11 +476,11 @@ struct DeveloperPortal {
         if !Set(installed.groups).isSubset(of: new.profile.groups) { missing.insert(SigningProfile.appGroups) }
         guard missing.isEmpty else {
             throw Failure.unexpected("Apple's new profile does not grant \(missing.sorted().joined(separator: ", ")), "
-                + "which this copy is signed with. Install Madeira again to renew it.")
+                + "which this copy is signed with. Install EmuPC again to renew it.")
         }
         guard installed.certificates.isEmpty || !Set(installed.certificates).isDisjoint(with: new.profile.certificates) else {
             throw Failure.unexpected("This copy was signed with a certificate the Apple ID no longer has, "
-                + "so a new profile cannot renew it. Install Madeira again.")
+                + "so a new profile cannot renew it. Install EmuPC again.")
         }
         return new
     }
@@ -491,6 +491,12 @@ struct DeveloperPortal {
 @MainActor final class SigningRefresh: ObservableObject {
     static let shared = SigningRefresh()
 
+    /// Off by default: no Settings section, no refresh or offer over the library and no
+    /// sign-in taken from an installer. A refresh asks Apple's portal for a profile on the
+    /// Apple ID that signs other apps too, so the installer that signed Madeira renews it.
+    /// `env.MADEIRA_SIGNING_REFRESH = 1` brings all of it back.
+    nonisolated static var enabled: Bool { MadeiraConfig.flag("MADEIRA_SIGNING_REFRESH", fallback: false) }
+
     /// Madeira refreshes by itself from this many days before the signing runs out, and
     /// offers it from `offerDays`.
     static let automaticDays = 5
@@ -498,9 +504,9 @@ struct DeveloperPortal {
     /// The device's remote-pairing port through LocalDevVPN, as StikJIT reaches it.
     nonisolated static let devicePort: UInt16 = 49152
 
-    nonisolated static let signInRefusedMessage = "Apple no longer accepts Madeira's sign-in. "
-        + "Sign in with your Apple ID under Settings › Signing, or install Madeira again with SideInstaller."
-    nonisolated static let unreachableMessage = "Madeira couldn't reach this device. Connect LocalDevVPN, then try again."
+    nonisolated static let signInRefusedMessage = "Apple no longer accepts EmuPC's sign-in. "
+        + "Sign in with your Apple ID under Settings › Signing, or install EmuPC again with SideInstaller."
+    nonisolated static let unreachableMessage = "EmuPC couldn't reach this device. Connect LocalDevVPN, then try again."
 
     private static let renewedUntilKey = "madeiraSigningRenewedUntil"
     private static let renewedForKey = "madeiraSigningRenewedFor"
@@ -639,8 +645,8 @@ struct DeveloperPortal {
         // A profile from another team's Apple ID cannot renew this copy, and asking for
         // one would spend an App ID there.
         if let team = main.teamID, team != account.teamID {
-            return stop("Madeira's sign-in is for another Apple ID than the one this copy was signed with. "
-                + "Forget it under Settings › Signing, then sign in with the Apple ID that installed Madeira.")
+            return stop("EmuPC's sign-in is for another Apple ID than the one this copy was signed with. "
+                + "Forget it under Settings › Signing, then sign in with the Apple ID that installed EmuPC.")
         }
         // A second connection to the device while the debugger holds one is not worth
         // a game that fails to start.
@@ -648,7 +654,7 @@ struct DeveloperPortal {
             return stop("JIT is being enabled or is waiting for a game. Refresh before enabling JIT, or after playing.")
         }
         guard let pairing = try? JITPairingFileStore.data() else {
-            return stop("Madeira has no pairing file for this device. Set up Built-in StikJIT under JIT setup, then refresh.")
+            return stop("EmuPC has no pairing file for this device. Set up Built-in StikJIT under JIT setup, then refresh.")
         }
         guard LoopbackProbe.vpnInterfaceUp else { return stop(Self.unreachableMessage, unreachable: true) }
 
@@ -716,7 +722,7 @@ struct DeveloperPortal {
         var errorDescription: String? {
             switch self {
             case .unreachable: return SigningRefresh.unreachableMessage
-            case .pairing: return "This device no longer accepts Madeira's pairing file. Pair again under JIT setup, then refresh."
+            case .pairing: return "This device no longer accepts EmuPC's pairing file. Pair again under JIT setup, then refresh."
             case .device(let why): return "This device did not take the new profile: \(why)."
             }
         }
@@ -765,12 +771,12 @@ struct SigningSettingsSection: View {
     }
 
     private var footer: String {
-        let weekly = "Madeira was signed with a free Apple ID, so it stops opening when this runs out. "
+        let weekly = "EmuPC was signed with a free Apple ID, so it stops opening when this runs out. "
         guard let account = signing.account else {
-            return weekly + "Refresh it with the app that installed it before then, or sign in with the Apple ID it was installed with and Madeira renews its own signing when it is open and LocalDevVPN is connected. Installed with SideInstaller, Madeira needs no sign-in."
+            return weekly + "Refresh it with the app that installed it before then, or sign in with the Apple ID it was installed with and EmuPC renews its own signing when it is open and LocalDevVPN is connected. Installed with SideInstaller, EmuPC needs no sign-in."
         }
         let source = account.appleID == nil ? "the sign-in SideInstaller gave it" : "your Apple ID's sign-in"
-        return weekly + "With \(source) (a token for Apple's developer service, not your password, kept in this device's Keychain), Madeira renews its own signing when it is open and LocalDevVPN is connected. It asks Apple and an anisette server, \(account.anisetteServers.first.flatMap { URL(string: $0)?.host } ?? "the one it was given") first."
+        return weekly + "With \(source) (a token for Apple's developer service, not your password, kept in this device's Keychain), EmuPC renews its own signing when it is open and LocalDevVPN is connected. It asks Apple and an anisette server, \(account.anisetteServers.first.flatMap { URL(string: $0)?.host } ?? "the one it was given") first."
     }
 
     var body: some View {
@@ -826,16 +832,16 @@ struct SigningRefreshOffer: ViewModifier {
     @ObservedObject private var signing = SigningRefresh.shared
 
     private var title: String {
-        if case .failed = signing.prompt { return "Couldn't Refresh Madeira" }
-        return "Madeira's signing \(signing.summary)"
+        if case .failed = signing.prompt { return "Couldn't Refresh EmuPC" }
+        return "EmuPC's signing \(signing.summary)"
     }
 
     private var message: String {
         if case .failed(let why) = signing.prompt { return why }
         if signing.signInRefused { return SigningRefresh.signInRefusedMessage }
         return LoopbackProbe.vpnInterfaceUp
-            ? "Madeira can renew it for another \(SigningProfile.week) days."
-            : "Connect LocalDevVPN and come back: Madeira then renews it for another \(SigningProfile.week) days."
+            ? "EmuPC can renew it for another \(SigningProfile.week) days."
+            : "Connect LocalDevVPN and come back: EmuPC then renews it for another \(SigningProfile.week) days."
     }
 
     /// What the alert offers besides closing it: a sign-in when Apple turned the last one
@@ -848,10 +854,11 @@ struct SigningRefreshOffer: ViewModifier {
     }
 
     func body(content: Content) -> some View {
+        // Switched off (SigningRefresh.enabled), nothing starts a refresh or sets a prompt.
         content
-            .onAppear { signing.libraryAppeared() }
+            .onAppear { if SigningRefresh.enabled { signing.libraryAppeared() } }
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
-                signing.libraryAppeared()
+                if SigningRefresh.enabled { signing.libraryAppeared() }
             }
             .alert(title, isPresented: Binding(get: { signing.prompt != nil }, set: { if !$0 { signing.prompt = nil } })) {
                 if needsSignIn {

@@ -248,3 +248,112 @@ const char *sh_install_scm_word(int32_t outcome)
     default: return "failed";
     }
 }
+
+/* ml2020: the game session's service manager and the hold (validation.h). */
+static wchar_t sh_wide_lower(wchar_t c)
+{
+    return (c >= L'A' && c <= L'Z') ? (wchar_t)(c + (L'a' - L'A')) : c;
+}
+
+/* Case-insensitive, ASCII letters only (image names and Windows paths). */
+static bool sh_wide_prefix(const wchar_t *text, const wchar_t *prefix)
+{
+    if (!text || !prefix) return false;
+    for (; *prefix; ++text, ++prefix)
+        if (sh_wide_lower(*text) != sh_wide_lower(*prefix)) return false;
+    return true;
+}
+
+static bool sh_wide_separator(wchar_t c)
+{
+    return c == L'\\' || c == L'/';
+}
+
+enum sh_game_scm_mode sh_game_scm_mode(const wchar_t *value)
+{
+    if (!value) return SH_GAME_SCM_AUTO;
+    if (value[0] == L'0' && !value[1]) return SH_GAME_SCM_OFF;
+    if (value[0] == L'1' && !value[1]) return SH_GAME_SCM_ON;
+    return SH_GAME_SCM_AUTO;
+}
+
+bool sh_path_in_folder(const wchar_t *path, const wchar_t *folder)
+{
+    if (!path || !folder || !*folder) return false;
+    size_t length = wcslen(folder);
+    while (length && sh_wide_separator(folder[length - 1])) --length;
+    if (!length) return false;
+    for (size_t i = 0; i < length; ++i) {
+        wchar_t a = sh_wide_lower(path[i]), b = sh_wide_lower(folder[i]);
+        if (sh_wide_separator(a) && sh_wide_separator(b)) continue;
+        if (a != b) return false;
+    }
+    return sh_wide_separator(path[length]);
+}
+
+bool sh_image_is_windows(const wchar_t *image, const wchar_t *windows_dir)
+{
+    if (!image) return false;
+    /* Registry forms: a quoted path, an NT prefix, or a path relative to the
+     * Windows folder. The arguments after the image do not matter here. */
+    while (*image == L'"' || *image == L' ') ++image;
+    if (sh_wide_prefix(image, L"\\??\\")) image += 4;
+    if (sh_wide_prefix(image, L"%SystemRoot%") || sh_wide_prefix(image, L"\\SystemRoot") ||
+        sh_wide_prefix(image, L"System32\\") || sh_wide_prefix(image, L"SysWOW64\\") ||
+        sh_wide_prefix(image, L"%windir%")) return true;
+    return sh_path_in_folder(image, windows_dir);
+}
+
+bool sh_service_is_foreign_autostart(uint32_t type, uint32_t start, const wchar_t *image,
+                                     const wchar_t *windows_dir)
+{
+    /* SERVICE_WIN32_*; SERVICE_AUTO_START or SERVICE_DEMAND_START: a program
+     * that registered a demand-start service starts it itself through the
+     * manager, so it needs one as much as an automatic one does. */
+    if (!(type & 0x30u) || (start != 2 && start != 3)) return false;
+    if (!image) return false;
+    while (*image == L'"' || *image == L' ') ++image;
+    if (!*image) return false;
+    return !sh_image_is_windows(image, windows_dir);
+}
+
+bool sh_game_scm_wanted(enum sh_game_scm_mode mode, unsigned foreign_autostart)
+{
+    if (mode == SH_GAME_SCM_OFF) return false;
+    if (mode == SH_GAME_SCM_ON) return true;
+    return foreign_autostart > 0;
+}
+
+enum sh_keep_alive_mode sh_keep_alive_mode(const wchar_t *value)
+{
+    if (value && value[0] == L'0' && !value[1]) return SH_KEEP_ALIVE_OFF;
+    return SH_KEEP_ALIVE_AUTO;
+}
+
+bool sh_keep_alive_listed(const wchar_t *list, const wchar_t *name)
+{
+    if (!list || !name || !*name) return false;
+    size_t length = wcslen(name);
+    const wchar_t *entry = list;
+    for (;;) {
+        while (*entry == L' ' || *entry == L';') ++entry;
+        if (!*entry) return false;
+        const wchar_t *end = entry;
+        while (*end && *end != L';') ++end;
+        const wchar_t *stop = end;
+        while (stop > entry && stop[-1] == L' ') --stop;
+        if ((size_t)(stop - entry) == length) {
+            size_t i = 0;
+            while (i < length && sh_wide_lower(entry[i]) == sh_wide_lower(name[i])) ++i;
+            if (i == length) return true;
+        }
+        if (!*end) return false;
+        entry = end + 1;
+    }
+}
+
+bool sh_keep_alive_holds(bool windows_image, bool visible_window, uint64_t age_ms, uint64_t young_ms)
+{
+    if (windows_image) return false;
+    return visible_window || age_ms < young_ms;
+}

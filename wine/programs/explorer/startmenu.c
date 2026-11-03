@@ -317,6 +317,12 @@ static void add_folder_contents(struct menu_item* parent)
 {
     IEnumIDList* enumidl;
 
+    /* iOS-Madeira: the user's start menu folder can be missing (pidl_to_shellfolder failed) while the
+     * public one has items; show_startmenu still fills the user's item first and EnumObjects then ran on a NULL folder.
+     * That froze the explorer desktop for good once an installer put a folder into the public start
+     * menu. A folder that could not be opened has nothing to list. */
+    if (!parent->folder) return;
+
     if (IShellFolder_EnumObjects(parent->folder, NULL,
         SHCONTF_FOLDERS|SHCONTF_NONFOLDERS, &enumidl) == S_OK)
     {

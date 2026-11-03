@@ -228,7 +228,7 @@ final class ExternalDrives: ObservableObject {
     func add(_ url: URL) throws {
         if let loadFailure { throw loadFailure }
         guard wine_process_is_running() == 0 else { throw LibraryError.message("Close the running game before adding a drive.") }
-        guard url.startAccessingSecurityScopedResource() else { throw LibraryError.message("Madeira could not open that folder.") }
+        guard url.startAccessingSecurityScopedResource() else { throw LibraryError.message("EmuPC could not open that folder.") }
         let bookmark: Data
         do { bookmark = try url.bookmarkData() } catch { url.stopAccessingSecurityScopedResource(); throw error }
         let used = Set(folders.map(\.letter))
@@ -453,7 +453,7 @@ struct ExternalDrivesSection: View {
             }
             if let error { Text(error).foregroundStyle(.red) }
         } header: { Text("External drives") } footer: {
-            Text("Pick a folder on a USB or SSD drive, or a whole drive that already has games on it. Windows sees it as a drive letter and as C:\\External\\<name>. Find games adds the games on it to the library; Steam libraries on it (steamapps or SteamLibrary) show up in the Steam section. Install Steam games on picks where new Steam downloads go by default (each install can still pick another place); on a drive they go into <name>\\SteamLibrary. Unplugging the drive while a game runs will close it. Restart Madeira after adding a folder for Windows to list the new drive.")
+            Text("Pick a folder on a USB or SSD drive, or a whole drive that already has games on it. Windows sees it as a drive letter and as C:\\External\\<name>. Find games adds the games on it to the library; Steam libraries on it (steamapps or SteamLibrary) show up in the Steam section. Install Steam games on picks where new Steam downloads go by default (each install can still pick another place); on a drive they go into <name>\\SteamLibrary. Unplugging the drive while a game runs will close it. Restart EmuPC after adding a folder for Windows to list the new drive.")
         }
         .fileImporter(isPresented: $picking, allowedContentTypes: [.folder]) { result in
             do {
@@ -467,7 +467,7 @@ struct ExternalDrivesSection: View {
                             titleVisibility: .visible, presenting: removing) { folder in
             Button("Remove", role: .destructive) { drives.remove(folder.id) }
         } message: { _ in
-            Text("Madeira forgets this drive and removes its games from the library. The files on the drive are kept.")
+            Text("EmuPC forgets this drive and removes its games from the library. The files on the drive are kept.")
         }
         .sheet(item: $scanning) { folder in
             if let root = drives.mounted[folder.id] { ExternalGamesSheet(folder: folder, root: root.resolvingSymlinksInPath()) }
@@ -653,7 +653,13 @@ struct ExternalDrivesSection: View {
         }
         progress(1)
         LogStore.shared.log("[move] copied and checked files=\(sources.reduce(0) { $0 + $1.count }) bytes=\(total)")
-        for item in items { try? fm.removeItem(at: item.from) }
+        // The copy is already checked, so the move stands; a source that cannot be
+        // removed (read-only or busy files) is logged rather than left unexplained,
+        // because it keeps using the old drive's space.
+        for item in items {
+            do { try fm.removeItem(at: item.from) }
+            catch { LogStore.shared.log("[move] copied, but the original \(item.from.lastPathComponent) could not be removed: \(error.localizedDescription)") }
+        }
     }
 }
 
@@ -782,7 +788,7 @@ extension URL {
         fraction = value
         if #available(iOS 26.0, *), let task = task as? BGContinuedProcessingTask {
             task.progress.completedUnitCount = Int64(min(1, value) * 1000)
-            task.updateTitle(title, subtitle: "\(Int(min(1, value) * 100))% · Madeira")
+            task.updateTitle(title, subtitle: "\(Int(min(1, value) * 100))% · EmuPC")
         }
     }
 

@@ -249,8 +249,8 @@ enum IniSettingHelp {
     /// Keys in lower case. Shared by Fallout 3, New Vegas, Oblivion and Skyrim unless a sentence says otherwise.
     static let known: [String: String] = [
         // [Display]
-        "isize w": "The game's width in pixels. Madeira's display size is set per game in Display; keep them the same.",
-        "isize h": "The game's height in pixels. Madeira's display size is set per game in Display; keep them the same.",
+        "isize w": "The game's width in pixels. EmuPC's display size is set per game in Display; keep them the same.",
+        "isize h": "The game's height in pixels. EmuPC's display size is set per game in Display; keep them the same.",
         "bfull screen": "Full screen (1) or a window (0).",
         "imultisample": "Anti-aliasing: smooths jagged edges. 0 is off and fastest; 2, 4 or 8 look smoother but cost a lot of speed.",
         "imaxanisotropy": "Texture sharpness at an angle (anisotropic filtering), from 0 to 16. Higher looks sharper and costs a little speed.",
@@ -266,7 +266,7 @@ enum IniSettingHelp {
         "flodfadeoutmultitems": "How far away small items stay visible. Lower is faster.",
         "flodfadeoutmultactors": "How far away characters stay visible. Lower is faster.",
         "fdefaultfov": "Field of view in degrees: how wide the camera sees.",
-        "sd3ddevice": "The graphics card the game last saw. Madeira keeps it in step with the Older NVIDIA card setting; changing it by hand makes the game reopen its launcher.",
+        "sd3ddevice": "The graphics card the game last saw. EmuPC keeps it in step with the Older NVIDIA card setting; changing it by hand makes the game reopen its launcher.",
         // [Grass]
         "fgrassstartfadedistance": "How far away grass is drawn. Lower is faster.",
         "imingrasssize": "Grass spacing: higher means less grass and more speed.",

@@ -41,6 +41,24 @@ seconds for both the `CS_DEBUGGED` flag and a live debugger connection. Enabling
 Madeira from StikDebug's own app list is not equivalent because that flow can
 detach before Madeira creates its JIT pool.
 
+## Apple Vision Pro (compatible iPad app)
+
+[Issue #336](https://github.com/willfaust/Madeira/issues/336) reports that on
+visionOS 27.0.1, in-app pairing offers no **Pair with Madeira** row, and
+Built-in StikJIT cannot find its helper even when the extension is bundled
+and signed. Reinstalling did not resolve the helper lookup failure in that
+report.
+
+The reporter enabled JIT with StikDebug 3.1.14 and LocalDevVPN, using a remote
+pairing file created for the headset from a Mac. Import the headset's pairing
+file into StikDebug, choose **StikDebug** under **Settings → JIT** in Madeira,
+connect LocalDevVPN, then tap **Enable JIT** in Madeira. The usual iPhone
+in-app pairing steps below do not describe the headset's Settings UI.
+
+This is a reported workaround for the compatible iPad app, not native visionOS
+support or a fix for Built-in StikJIT. Other visionOS versions and signing
+methods still need testing.
+
 ## Built-in StikJIT
 
 Built-in JIT requires iOS 26 or later and a normal sideloaded installation. It
@@ -262,6 +280,14 @@ reports a signing error before attempting either method when that entitlement
 is missing.
 
 ### Refreshing the signing
+
+Off by default: refresh the signing with the installer that signed Madeira
+(SideStore, AltStore, SideInstaller, a computer). A refresh asks Apple's
+developer portal for a profile on the same Apple ID other sideloaded apps are
+signed with, so Madeira leaves that to the installer. With it off, Settings has
+no Signing section, nothing runs over the library and Madeira takes in no
+sign-in an installer left. `env.MADEIRA_SIGNING_REFRESH = 1` in madeira.cfg
+turns all of what follows back on.
 
 A copy signed with a free Apple ID opens for seven days: that is how long its
 provisioning profile lasts. **Settings → Signing** shows when it runs out, for

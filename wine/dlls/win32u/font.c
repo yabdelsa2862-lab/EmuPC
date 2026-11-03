@@ -6562,7 +6562,60 @@ struct external_key
 {
     struct list entry;
     WCHAR       value[LF_FULLFACESIZE + 12];
+#ifdef WINE_IOS
+    BOOL        list_only;   /* drop it from External Fonts only, keep the Fonts values */
+#endif
 };
+
+#ifdef WINE_IOS
+extern int dprintf( int fd, const char *fmt, ... );
+
+/* iOS-Madeira: ml2330, the Fonts values of the Windows directory's own fonts.
+ *
+ * DirectWrite builds its system collection only from HKLM\...\Windows NT\CurrentVersion\Fonts.
+ * The prefix template's HKCU\Software\Wine\Fonts\External Fonts was written on a Mac and lists
+ * Tahoma, Tahoma Bold, Marlett, Symbol, Webdings and Wingdings as external fonts (macOS paths),
+ * under the same value names as the Fonts values of C:\windows\Fonts\tahoma.ttf and the rest.
+ * update_external_font_keys deletes the Fonts value of every external entry it finds no face
+ * for, so one session whose font list came up empty (seen on device: a session whose first
+ * GDI user was a child process, "select_font can't find a single appropriate font") deleted
+ * those Fonts values for good: the Windows directory's fonts are not external, so nothing ever
+ * wrote them back. From then on DirectWrite had no Tahoma in any session: Chromium's
+ * PlatformFontSkia fell back from Tahoma to "sans" to the default font until its stack ran out
+ * (a launcher's CEF browser crashed), and D2D drew no text (blank dialogs).
+ *
+ * So: a session that found no fonts leaves the keys alone; a stale external entry that names a
+ * font of the Windows directory is dropped from External Fonts only; and every font of the
+ * Windows directory whose Fonts value is missing gets it back (the file name, as the template
+ * has it). [fonts] logs the counts once per session. MADEIRA_FONT_KEYS_REPAIR=0 restores the
+ * upstream behaviour. */
+static BOOL ios_font_keys_repair_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+    {
+        const char *e = getenv( "MADEIRA_FONT_KEYS_REPAIR" );
+        enabled = !(e && e[0] == '0');
+    }
+    return enabled;
+}
+
+/* the file name of a face loaded from C:\windows\Fonts itself, or NULL */
+static const WCHAR *ios_windows_font_file( const struct gdi_font_face *face )
+{
+    WCHAR dir[MAX_PATH];
+    const WCHAR *name;
+    int len;
+
+    if (!face->file || (face->flags & ADDFONT_EXTERNAL_FONT)) return NULL;
+    get_fonts_win_dir_path( NULL, dir );
+    len = lstrlenW( dir );
+    if (wcsnicmp( face->file, dir, len )) return NULL;
+    name = face->file + len;
+    return (*name && !wcschr( name, '\\' )) ? name : NULL;
+}
+#endif
 
 static void update_external_font_keys(void)
 {
@@ -6577,8 +6630,30 @@ static void update_external_font_keys(void)
     KEY_VALUE_FULL_INFORMATION *info = (KEY_VALUE_FULL_INFORMATION *)buffer;
     WCHAR *file;
     HKEY hkey;
+#ifdef WINE_IOS
+    unsigned int families = 0, faces = 0, external = 0, dropped = 0, restored = 0;
+    BOOL repair = ios_font_keys_repair_enabled();
+#endif
 
     static const WCHAR external_fontsW[] = {'E','x','t','e','r','n','a','l',' ','F','o','n','t','s'};
+
+#ifdef WINE_IOS
+    WINE_RB_FOR_EACH_ENTRY( family, &family_name_tree, struct gdi_font_family, name_entry )
+    {
+        families++;
+        LIST_FOR_EACH_ENTRY( face, &family->faces, struct gdi_font_face, entry )
+        {
+            faces++;
+            if (face->flags & ADDFONT_EXTERNAL_FONT) external++;
+        }
+    }
+    if (repair && !faces)
+    {
+        dprintf( 2, "[fonts] ml2330 this session found no fonts: the Fonts registry keys are left as "
+                 "they are (MADEIRA_FONT_KEYS_REPAIR=0 lets upstream delete every external entry's value)\n" );
+        return;
+    }
+#endif
 
     winnt_key = reg_create_key( NULL, fonts_winnt_config_keyW, sizeof(fonts_winnt_config_keyW), 0, NULL );
     win9x_key = reg_create_key( NULL, fonts_win9x_config_keyW, sizeof(fonts_win9x_config_keyW), 0, NULL );
@@ -6605,18 +6680,40 @@ static void update_external_font_keys(void)
             if (!(face->flags & ADDFONT_EXTERNAL_FONT))
             {
                 free( path );
+#ifdef WINE_IOS
+                if (repair && ios_windows_font_file( face ) && (key = malloc( sizeof(*key) )))
+                {
+                    if (tmp && !*tmp) *tmp = ' ';
+                    lstrcpyW( key->value, value );
+                    key->list_only = TRUE;
+                    list_add_tail( &external_keys, &key->entry );
+                    dropped++;
+                }
+#endif
                 continue;
             }
         }
         if (tmp && !*tmp) *tmp = ' ';
         if (!(key = malloc( sizeof(*key) ))) break;
         lstrcpyW( key->value, value );
+#ifdef WINE_IOS
+        key->list_only = FALSE;
+#endif
         list_add_tail( &external_keys, &key->entry );
         free( path );
     }
 
     LIST_FOR_EACH_ENTRY_SAFE( key, next, &external_keys, struct external_key, entry )
     {
+#ifdef WINE_IOS
+        if (key->list_only)
+        {
+            reg_delete_value( hkey, key->value );
+            list_remove( &key->entry );
+            free( key );
+            continue;
+        }
+#endif
         reg_delete_value( win9x_key, key->value );
         reg_delete_value( winnt_key, key->value );
         reg_delete_value( hkey, key->value );
@@ -6649,6 +6746,31 @@ static void update_external_font_keys(void)
             set_reg_value( hkey, value, REG_SZ, file, len );
         }
     }
+#ifdef WINE_IOS
+    if (repair)
+    {
+        KEY_VALUE_PARTIAL_INFORMATION *partial = (KEY_VALUE_PARTIAL_INFORMATION *)buffer;
+        const WCHAR *name;
+
+        WINE_RB_FOR_EACH_ENTRY( family, &family_name_tree, struct gdi_font_family, name_entry )
+        {
+            LIST_FOR_EACH_ENTRY( face, &family->faces, struct gdi_font_face, entry )
+            {
+                if (!face->scalable || !(name = ios_windows_font_file( face ))) continue;
+                lstrcpyW( value, face->full_name );
+                lstrcatW( value, true_type_suffixW );
+                if (query_reg_value( winnt_key, value, partial, sizeof(buffer) )) continue;
+                len = (lstrlenW( name ) + 1) * sizeof(WCHAR);
+                set_reg_value( winnt_key, value, REG_SZ, name, len );
+                set_reg_value( win9x_key, value, REG_SZ, name, len );
+                restored++;
+            }
+        }
+    }
+    dprintf( 2, "[fonts] ml2330 %u families, %u faces (%u external); stale external entries naming a "
+             "Windows directory font dropped %u, Fonts values restored %u (MADEIRA_FONT_KEYS_REPAIR=%d)\n",
+             families, faces, external, dropped, restored, repair );
+#endif
     NtClose( win9x_key );
     NtClose( winnt_key );
     NtClose( hkey );
@@ -6740,18 +6862,50 @@ UINT font_init(void)
         {'S','o','f','t','w','a','r','e','\\','W','i','n','e','\\','F','o','n','t','s'};
     static const WCHAR cacheW[] = {'C','a','c','h','e'};
 
+#ifdef WINE_IOS
+    /* ml2330: where the shared font list was built, and how big it came out (see the Fonts
+     * registry repair above update_external_font_keys) */
+    if (!(hkcu_key = open_hkcu()))
+    {
+        dprintf( 2, "[fonts] ml2330 font_init pid %04x: no HKCU key, no fonts\n",
+                 (UINT)HandleToULong( NtCurrentTeb()->ClientId.UniqueProcess ) );
+        return 0;
+    }
+#else
     if (!(hkcu_key = open_hkcu())) return 0;
+#endif
     wine_fonts_key = reg_create_key( hkcu_key, wine_fonts_keyW, sizeof(wine_fonts_keyW), 0, NULL );
     if (wine_fonts_key) dpi = init_font_options();
     if (!dpi) return 96;
     update_codepage( dpi );
 
     if (!(font_funcs = init_freetype_lib()))
+    {
+#ifdef WINE_IOS
+        dprintf( 2, "[fonts] ml2330 font_init pid %04x: FreeType did not load, no fonts\n",
+                 (UINT)HandleToULong( NtCurrentTeb()->ClientId.UniqueProcess ) );
+#endif
         return dpi;
+    }
 
     load_system_bitmap_fonts();
     load_file_system_fonts();
     font_funcs->load_fonts();
+#ifdef WINE_IOS
+    {
+        struct gdi_font_family *family;
+        struct gdi_font_face *face;
+        unsigned int families = 0, faces = 0;
+
+        WINE_RB_FOR_EACH_ENTRY( family, &family_name_tree, struct gdi_font_family, name_entry )
+        {
+            families++;
+            LIST_FOR_EACH_ENTRY( face, &family->faces, struct gdi_font_face, entry ) faces++;
+        }
+        dprintf( 2, "[fonts] ml2330 font_init pid %04x: %u families, %u faces from the font directories\n",
+                 (UINT)HandleToULong( NtCurrentTeb()->ClientId.UniqueProcess ), families, faces );
+    }
+#endif
 
     attr.Attributes = OBJ_OPENIF;
     attr.ObjectName = &name;

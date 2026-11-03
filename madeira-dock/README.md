@@ -72,7 +72,17 @@ nothing else.
     `steam_api64.dll` talks to a live, signed-in client exactly as it would on a PC. The game,
     its Steamworks calls and its DRM (SteamStub wrapper, CEG, the game's own checks) run
     unmodified.
-13. **Shuts the client down** when the game has ended, with the public `SteamClient021` shutdown
+13. **Holds the session while the game's own programs are still starting or showing something.**
+    Valve's client stops reporting the game as running when the program it started exits, which
+    some games' launchers do while they restart themselves or before they start the game. Dock
+    follows the game's process tree while it runs (`src/hold.c`: the host's descendants, Windows'
+    own images and their children excepted, plus any image named in `MADEIRA_DOCK_KEEP_ALIVE`),
+    only looking: process snapshots, image paths, start times and visible windows. After the
+    report ends, the session is held while a member still shows a window or is younger than 60 s
+    (`launch-keep-alive`, then `launch-keep-alive-held=<seconds>` at the end); a launcher left in
+    the background after the game ends holds nothing. `MADEIRA_DOCK_KEEP_ALIVE=0` ends the
+    session 3 s after the report as before.
+14. **Shuts the client down** when the game has ended, with the public `SteamClient021` shutdown
     call, releases the user and pipe, and exits with a numeric result.
 
 ## What it does not do
@@ -176,6 +186,17 @@ client service through the service manager, so that nothing outlives the session
 (runtime setups from the game's Steam install script). It loads no Steam client: it only makes
 Wine's service manager reachable, prints one line and exits.
 
+A game session gets the same bounded start before the launch when the game needs it
+(`src/launch.c`, `src/scm.c`): some launchers install an automatic-start Windows service of their
+own, and without a service manager every start of it fails (RPC error 1722). With
+`MADEIRA_DOCK_GAME_SCM` unset, Dock counts, read-only, the Win32 services registered in the prefix
+with automatic or on-demand start whose image lies outside the Windows folder (`game-scm-services`;
+Wine's own services never count) and starts the manager only when there is at least one; `1`
+always starts it and `0`
+never does. The step waits at most 20 s (`game-scm=<2 started, 1 already running, 0 off, -1
+failed>` or `game-scm-timeout=1`) and never decides whether the game launches. The manager it
+starts stays for the session, as after `--start-services`.
+
 ## Limits
 
 - **Windows program, 64-bit session.** The 32-bit build supports only the bootstrap test.
@@ -228,9 +249,15 @@ Switches that turn a behaviour off (all default on): `MADEIRA_DOCK_CEG=0`,
 `MADEIRA_DOCK_CONFIG_WAIT=0`, `MADEIRA_DOCK_SESSION_WAIT=0`, `MADEIRA_DOCK_LIST_ENTITLEMENT=0`,
 `MADEIRA_DOCK_CLIENT_202601=0`, `MADEIRA_DOCK_HANDOFF_DIAGNOSTICS=0`,
 `MADEIRA_DOCK_INSTALL_SCM=0`, `MADEIRA_DOCK_OFFLINE_LOGON=0` (no offline start, and no
-`session-offline-*` question). The three waits only ask Valve's client again for a bounded time
-when it answers "content is still installing", "the game's configuration has not arrived yet" or
-"another session is playing"; they never turn a refusal into a launch.
+`session-offline-*` question), `MADEIRA_DOCK_KEEP_ALIVE=0` (no hold after the running report
+ends; a `;`-separated list of image names instead adds those programs to the game's tree). The
+three waits only ask Valve's client again for a bounded time when it answers "content is still
+installing", "the game's configuration has not arrived yet" or "another session is playing"; they
+never turn a refusal into a launch. `MADEIRA_DOCK_GAME_SCM` is three-way: `0` never starts a
+service manager for the game session, `1` always does, unset starts one only when the prefix
+registers a startable (automatic or on-demand) service outside Windows (see "Services"). Madeira
+also sets `1` for a game whose own Steam install script recorded a non-Microsoft program, since a
+launcher registers its service only on its first run, through the manager.
 
 The selected launch key is reused on every retry and reported as numeric
 `launch-option-index`. Invalid input reports `launch-option-invalid=1`. An error 22 whose

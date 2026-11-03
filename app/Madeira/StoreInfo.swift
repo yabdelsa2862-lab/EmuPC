@@ -97,7 +97,7 @@ final class StoreCompatibilityModel: ObservableObject {
         antiCheat = (byNamespace, slugs)
     }
 
-    func requestGOG(_ id: Int) {
+    func requestGOG(_ id: String) {
         let key = "gog:\(id)"
         guard reports[key] == nil, !asking.contains(key) else { return }
         asking.insert(key)
@@ -172,7 +172,7 @@ final class StoreCompatibilityModel: ObservableObject {
 
 /// The compatibility pill and its first reason, for a GOG or Epic game.
 struct StoreCompatibility: View {
-    var gogID: Int? = nil
+    var gogID: String? = nil
     var epic: EpicGame? = nil
     @ObservedObject private var model = StoreCompatibilityModel.shared
     @ObservedObject private var match = SteamTitleMatch.shared
@@ -282,7 +282,7 @@ final class StoreDetailsModel: ObservableObject {
         }
     }
 
-    func requestGOG(_ id: Int) {
+    func requestGOG(_ id: String) {
         load("gog:\(id)") {
             guard let p = await Self.json("https://api.gog.com/products/\(id)?expand=description,screenshots") as? [String: Any] else { return nil }
             let d = p["description"] as? [String: Any]
@@ -382,7 +382,7 @@ struct StoreAboutSection: View {
 // MARK: - Touch store page (GOG and Epic)
 
 struct StorePageSheet: View {
-    var gogID: Int? = nil
+    var gogID: String? = nil
     var epicApp: String? = nil
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var gog = GOGLibrary.shared
@@ -401,7 +401,7 @@ struct StorePageSheet: View {
         if let gogID { return gog.owned.first { $0.id == gogID }?.image.flatMap(URL.init(string:)) }
         return epic.owned.first { $0.appName == epicApp }?.banner
     }
-    private var size: StoreSize? { gogID.flatMap { gog.sizes[$0] } ?? epicApp.flatMap { epic.sizes[$0] } }
+    private var size: StoreSize? { gogID.flatMap { gog.storeSizes[$0] } ?? epicApp.flatMap { epic.sizes[$0] } }
     private var state: (label: String, fraction: Double?, failed: String?) {
         if let gogID, let d = gog.downloads[gogID] {
             switch d.state {
@@ -504,7 +504,7 @@ struct StorePageHost: ViewModifier {
     @ObservedObject private var router = StorePageRouter.shared
     func body(content: Content) -> some View {
         content.sheet(item: $router.page) { sel in
-            if sel.value.hasPrefix("gog:") { StorePageSheet(gogID: Int(sel.value.dropFirst(4))) }
+            if sel.value.hasPrefix("gog:") { StorePageSheet(gogID: String(sel.value.dropFirst(4))) }
             else { StorePageSheet(epicApp: String(sel.value.dropFirst(5))) }
         }
     }

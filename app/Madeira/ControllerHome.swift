@@ -227,7 +227,7 @@ struct ControllerHome: View {
     }
 
     /// The Store: Steam games, then GOG games, that are not installed.
-    private enum StoreItem: Hashable { case steam(Int), gog(Int), epic(String) }
+    private enum StoreItem: Hashable { case steam(Int), gog(String), epic(String) }
     private var storeItems: [StoreItem] {
         downloadable.map { .steam($0.id) } + (gog.signedIn ? gog.notInstalled.map { .gog($0.id) } : [])
             + (epic.signedIn ? epic.notInstalled.map { .epic($0.appName) } : [])
@@ -825,7 +825,7 @@ struct ControllerHome: View {
     }
 
     /// A GOG game's A action and its state line.
-    private func gogAction(_ id: Int) -> (label: String, state: String?) {
+    private func gogAction(_ id: String) -> (label: String, state: String?) {
         if let d = gog.downloads[id] {
             switch d.state {
             case .active: return ("Pause", d.total > 0 ? "Downloading \(Int(d.fraction * 100))%" : "Preparing…")
@@ -1097,7 +1097,7 @@ struct ControllerHome: View {
             case .gog(let id):
                 let g = gog.owned.first { $0.id == id }
                 let image = g?.image.flatMap(URL.init(string:))
-                return (g?.title ?? "Game", "GOG", image, image, "gog:\(id)", gog.sizes[id])
+                return (g?.title ?? "Game", "GOG", image, image, "gog:\(id)", gog.storeSizes[id])
             case .epic(let app):
                 let g = epic.owned.first { $0.appName == app }
                 return (g?.title ?? "Game", "Epic Games", g?.poster, g?.banner, "epic:\(app)", epic.sizes[app])

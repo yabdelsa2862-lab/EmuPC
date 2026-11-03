@@ -191,10 +191,14 @@ MTLD3D9StateBlock::Capture() {
     if (m_changes.render_states[i])
       m_snapRenderStates[i] = m_device->m_renderStates[i];
   }
-  if (m_changes.sampler_states)
-    std::memcpy(m_snapSamplerStates, m_device->m_samplerStates, sizeof(m_snapSamplerStates));
-  if (m_changes.texture_stage_states)
-    std::memcpy(m_snapTextureStageStates, m_device->m_textureStageStates, sizeof(m_snapTextureStageStates));
+  for (uint32_t s = 0; s < D3D9_MAX_TEXTURE_UNITS; ++s)
+    for (uint32_t e = 0; e <= D3DSAMP_DMAPOFFSET; ++e)
+      if (m_changes.sampler_states[s] & (1u << e))
+        m_snapSamplerStates[s][e] = m_device->m_samplerStates[s][e];
+  for (uint32_t s = 0; s < 8; ++s)
+    for (uint32_t e = 1; e <= D3DTSS_CONSTANT; ++e)
+      if (m_changes.texture_stage_states[s] & (1ull << e))
+        m_snapTextureStageStates[s][e] = m_device->m_textureStageStates[s][e];
   if (m_changes.transforms)
     std::memcpy(m_snapTransforms, m_device->m_transforms, sizeof(m_snapTransforms));
   if (m_changes.clip_planes)
@@ -312,24 +316,18 @@ MTLD3D9StateBlock::Apply() {
     m_device->m_renderStates[i] = m_snapRenderStates[i];
     pod_dirty |= dxmt::D9ES_DIRTY_RENDER_STATES;
   }
-  if (m_changes.sampler_states) {
-    if (m_changes.samp_element_mask == 0) {
-      std::memcpy(m_device->m_samplerStates, m_snapSamplerStates, sizeof(m_snapSamplerStates));
-    } else {
-      // Predefined subset: restore only the wined3d-listed per-stage elements.
-      for (uint32_t e = 0; e <= D3DSAMP_DMAPOFFSET; ++e) {
-        if (!(m_changes.samp_element_mask & (1u << e)))
-          continue;
-        for (uint32_t s = 0; s < D3D9_MAX_TEXTURE_UNITS; ++s)
-          m_device->m_samplerStates[s][e] = m_snapSamplerStates[s][e];
-      }
-    }
+  for (uint32_t s = 0; s < D3D9_MAX_TEXTURE_UNITS; ++s) {
+    if (!m_changes.sampler_states[s])
+      continue;
+    for (uint32_t e = 0; e <= D3DSAMP_DMAPOFFSET; ++e)
+      if (m_changes.sampler_states[s] & (1u << e))
+        m_device->m_samplerStates[s][e] = m_snapSamplerStates[s][e];
     // The raw restore bypasses SetSamplerState, which arms / disarms the AMD
     // FETCH4 latch on the D3DSAMP_MIPMAPLODBIAS 'GET4' / 'GET1' magic. Re-derive
     // it from the restored bias so a captured fetch4 arming survives Apply. This
     // is idempotent for slots the restore did not touch: a live latch bit always
     // agrees with its live bias under this rule. Slots 16+ never fetch4.
-    for (uint32_t s = 0; s < 16; ++s) {
+    if (s < 16 && (m_changes.sampler_states[s] & (1u << D3DSAMP_MIPMAPLODBIAS))) {
       DWORD bias = m_device->m_samplerStates[s][D3DSAMP_MIPMAPLODBIAS];
       if (bias == MAKEFOURCC('G', 'E', 'T', '4'))
         m_device->m_fetch4Latch |= (uint16_t)(1u << s);
@@ -338,19 +336,12 @@ MTLD3D9StateBlock::Apply() {
     }
     pod_dirty |= dxmt::D9ES_DIRTY_SAMPLER_STATES;
   }
-  if (m_changes.texture_stage_states) {
-    if (m_changes.tss_element_mask == 0) {
-      std::memcpy(m_device->m_textureStageStates, m_snapTextureStageStates, sizeof(m_snapTextureStageStates));
-    } else {
-      // Predefined subset: restore only the wined3d-listed per-stage elements.
-      // The subset elements are all below 32, so the shift never overflows.
-      for (uint32_t e = 0; e < 32; ++e) {
-        if (!(m_changes.tss_element_mask & (1u << e)))
-          continue;
-        for (uint32_t s = 0; s < 8; ++s)
-          m_device->m_textureStageStates[s][e] = m_snapTextureStageStates[s][e];
-      }
-    }
+  for (uint32_t s = 0; s < 8; ++s) {
+    if (!m_changes.texture_stage_states[s])
+      continue;
+    for (uint32_t e = 1; e <= D3DTSS_CONSTANT; ++e)
+      if (m_changes.texture_stage_states[s] & (1ull << e))
+        m_device->m_textureStageStates[s][e] = m_snapTextureStageStates[s][e];
     // Resolve reads texture-stage state per draw off pod_snapshot, so an
     // Apply that restores it must dirty the axis like the setters do.
     pod_dirty |= dxmt::D9ES_DIRTY_TEXTURE_STAGE_STATES;

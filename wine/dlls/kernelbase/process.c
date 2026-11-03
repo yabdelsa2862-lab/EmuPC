@@ -897,10 +897,36 @@ DWORD WINAPI DECLSPEC_HOTPATCH GetProcessId( HANDLE process )
 /**********************************************************************
  *           GetProcessMitigationPolicy   (kernelbase.@)
  */
+/* iOS-Madeira: env.MADEIRA_ZERO_MITIGATION_POLICY=1 (only the exact value 1; unset, 0 or anything else changes nothing).
+ *
+ * The stub below answers TRUE and writes nothing, so a caller that trusts the answer reads whatever its stack held. ChakraCore's
+ * GlobalSecurityPolicy (a static constructor, run when ChakraCore.dll loads) does: it asks for ProcessControlFlowGuardPolicy into an
+ * uninitialised PROCESS_MITIGATION_CONTROL_FLOW_GUARD_POLICY, and when EnableControlFlowGuard (bit 0) happens to be set it looks up
+ * SetProcessValidCallTargets in api-ms-win-core-memory-l1-1-3.dll, which this Wine does not export, and calls
+ * RaiseFailFastException( NULL, NULL, FAIL_FAST_GENERATE_EXCEPTION_ADDRESS ): exit c0000602 within a second of the start.
+ * With the switch on the policy
+ * structure is zeroed: "no mitigation is enabled", which is what this Wine implements. Callers that never pass a buffer
+ * (NULL, or longer than any policy structure) are not touched. */
+static BOOL zero_mitigation_policy_enabled(void)
+{
+    static LONG enabled = -1;
+
+    if (enabled < 0)
+    {
+        WCHAR value[4];
+        DWORD err = GetLastError();
+        DWORD len = GetEnvironmentVariableW( L"MADEIRA_ZERO_MITIGATION_POLICY", value, ARRAY_SIZE(value) );
+        enabled = (len == 1 && value[0] == '1');
+        SetLastError( err );
+    }
+    return enabled;
+}
+
 BOOL WINAPI /* DECLSPEC_HOTPATCH */ GetProcessMitigationPolicy( HANDLE process, PROCESS_MITIGATION_POLICY policy,
                                                           void *buffer, SIZE_T length )
 {
     FIXME( "(%p, %u, %p, %Iu): stub\n", process, policy, buffer, length );
+    if (buffer && length && length <= 16 && zero_mitigation_policy_enabled()) memset( buffer, 0, length );
     return TRUE;
 }
 

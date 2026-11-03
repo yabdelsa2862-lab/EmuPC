@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <wchar.h>
 /* Extra LaunchApp arguments are one bounded UTF-8 string, never a shell command.
  * The Swift library profile enforces the same byte/quote/token/control bounds. */
 #define SH_LAUNCH_ARGUMENTS_CAPACITY 4096u
@@ -88,4 +89,49 @@ enum sh_install_scm sh_install_scm_outcome(bool enabled, uint32_t first_error,
                                            bool spawned, bool reachable);
 /* "started", "already", "off"; "failed" for any other value. */
 const char *sh_install_scm_word(int32_t outcome);
+
+/* ml2020: a game session's own service manager and the hold while a game's
+ * launcher restarts (launch.c, hold.c). Pure decisions; the Windows calls
+ * stay in the host files so the native sanitizer tests cover these.
+ *
+ * MADEIRA_DOCK_GAME_SCM: "0" never starts a service manager for the game
+ * session, "1" always does; unset (or any other value) starts one only when
+ * a program installed an automatic-start Windows service of its own in this
+ * prefix, which only a running service manager can start.
+ */
+enum sh_game_scm_mode { SH_GAME_SCM_OFF = 0, SH_GAME_SCM_ON = 1, SH_GAME_SCM_AUTO = 2 };
+enum sh_game_scm_mode sh_game_scm_mode(const wchar_t *value);
+/* A service entry under System\CurrentControlSet\Services that Windows
+ * a program may start and that is not part of Windows: a Win32 service
+ * (type 0x10 or 0x20) with start type 2 (automatic) or 3 (on demand, which
+ * the program that registered it starts itself) whose image is neither
+ * under the Windows folder nor given relative to it (%SystemRoot%,
+ * \SystemRoot, System32\, SysWOW64\). Wine's own services all fail this
+ * test; a launcher's own service passes it.
+ */
+bool sh_service_is_foreign_autostart(uint32_t type, uint32_t start, const wchar_t *image,
+                                     const wchar_t *windows_dir);
+bool sh_game_scm_wanted(enum sh_game_scm_mode mode, unsigned foreign_autostart);
+
+/* MADEIRA_DOCK_KEEP_ALIVE: "0" ends the session as before, 3 s after Valve's
+ * client stops reporting the game as running. Unset, empty or a `;`-separated
+ * list of image file names: the end is postponed while a process of the
+ * game's own tree (descended from this host, Windows images and their
+ * children excepted) or with a listed image name still shows a window or is
+ * younger than SH_KEEP_ALIVE_YOUNG_MS. A launcher that restarts itself is
+ * young; the game it then starts shows a window; a launcher left behind in
+ * the background after the game ends is neither, so the session ends.
+ */
+#define SH_KEEP_ALIVE_YOUNG_MS 60000ULL
+enum sh_keep_alive_mode { SH_KEEP_ALIVE_OFF = 0, SH_KEEP_ALIVE_AUTO = 1 };
+enum sh_keep_alive_mode sh_keep_alive_mode(const wchar_t *value);
+/* `name` (an image file name) is one of the `;`-separated entries, no case. */
+bool sh_keep_alive_listed(const wchar_t *list, const wchar_t *name);
+/* `path` lies inside `folder` (no case; a separator must follow the folder). */
+bool sh_path_in_folder(const wchar_t *path, const wchar_t *folder);
+/* `image` is Windows' own: inside windows_dir, or given relative to it. */
+bool sh_image_is_windows(const wchar_t *image, const wchar_t *windows_dir);
+/* One tracked process holds the session while it is not a Windows image and
+ * either shows a window or is younger than young_ms. */
+bool sh_keep_alive_holds(bool windows_image, bool visible_window, uint64_t age_ms, uint64_t young_ms);
 #endif

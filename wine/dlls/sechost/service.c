@@ -267,22 +267,75 @@ SC_HANDLE WINAPI DECLSPEC_HOTPATCH OpenSCManagerA( const char *machine, const ch
 /******************************************************************************
  *     OpenSCManagerW   (sechost.@)
  */
+/* iOS-Madeira: env.MADEIRA_SCM_ON_DEMAND (default on; 0 = as before).
+ *
+ * Windows always runs its service manager; a Madeira session starts services.exe only when the
+ * launch asks for it. A program started without it that installs a service (a game from another
+ * store whose first start runs a launcher's installer, which registers the launcher's service)
+ * got RPC_S_SERVER_UNAVAILABLE from OpenSCManager and stopped. When the svcctl pipe does not
+ * exist, start services.exe once per process, wait up to 20 s for its pipe and ask again. */
+static BOOL start_scm_on_demand(void)
+{
+    static const WCHAR pipe[] = L"\\\\.\\pipe\\svcctl";
+    static LONG tried;
+    WCHAR dir[MAX_PATH], path[MAX_PATH + 16], self[MAX_PATH], env[4];
+    STARTUPINFOW si = { sizeof(si) };
+    PROCESS_INFORMATION pi;
+    const WCHAR *name;
+    DWORD len, i;
+
+    if (GetEnvironmentVariableW( L"MADEIRA_SCM_ON_DEMAND", env, ARRAY_SIZE(env) ) && env[0] == '0') return FALSE;
+    if (InterlockedExchange( &tried, 1 )) return FALSE;
+    if (WaitNamedPipeW( pipe, 1 ) || GetLastError() != ERROR_FILE_NOT_FOUND) return FALSE;   /* it runs, only busy */
+    len = GetModuleFileNameW( NULL, self, ARRAY_SIZE(self) );
+    name = len && len < ARRAY_SIZE(self) && wcsrchr( self, '\\' ) ? wcsrchr( self, '\\' ) + 1 : self;
+    if (!wcsicmp( name, L"services.exe" )) return FALSE;
+    len = GetSystemDirectoryW( dir, ARRAY_SIZE(dir) );
+    if (!len || len >= ARRAY_SIZE(dir)) return FALSE;
+    lstrcpyW( path, dir );
+    lstrcatW( path, L"\\services.exe" );
+    if (!CreateProcessW( path, NULL, NULL, NULL, FALSE, DETACHED_PROCESS, NULL, dir, &si, &pi ))
+    {
+        ERR( "[scm-demand] no service manager running; starting %s failed, error %lu\n", debugstr_w(path), GetLastError() );
+        return FALSE;
+    }
+    CloseHandle( pi.hThread );
+    CloseHandle( pi.hProcess );
+    for (i = 0; i < 200; i++)
+    {
+        if (WaitNamedPipeW( pipe, 1 ) || GetLastError() != ERROR_FILE_NOT_FOUND)
+        {
+            ERR( "[scm-demand] no service manager was running: started services.exe (pid %04lx), its pipe after %lu ms\n",
+                 pi.dwProcessId, i * 100 );
+            return TRUE;
+        }
+        Sleep( 100 );
+    }
+    ERR( "[scm-demand] started services.exe (pid %04lx), but its pipe did not appear in 20 s\n", pi.dwProcessId );
+    return FALSE;
+}
+
 SC_HANDLE WINAPI DECLSPEC_HOTPATCH OpenSCManagerW( const WCHAR *machine, const WCHAR *database, DWORD access )
 {
     SC_RPC_HANDLE handle = NULL;
     DWORD err;
+    int attempt;
 
     TRACE( "%s %s %#lx\n", debugstr_w(machine), debugstr_w(database), access );
 
-    __TRY
+    for (attempt = 0; attempt < 2; attempt++)
     {
-        err = svcctl_OpenSCManagerW( machine, database, access, &handle );
+        __TRY
+        {
+            err = svcctl_OpenSCManagerW( machine, database, access, &handle );
+        }
+        __EXCEPT(rpc_filter)
+        {
+            err = map_exception_code( GetExceptionCode() );
+        }
+        __ENDTRY
+        if (err != RPC_S_SERVER_UNAVAILABLE || attempt || (machine && *machine) || !start_scm_on_demand()) break;
     }
-    __EXCEPT(rpc_filter)
-    {
-        err = map_exception_code( GetExceptionCode() );
-    }
-    __ENDTRY
 
     SetLastError( err );
     return handle;

@@ -1775,6 +1775,8 @@ static inline int is_in_apc_wait( struct thread *thread )
  * APC_ASYNC_IO; other system APCs are unchanged. [apc-requeue] logs the first 16 handovers
  * (then every 1024th) with the APC's status and thread ids only.
  * MADEIRA_APC_REQUEUE=0 restores the drop. */
+static int ios_apc_busy_queue_enabled( void );
+
 static int ios_apc_requeue_enabled( void )
 {
     static int enabled = -1;
@@ -1787,15 +1789,57 @@ static int ios_apc_requeue_enabled( void )
         enabled = !(e && e[0] == '0');
         fprintf( stderr, "[apc-requeue] %s (MADEIRA_APC_REQUEUE=0 restores dropping async I/O APCs "
                  "for busy threads)\n", enabled ? "on" : "off" );
+        if (enabled) ios_apc_busy_queue_enabled();   /* iOS-Madeira: says so once if the switch is set */
     }
     return enabled;
 }
 
-/* A waiting thread, the synchronous request's future waiter, or NULL to drop. */
+/* iOS-Madeira: an async I/O APC for the only thread of a process that is running.
+ *
+ * The EA app installer's MSI package runs its managed custom actions out of process: msiexec's
+ * custom action server (SfxCA.dll from WiX) starts rundll32.exe, which asks the server over a named
+ * pipe for every MSI call (RemoteMsiSession, one request, one response, each an overlapped
+ * ReadFile/WriteFile followed by a wait on the OVERLAPPED event). rundll32 has a single thread until
+ * the CLR starts. Its first response (the data of a pending pipe read: status STATUS_ALERTED, "the
+ * client fetches the output data") arrived while that thread was still running, not yet waiting in
+ * the server, so no waiting thread existed and the APC was dropped above: the read finished with
+ * STATUS_ALERTED and no data (log: "[apc-requeue] #4 ... status=00000101 for busy thread 01c0 ->
+ * dropped, no waiting thread"), SfxCA's ReadPipe took that for a broken pipe and closed its end,
+ * the server's read ended with STATUS_PIPE_BROKEN, and every later MSI call of the custom action
+ * (DTF's RemotableNativeMethods reads a response through a NULL pointer, Mono raises
+ * NullReferenceException) failed: JunoInitializeSession returned 1603.
+ *
+ * With MADEIRA_APC_BUSY_QUEUE=1 the APC stays on the busy thread when nobody else can take it. The
+ * thread runs it at its next wait in the server: check_wait returns STATUS_KERNEL_APC for any
+ * interruptible wait, and a fastsync wait parks in process for at most MADEIRA_FASTSYNC_CAP_US (2 ms)
+ * before it falls through to the server. It is not done when the process has the in-process engine
+ * (madsync: thread->alert_sync exists), where a wait can sit outside the server without a bound
+ * and a system APC does not interrupt it (the services.exe case described above). Off (unset or
+ * anything but 1) nothing changes: the APC is dropped as before. It is set per program (a launcher
+ * entry, or the app's auto-tune after the failure); a working program never sees the new path.
+ * [apc-requeue] says "kept on the busy thread" for these. */
+static int ios_apc_busy_queue_enabled( void )
+{
+    static int enabled = -1;
+
+    if (enabled < 0)
+    {
+        const char *e = getenv( "MADEIRA_APC_BUSY_QUEUE" );
+        enabled = e && e[0] == '1';
+        if (enabled)
+            fprintf( stderr, "[apc-requeue] MADEIRA_APC_BUSY_QUEUE=1: an async I/O APC nobody else can take "
+                     "stays on its busy thread (no in-process engine)\n" );
+    }
+    return enabled;
+}
+
+/* A waiting thread, the synchronous request's future waiter, the busy thread itself
+ * (MADEIRA_APC_BUSY_QUEUE=1), or NULL to drop. */
 static struct thread *ios_apc_requeue_target( struct thread *thread, const struct thread_apc *apc )
 {
     static unsigned int count;
     struct thread *candidate, *target = NULL;
+    const char *kept = NULL;
 
     if (apc->call.type != APC_ASYNC_IO || !ios_apc_requeue_enabled()) return NULL;
     LIST_FOR_EACH_ENTRY( candidate, &thread->process->thread_list, struct thread, proc_entry )
@@ -1807,12 +1851,21 @@ static struct thread *ios_apc_requeue_target( struct thread *thread, const struc
             break;
         }
     }
-    if (!target && async_can_defer_to_issuer( apc->owner, thread )) target = thread;
+    if (!target && async_can_defer_to_issuer( apc->owner, thread ))
+    {
+        target = thread;
+        kept = "issuing thread";
+    }
+    if (!target && !thread->alert_sync && ios_apc_busy_queue_enabled())   /* iOS-Madeira */
+    {
+        target = thread;
+        kept = "kept on the busy thread";
+    }
     count++;
     if (count <= 16 || !(count & 1023))
         fprintf( stderr, "[apc-requeue] #%u async I/O APC status=%08x for busy thread %04x -> %s %04x\n",
                  count, apc->call.async_io.status, thread->id,
-                 target == thread ? "issuing thread" : target ? "waiting thread" : "dropped, no waiting thread",
+                 kept ? kept : target ? "waiting thread" : "dropped, no waiting thread",
                  target ? target->id : 0 );
     return target;
 }

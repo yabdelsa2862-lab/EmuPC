@@ -63,7 +63,7 @@ enum JITPairingFileStore {
         ] as CFDictionary, &result)
         guard status == errSecSuccess, let data = result as? Data, !data.isEmpty else {
             throw NSError(domain: "MadeiraJIT", code: 11,
-                          userInfo: [NSLocalizedDescriptionKey: "No pairing file is stored for this device."])
+                          userInfo: [NSLocalizedDescriptionKey: L("No pairing file is stored for this device.")])
         }
         return data
     }
@@ -84,7 +84,7 @@ enum JITPairingFileStore {
               let identifier = dictionary["identifier"] as? String, !identifier.isEmpty else {
             throw NSError(domain: "MadeiraJIT", code: 10,
                           userInfo: [NSLocalizedDescriptionKey:
-                            "That is not a StikDebug remote pairing file. Create one with iloader and try again."])
+                            L("That is not a StikDebug remote pairing file. Create one with iloader and try again.")])
         }
         let item: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
@@ -139,8 +139,8 @@ final class JITCoordinator: ObservableObject {
         var errorDescription: String? {
             switch self {
             case .setupRequired(let message): return message
-            case .pairingMissing: return "Pair this device or import its pairing file first."
-            case .scriptMissing: return "EmuPC's JIT script is missing from this installation. Reinstall EmuPC."
+            case .pairingMissing: return L("Pair this device or import its pairing file first.")
+            case .scriptMissing: return L("EmuPC's JIT script is missing from this installation. Reinstall EmuPC.")
             }
         }
     }
@@ -169,7 +169,7 @@ final class JITCoordinator: ObservableObject {
         var message: String {
             switch self {
             case .vpn:
-                return "EmuPC couldn't reach this device. Connect LocalDevVPN, then try again."
+                return L("EmuPC couldn't reach this device. Connect LocalDevVPN, then try again.")
             case .pairing:
                 return "This device closed the connection, which usually means it no longer accepts EmuPC's pairing. Pair again, and check that LocalDevVPN is connected."
             }
@@ -204,8 +204,8 @@ final class JITCoordinator: ObservableObject {
 
     var automaticDescription: String {
         StikJITHelper.isAvailable
-            ? "StikDebug is installed, so EmuPC will open it directly."
-            : "StikDebug was not detected, so EmuPC will use its built-in helper."
+            ? L("StikDebug is installed, so EmuPC will open it directly.")
+            : L("StikDebug was not detected, so EmuPC will use its built-in helper.")
     }
 
     func refreshPairingStatus() {
@@ -268,7 +268,7 @@ final class JITCoordinator: ObservableObject {
                 }
                 // LocalDevVPN's Connect returns before its tunnel routes (about 5 s
                 // on the 18 Pro): go on the moment lockdownd answers.
-                self?.status = "Waiting for LocalDevVPN…"
+                self?.status = L("Waiting for LocalDevVPN…")
                 let waitStart = CFAbsoluteTimeGetCurrent()
                 LoopbackProbe.waitUntilReachable(within: 15) { [weak self] probe in
                     LogStore.shared.log(String(format: "[jit-loopback] after the shortcut: %@ after %.1f s (vpn-interface=%d, %@)",
@@ -299,7 +299,7 @@ final class JITCoordinator: ObservableObject {
                 self?.busy = false
                 if probe.reachable {
                     self?.connectionProblem = nil
-                    self?.status = "LocalDevVPN reaches this device."
+                    self?.status = L("LocalDevVPN reaches this device.")
                 } else {
                     self?.status = nil
                     self?.error = ConnectionProblem.vpn.message
@@ -314,25 +314,25 @@ final class JITCoordinator: ObservableObject {
             assertionFailure("Automatic must resolve to a concrete JIT method")
         case .stikDebug:
             guard StikJITHelper.isAvailable else {
-                let message = "StikDebug is not installed. Install it or choose Built-in StikJIT."
+                let message = L("StikDebug is not installed. Install it or choose Built-in StikJIT.")
                 error = message
                 showSetup = true
                 completion(.failure(CoordinatorError.setupRequired(message)))
                 return
             }
             busy = true
-            status = "Waiting for StikDebug…"
+            status = L("Waiting for StikDebug…")
             StikJITHelper.enableJIT { [weak self] result in
                 Task { @MainActor in
                     self?.busy = false
-                    self?.status = (try? result.get()).map { _ in "StikDebug is attached." }
+                    self?.status = (try? result.get()).map { _ in L("StikDebug is attached.") }
                     if case .failure(let failure) = result { self?.error = failure.localizedDescription }
                     completion(result)
                 }
             }
         case .builtIn:
             guard JITPairingFileStore.isImported else {
-                let message = "Pair this device or import its pairing file to finish Built-in StikJIT setup."
+                let message = L("Pair this device or import its pairing file to finish Built-in StikJIT setup.")
                 error = message
                 showSetup = true
                 completion(.failure(CoordinatorError.setupRequired(message)))
@@ -347,7 +347,7 @@ final class JITCoordinator: ObservableObject {
             try JITPairingFileStore.importFile(from: source)
             OnDevicePairing.shared.cancel()
             refreshPairingStatus()
-            status = "Pairing file imported."
+            status = L("Pairing file imported.")
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -359,7 +359,7 @@ final class JITCoordinator: ObservableObject {
         try JITPairingFileStore.store(data, source: .onDevice)
         refreshPairingStatus()
         method = .builtIn
-        status = "Paired in EmuPC."
+        status = L("Paired in EmuPC.")
         error = nil
     }
 
@@ -379,7 +379,7 @@ final class JITCoordinator: ObservableObject {
         busy = true
         error = nil
         connectionProblem = nil
-        status = "Checking LocalDevVPN and the Developer Disk Image…"
+        status = L("Checking LocalDevVPN and the Developer Disk Image…")
         MadeiraBuiltInJIT.send(.prepare(pairingData: pairing)) { [weak self] result in
             guard let self else { return }
             busy = false
@@ -399,7 +399,7 @@ final class JITCoordinator: ObservableObject {
             let failure = NSError(
                 domain: "MadeiraJIT", code: 12,
                 userInfo: [NSLocalizedDescriptionKey:
-                    MadeiraBuiltInJIT.unavailableReason ?? "Built-in JIT is unavailable."])
+                    MadeiraBuiltInJIT.unavailableReason ?? L("Built-in JIT is unavailable.")])
             error = failure.localizedDescription
             completion(.failure(failure))
             return
@@ -417,21 +417,21 @@ final class JITCoordinator: ObservableObject {
 
         busy = true
         error = nil
-        status = "Starting EmuPC's JIT helper…"
+        status = L("Starting EmuPC's JIT helper…")
         var readinessTimer: Timer?
         var readinessFinished = false
         MadeiraBuiltInJIT.send(
             .enable(targetPID: getpid(), pairingData: pairing,
                     scriptBase64: script.base64EncodedString()),
             started: { [weak self] in
-                self?.status = "Waiting for EmuPC's JIT helper to attach…"
+                self?.status = L("Waiting for EmuPC's JIT helper to attach…")
                 readinessTimer = StikJITHelper.waitForDebugger { [weak self] result in
                     guard !readinessFinished else { return }
                     readinessFinished = true
                     self?.busy = false
                     switch result {
                     case .success:
-                        self?.status = "Built-in JIT is attached."
+                        self?.status = L("Built-in JIT is attached.")
                         self?.error = nil
                     case .failure(let failure):
                         self?.error = failure.localizedDescription
@@ -477,7 +477,7 @@ final class JITCoordinator: ObservableObject {
     func resetDDI() {
         busy = true
         error = nil
-        status = "Resetting the Developer Disk Image cache…"
+        status = L("Resetting the Developer Disk Image cache…")
         MadeiraBuiltInJIT.send(.resetDDI) { [weak self] result in
             self?.busy = false
             switch result {
@@ -567,7 +567,7 @@ enum LocalDevVPN {
     static let connect = URL(string: "localdevvpn://enable?scheme=madeira")!
 
     static var isInstalled: Bool { UIApplication.shared.canOpenURL(URL(string: "localdevvpn://")!) }
-    static var actionTitle: String { isInstalled ? "Connect LocalDevVPN" : "Get LocalDevVPN" }
+    static var actionTitle: String { isInstalled ? L("Connect LocalDevVPN") : L("Get LocalDevVPN") }
 
     static func open() {
         let installed = isInstalled
@@ -585,7 +585,7 @@ enum LocalDevVPN {
                                      then dismiss: @escaping () -> Void = {}) -> some View {
     Group {
         if problem == .pairing {
-            Button(OnDevicePairing.isSupported ? "Pair Again" : "Open JIT Setup") {
+            Button(OnDevicePairing.isSupported ? L("Pair Again") : L("Open JIT Setup")) {
                 dismiss()
                 if OnDevicePairing.isSupported { OnDevicePairing.shared.start() }
                 JITCoordinator.shared.showSetup = true
@@ -658,9 +658,9 @@ struct JITSetupView: View {
 
     private var pairingLabel: String {
         switch coordinator.pairingSource {
-        case .onDevice: return "Paired in EmuPC"
-        case .imported: return "File imported"
-        case nil: return "Not set up"
+        case .onDevice: return L("Paired in EmuPC")
+        case .imported: return L("File imported")
+        case nil: return L("Not set up")
         }
     }
 
@@ -678,7 +678,7 @@ struct JITSetupView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     LabeledContent("StikDebug",
-                                   value: StikJITHelper.isAvailable ? "Installed" : "Not detected")
+                                   value: StikJITHelper.isAvailable ? L("Installed") : L("Not detected"))
                     LabeledContent("Built-in helper",
                                    value: MadeiraBuiltInJIT.isAvailable ? "Available" : "Unavailable")
                 } header: {
@@ -691,7 +691,7 @@ struct JITSetupView: View {
                     Section {
                         LabeledContent("Pairing", value: pairingLabel)
                         if OnDevicePairing.isSupported {
-                            Button(coordinator.pairingSource == .onDevice ? "Pair in EmuPC again" : "Pair in EmuPC") {
+                            Button(coordinator.pairingSource == .onDevice ? L("Pair in EmuPC again") : L("Pair in EmuPC")) {
                                 pairing.start()
                             }
                             .disabled(pairing.active)
@@ -749,7 +749,7 @@ struct JITSetupView: View {
                     Section { Label(status, systemImage: "checkmark.circle.fill").foregroundStyle(.green) }
                 }
                 if let txm = coordinator.txmPresent {
-                    Section { LabeledContent("TXM/SPTM", value: txm ? "Present" : "Not present") }
+                    Section { LabeledContent("TXM/SPTM", value: txm ? L("Present") : L("Not present")) }
                 }
             }
             .navigationTitle("JIT setup")

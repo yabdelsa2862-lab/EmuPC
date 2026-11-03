@@ -91,17 +91,26 @@ stores and quality-of-life features on top.
   A to join, Y to invite, X to refresh, B to close.
 
 ### Stores
-- **Steam**, **GOG** and **Epic Games** in one store with filters (all, per
-  store, ready to play, offline only, downloading).
-- **GOG**: sign in (Google sign-in supported), browse, download and install
-  owned games. Older GOG releases (first-generation builds) download too, and
-  GOG games find their install folder the way they do on Windows.
+- **Steam**, **GOG**, **Epic Games**, **EA app** and **itch.io** games in one
+  place, with filters (all, per store, ready to play, offline only, downloading).
+- **Steam extras**: achievements (a list per game and a banner when one
+  unlocks), owned **DLC** downloads with a switch per DLC, **Steam Workshop**
+  items, **beta branches** (with beta codes), and downloads from a PC on the
+  same Wi-Fi instead of the internet.
+- **GOG**: sign in, download, repair and update owned games with their DLC.
+  EmuPC stands in for GOG Galaxy while a game runs, so Galaxy achievements and
+  stats work.
 - **Epic Games**: sign in (including passkeys through Safari), install owned
   games, and launch them signed in.
+- **EA app**: sign in, download and start your EA games without the EA app.
+- **itch.io**: your bought and claimed games, plus free ones, with .7z archives
+  unpacked for you.
 - **Store pages** with screenshots you can open full screen (and browse with
   the controller), description, size and requirements.
 - **Compatibility estimates** for every game, with precise anti-cheat labels
   (*Might work*, *Offline only*, *Won't run*) so you know before downloading.
+  Steam games also show their [ProtonDB](https://www.protondb.com) rating: how
+  they run under Wine on Linux PCs, which EmuPC builds on too.
 - Clear sizes: what a game **downloads** versus how much **space it needs**,
   and a download ETA down to the second.
 - Store pages and art cached, so they open instantly the second time.
@@ -137,6 +146,16 @@ stores and quality-of-life features on top.
 - **Your music while you play**: game sound mixes with your music instead of
   stopping it, and the guide shows the Apple Music song with play, pause and skip
   on the controller.
+- **Gyro aim and turbo**: aim by tilting the phone or controller, and hold-to-repeat
+  buttons, from the session menu.
+- **Keeps running in the background**: games and downloads carry on for a while
+  when you switch apps or lock the screen.
+- **Runtimes set up for you**: Microsoft's Visual C++ 2015-2022 runtime (from
+  Microsoft's own installers, checksum-pinned) and Wine Gecko for launchers that
+  show web pages.
+- **Share a game's setup** as a file or text; the other device applies it in a tap.
+- **Graphics card the game sees**: a per-game choice for games that refuse
+  unknown GPUs.
 - **Wi-Fi controllers**: other phones on your network join as players 2–4.
 - **TV mode**: play on a TV over AirPlay or a cable (iOS 27), with a TV home
   screen; the phone becomes the controller or a performance monitor.

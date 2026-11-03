@@ -8,7 +8,8 @@ exit report.
    profile exports (executable, arguments, virtual monitor size for every
    entry, both x87 precision choices, fastsync's switches only when
    Settings chose Fastsync, nothing else for the engine), the
-   30 FPS fallback without DXMT's 30 FPS cap, profile validation, decoding of
+   30 FPS fallback without DXMT's 30 FPS cap, panel refresh intent with the
+   default floor, idle and maximum-refresh options, profile validation, decoding of
    library files that carry unknown or fork-written keys (display mode,
    control opacity and size), the layout and touch-mapping math of every
    Aspect & scaling mode, the pad-to-command mapping, (ml1163) a game in
@@ -22,8 +23,8 @@ exit report.
    checks that only an NTSTATUS error of the launched program is recorded and
    that a reset clears it.
 3. Source checks: ntdll reports only the launched (initial) process's exit
-   status, with no image names; the display-rate hold is opt-in and the 30 FPS
-   cap is detected; the app wires the library into ContentView and
+   status, with no image names; the maximum display-rate hold is opt-in and
+   the 30 FPS cap is detected; the app wires the library into ContentView and
    GamepadInput; game details offer Resolution (ml1172: this device's
    choices, grouped, plus a saved size none of them has, and the screen shape
    for MetalFX 1.5× while a game uses it) for every entry, Aspect & scaling
@@ -50,6 +51,8 @@ server = (root / 'build/ntdll-unix/server_ios.c').read_text()
 content = (root / 'app/Madeira/ContentView.swift').read_text()
 gamepad = (root / 'app/Madeira/GamepadInput.swift').read_text()
 fps = (root / 'app/Madeira/FPSOverlay.swift').read_text()
+settings_pages = (root / 'app/Madeira/SettingsPages.swift').read_text()
+pad_assist = (root / 'app/Madeira/PadAssist.swift').read_text()
 shim = (root / 'app/Madeira/IOSDisplayShim.m').read_text()
 failures = []
 
@@ -72,6 +75,7 @@ def block(text, header):
 
 swift = r'''
 import Foundation
+func L(_ text: String) -> String { text }   // Library.swift's lookup; English here
 #if canImport(CoreGraphics)
 import CoreGraphics   // CGRect.width and friends: Foundation alone no longer re-exports them on macOS (Swift 6.4)
 #endif
@@ -90,14 +94,29 @@ final class PassthroughSubject<Output, Failure: Error> {
 #endif
 enum MadeiraConfig {
     static var values: [String: String] = [:]   // stands in for madeira.cfg
-    static func flag(_ name: String, fallback: Bool = true) -> Bool { fallback }
+    static var flags: [String: Bool] = [:]
+    static func flag(_ name: String, fallback: Bool = true) -> Bool { flags[name] ?? fallback }
     static func get(_ key: String) -> String? { values[key] }
     static func bool(_ key: String, default dflt: Bool = false) -> Bool { values[key].map { ["1", "on", "true", "yes"].contains($0) } ?? dflt }
     @discardableResult static func set(_ key: String, _ value: String?) -> Bool { values[key] = value; return true }
     static var game: String?   // stands in for the file MADEIRA_CFG_GAME names
     @discardableResult static func applyGame(_ text: String?) throws -> [String: String] { game = text; return [:] }
 }
-final class LogStore { static let shared = LogStore(); var lines: [String] = []; func log(_ s: String) { lines.append(s) } }
+enum LogLevel { case info, error }
+final class LogStore { static let shared = LogStore(); var lines: [String] = []; func log(_ s: String, level: LogLevel = .info) { lines.append(s) } }
+// Big Picture's library discovery is outside this launch-profile harness.
+// Trap if a case starts using it instead of silently exercising fake storage.
+enum MadeiraDock {
+    static var drive: URL { fatalError("Big Picture storage is not part of this harness") }
+    static func steamLibraries(drive: URL) -> [String] { fatalError("Big Picture discovery is not part of this harness") }
+}
+enum SteamRuntimeFiles { static let relativeRoot = "Program Files (x86)/Steam" }
+enum ExternalDrives { static var steamLibraries: [String] { [] } }
+enum ExternalSteamLibraries {
+    static func add(paths: [String], to existing: Data?) throws -> Data {
+        fatalError("Big Picture library writes are not part of this harness")
+    }
+}
 var published: (Int32, Int32) = (0, 0)
 func winios_display_mode_changed(_ w: Int32, _ h: Int32) { published = (w, h) }
 var vsync: Int32 = -1
@@ -105,7 +124,13 @@ func madeira_set_vsync_locked(_ mode: Int32) { vsync = mode }
 enum ProMotionIntent {
     static var has30Cap = true
     static var has40Cap = true
-''' + block(fps, '    static func supportedMode(_ mode: Int) -> Int32 {') + r'''
+    static var panelMaxFPS = 120
+''' + '\n'.join(block(fps, header) for header in (
+    '    static var holdMaximum: Bool {',
+    '    static var panelFloor: Bool {',
+    '    static func maxHz(for mode: Int32) -> Int {',
+    '    static func supportedMode(_ mode: Int) -> Int32 {',
+)) + r'''
 }
 struct TouchControl: Codable, Equatable { var nx = 0.5 }
 enum ControlAction: Codable, Equatable, Hashable { case none }   // LibraryEntry.controllerBinds
@@ -115,6 +140,7 @@ enum LibraryError: LocalizedError { case message(String) }
 func env(_ name: String) -> String? { getenv(name).map { String(cString: $0) } }
 '''
 swift += block(lib, 'enum LaunchArgumentText {') + '\n'
+swift += block(pad_assist, 'struct PadAssistSettings: Codable, Equatable, Sendable') + '\n'
 swift += block(lib, 'struct LibraryEntry: Codable, Identifiable') + '\n'
 swift += block(lib, 'enum SyncEngine: String, CaseIterable, Identifiable') + '\n'
 swift += '\n'.join(l for l in display.splitlines() if not l.startswith('import ')) + '\n'
@@ -122,6 +148,21 @@ swift += block(lib, 'final class LibraryController: ObservableObject, @unchecked
 swift += r'''
 var failed = 0
 func expect(_ cond: Bool, _ what: String) { print((cond ? "PASS: " : "FAIL: ") + what); if !cond { failed += 1 } }
+
+// Display intent: the default keeps a 60 Hz floor; maximum refresh is opt-in.
+expect(ProMotionIntent.maxHz(for: 1) == 60 && ProMotionIntent.maxHz(for: 3) == 60,
+       "30 and 60 FPS caps keep the default 60 Hz panel floor")
+MadeiraConfig.flags["MADEIRA_PANEL_IDLE"] = true
+expect(ProMotionIntent.maxHz(for: 1) == 0 && ProMotionIntent.maxHz(for: 3) == 0,
+       "panel idle opt-in releases the display link under 30 and 60 FPS caps")
+MadeiraConfig.flags["MADEIRA_PROMOTE"] = true
+expect(ProMotionIntent.maxHz(for: 1) == 120 && ProMotionIntent.maxHz(for: 3) == 60,
+       "maximum-refresh opt-in holds 120 Hz for the 60 FPS cap, 60 Hz for the 30 FPS cap")
+ProMotionIntent.panelMaxFPS = 60
+expect(ProMotionIntent.maxHz(for: 1) == 60 && ProMotionIntent.maxHz(for: 3) == 60,
+       "display intent stays within a 60 Hz panel's maximum")
+ProMotionIntent.panelMaxFPS = 120
+MadeiraConfig.flags = [:]
 
 // Desktop entry: services in a virtual desktop of the chosen size.
 var desk = LibraryEntry.desktopEntry
@@ -179,11 +220,12 @@ game.configureLaunch()
 expect(env("MADEIRA_STEAM_APPID") == nil && env("MADEIRA_STEAM_APPPATH") == nil && env("MADEIRA_WORKDIR") == nil,
        "any other launch clears the direct start's identity and folder")
 
-// Both x87 choices must override the WOW64 backend's reduced-precision default.
-expect(!game.reducedX87, "reduced-precision x87 is off for new entries")
+// x87: Automatic (every saved entry) leaves the engine's default, which is reduced
+// precision for 32-bit games (FEX WOW64 ml950); only an explicit choice is exported.
+expect(!game.reducedX87 && game.fullX87 == nil && game.x87Precision == .automatic, "x87 precision is Automatic for new entries")
 setenv("FEX_X87REDUCEDPRECISION", "1", 1)
 game.applyEnvironment()
-expect(env("FEX_X87REDUCEDPRECISION") == "0", "x87 off explicitly requests full precision, clearing a previous reduced-precision launch")
+expect(env("FEX_X87REDUCEDPRECISION") == nil, "Automatic x87 exports nothing, clearing a previous game's choice")
 expect(env("MADEIRA_CPU_COUNT") == nil && env("DXMT_D9_ANISO_LIMIT") == nil, "no other engine switches are exported")
 expect(env("MADEIRA_FASTSYNC") == "auto" && env("MADEIRA_FASTSYNC_SEM") == nil,
        "no sync keys (Fastsync, the default): fastsync exported, semaphore waits left to madeira.cfg")
@@ -202,11 +244,12 @@ MadeiraConfig.values = ["inproc-sync": "1", "env.MADEIRA_FASTSYNC": "auto"]
 unsetenv("MADEIRA_FASTSYNC"); unsetenv("MADEIRA_FASTSYNC_SEM"); game.applyEnvironment()
 expect(env("MADEIRA_FASTSYNC") == nil && env("MADEIRA_FASTSYNC_SEM") == nil, "Madsync on: the game's fastsync switches are not exported")
 MadeiraConfig.values = [:]; game.fastSync = nil; game.semaphoreFastPath = nil
-game.reducedX87 = true; game.applyEnvironment()
-expect(env("FEX_X87REDUCEDPRECISION") == "1", "reduced x87 exported when chosen")
-game.reducedX87 = false
-game.applyEnvironment()
-expect(env("FEX_X87REDUCEDPRECISION") == "0", "switching x87 off restores full precision")
+game.x87Precision = .reduced; game.applyEnvironment()
+expect(env("FEX_X87REDUCEDPRECISION") == "1" && game.reducedX87, "reduced x87 exported when chosen")
+game.x87Precision = .full; game.applyEnvironment()
+expect(env("FEX_X87REDUCEDPRECISION") == "0" && !game.reducedX87 && game.fullX87 == true, "full x87 exported when chosen")
+game.x87Precision = .automatic; game.applyEnvironment()
+expect(env("FEX_X87REDUCEDPRECISION") == nil && game.fullX87 == nil, "back to Automatic: nothing exported")
 // This game's own config lines: handed over at every launch, nil when there are none.
 game.config = "fence-chain = 6"; game.applyEnvironment()
 expect(MadeiraConfig.game == "fence-chain = 6", "the game's own config is applied at launch")
@@ -244,6 +287,7 @@ MadeiraConfig.values["env.MADEIRA_DINPUT_PAD"] = nil; unsetenv("MADEIRA_DINPUT_P
 // Library files written before the controller choices decode with none.
 let older = #"{"id":"6F9619FF-8B86-D011-B42D-00C04FC964FF","title":"Old","relativePath":"a/b.exe","bits":64,"arguments":"","resolution":"944x656","fpsMode":1,"reducedX87":false,"liveLogs":false,"performance":false,"touchControls":false}"#
 let decodedOld = try? JSONDecoder().decode(LibraryEntry.self, from: Data(older.utf8))
+expect(decodedOld?.x87Precision == .automatic, "a saved reducedX87 = false is Automatic, not full precision (the 32-bit slow path)")
 expect(decodedOld != nil && decodedOld?.controllerMode == nil && decodedOld?.controllerBinds == nil && decodedOld?.padMouseVertical == nil
        && decodedOld?.launchMode == nil, "an entry without controller or ml1163 keys decodes")
 
@@ -511,7 +555,6 @@ check('madeira_exit_is_helper' not in bridge and '.exe"' not in bridge[bridge.in
       'no program-name list in the exit report')
 check('MadeiraConfig.flag("MADEIRA_PROMOTE", fallback: false)' in fps,
       'holding the display at its maximum rate is opt-in (MADEIRA_PROMOTE)')
-check('if mode == 1 { return holdMaximum ? panelMaxFPS : 0 }' in fps, 'no display link in the 60 cap by default')
 check('__attribute__((weak)) void madeira_set_display_max_fps' in shim and 'ProMotionIntent.has30Cap' in fps
       and 'ProMotionIntent.has30Cap || mode == 3' in lib, 'the 30 FPS cap is offered only with DXMT support')
 check('__attribute__((weak)) int madeira_dxmt_has_40_cap(void) {\n    return 0;' in shim
@@ -614,16 +657,17 @@ launch = block(hud, 'private func launchColumnView(')
 wide = block(hud, 'private func launchWideView(')
 glyph = block(hud, 'private func launchGlyph(')
 row = block(launch, 'HStack(spacing: 14)')
-check('launchGlyph(showLogs ? "Hide live log" : "Show live log", "text.alignleft", on: showLogs)' in row
-      and 'launchGlyph(showLogs ? "Hide live log" : "Show live log", "text.alignleft", on: showLogs)' in wide
+check('launchGlyph(showLogs ? L("Hide live log") : L("Show live log"), "text.alignleft", on: showLogs)' in row
+      and 'launchGlyph(showLogs ? L("Hide live log") : L("Show live log"), "text.alignleft", on: showLogs)' in wide
       and 'Button(showLogs ?' not in launch and 'Button(showLogs ?' not in wide,
       'starting screen: the live-log control is a glyph in one row')
 check('Image(systemName: symbol)' in glyph and '.accessibilityLabel(label)' in glyph and 'Text(' not in glyph
       and 'Circle()' in glyph, 'starting screen: glyph buttons show no text and keep their words as VoiceOver labels')
 settings = block(lib, 'private var settings: some View')
 form = block(settings, 'Form {')
-last = form[[m.start() for m in re.finditer(r'\bSection\b', form)][-1]:]
-check('header: { Text("Credits") }' in last and form.count('Text("Credits")') == 1,
+credits = block(settings_pages, 'struct SettingsCreditsSection: View')
+check(re.search(r'SettingsCreditsSection\(\)\s*}\s*}$', form) is not None
+      and form.count('SettingsCreditsSection()') == 1 and 'header: { Text("Credits") }' in credits,
       'Settings: Credits is the last section')
 for who in ('name: "Will Faust", handle: "willfaust"', 'name: "Nick", handle: "125hz"',
             'name: "Jfishin", handle: "Jfishin"', 'name: "Jesse", handle: "JesseLovelace"',
@@ -632,7 +676,7 @@ for who in ('name: "Will Faust", handle: "willfaust"', 'name: "Nick", handle: "1
             'name: "spitefulowl", handle: "spitefulowl"',
             'name: "meshoklv", handle: "meshoklv"',
             'name: "TheHadesc", handle: "TheHadesc"'):
-    check('MadeiraCredit(' + who in last, 'Settings credits: ' + who)
+    check('MadeiraCredit(' + who in credits, 'Settings credits: ' + who)
 check('https://github.com/\\(handle)' in block(lib, 'struct MadeiraCredit: View'),
       'a credit links the GitHub account')
 check('complete application folders' not in lib and 'Section("Library")' not in settings,

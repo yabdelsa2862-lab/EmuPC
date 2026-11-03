@@ -38,16 +38,11 @@ inline constexpr uint32_t kSbcTransformMaskWords = (kSbcMaxTransforms + 63) / 64
 // meant to flip.
 struct D3D9StateBlockChanges {
   bool render_states[256] = {};
-  bool sampler_states = false;
-  bool texture_stage_states = false;
-  // Predefined PIXELSTATE / VERTEXSTATE subsets restore only the per-stage
-  // texture-stage / sampler ELEMENTS wined3d lists (pixel_states_texture /
-  // _sampler, vertex_states_texture / _sampler in stateblock.c). 0 restores the
-  // whole array (D3DSBT_ALL and Begin/End-recorded blocks stay coarse); a
-  // non-zero mask restores only the (1u << D3DTSS_* / D3DSAMP_*) elements set.
-  // Paired with the texture_stage_states / sampler_states bools.
-  uint32_t tss_element_mask = 0;
-  uint32_t samp_element_mask = 0;
+  // One bit per (stage, element), including D3DTSS_CONSTANT at bit 32.
+  // A recorded ALPHAOP must not restore COLORARG2, another texture stage,
+  // or an unrelated sampler setting to its value at BeginStateBlock.
+  uint16_t sampler_states[kSbcMaxTextureUnits] = {};
+  uint64_t texture_stage_states[8] = {};
   bool transforms = false;
   // Which transform indices the block actually recorded, when it recorded them
   // one at a time. Empty means every index, which is what a predefined block
@@ -136,7 +131,11 @@ struct D3D9StateBlockChanges {
   markAll() {
     for (auto &b : render_states)
       b = true;
-    sampler_states = texture_stage_states = transforms = clip_planes = true;
+    for (auto &mask : sampler_states)
+      mask = (1u << (D3DSAMP_DMAPOFFSET + 1)) - 1;
+    for (auto &mask : texture_stage_states)
+      mask = (1ull << (D3DTSS_CONSTANT + 1)) - 2;
+    transforms = clip_planes = true;
     // Empty masks mean "every element", which is what markAll wants; leaving
     // them zero is deliberate rather than an omission.
     for (auto &w : transform_mask)
@@ -159,7 +158,7 @@ struct D3D9StateBlockChanges {
   // PS constants; bound textures belong to D3DSBT_ALL, not here). The
   // texture-stage and sampler restore is narrowed to the exact
   // pixel_states_texture[] / pixel_states_sampler[] elements via the
-  // tss_element_mask / samp_element_mask populated below.
+  // per-stage masks populated below.
   void
   markPixelStateSubset() {
     static constexpr D3DRENDERSTATETYPE pixel_states_render[] = {
@@ -253,12 +252,12 @@ struct D3D9StateBlockChanges {
         D3DSAMP_MAGFILTER,   D3DSAMP_MINFILTER,     D3DSAMP_MIPFILTER,   D3DSAMP_MIPMAPLODBIAS,
         D3DSAMP_MAXMIPLEVEL, D3DSAMP_MAXANISOTROPY, D3DSAMP_SRGBTEXTURE, D3DSAMP_ELEMENTINDEX,
     };
-    for (auto e : pixel_states_texture)
-      tss_element_mask |= 1u << e;
-    for (auto e : pixel_states_sampler)
-      samp_element_mask |= 1u << e;
-    texture_stage_states = true;
-    sampler_states = true;
+    for (auto &mask : texture_stage_states)
+      for (auto e : pixel_states_texture)
+        mask |= 1ull << e;
+    for (auto &mask : sampler_states)
+      for (auto e : pixel_states_sampler)
+        mask |= 1u << e;
     pixel_shader = true;
     ps_constants = true;
     ps_const_f_lo = 0;
@@ -273,7 +272,7 @@ struct D3D9StateBlockChanges {
   // vertex-pipeline categories. The texture-stage and sampler restore is
   // narrowed to the exact vertex_states_texture[] (TEXCOORDINDEX,
   // TEXTURETRANSFORMFLAGS) / vertex_states_sampler[] (DMAPOFFSET) elements
-  // via tss_element_mask / samp_element_mask populated below.
+  // via the per-stage masks populated below.
   void
   markVertexStateSubset() {
     static constexpr D3DRENDERSTATETYPE vertex_states_render[] = {
@@ -332,11 +331,11 @@ struct D3D9StateBlockChanges {
         D3DTSS_TEXCOORDINDEX,
         D3DTSS_TEXTURETRANSFORMFLAGS,
     };
-    for (auto e : vertex_states_texture)
-      tss_element_mask |= 1u << e;
-    samp_element_mask |= 1u << D3DSAMP_DMAPOFFSET;
-    texture_stage_states = true;
-    sampler_states = true;
+    for (auto &mask : texture_stage_states)
+      for (auto e : vertex_states_texture)
+        mask |= 1ull << e;
+    for (auto &mask : sampler_states)
+      mask |= 1u << D3DSAMP_DMAPOFFSET;
     vertex_shader = true;
     vs_constants = true;
     vs_const_f_lo = 0;

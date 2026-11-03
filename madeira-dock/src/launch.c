@@ -5,6 +5,7 @@
  * entitlement checks. The installed game, API DLLs and DRM remain unchanged.
  */
 #include "launch.h"
+#include "hold.h"
 #include "scm.h"
 #include "validation.h"
 #include <stdio.h>
@@ -221,6 +222,30 @@ int sh_launch(HMODULE module, void *engine, void *client_user,
         return 41;
     }
     o->event("launch-install-directory-verified", 1);
+    /* ml2020: a game whose launcher installed a Windows service of its own
+     * needs a service manager in the game session, which otherwise has none
+     * (RPC 1722 at every start of that service). MADEIRA_DOCK_GAME_SCM: 0
+     * never, 1 always; unset, only when the prefix's registry lists such a
+     * service (an automatic Win32 service outside the Windows folder: a
+     * read-only count, game-scm-services). The start is the --start-services
+     * one, bounded; it never decides whether the game launches.
+     */
+    {
+        wchar_t scm_value[4] = {0};
+        DWORD scm_length = GetEnvironmentVariableW(L"MADEIRA_DOCK_GAME_SCM", scm_value, 4);
+        enum sh_game_scm_mode scm_mode = sh_game_scm_mode(scm_length ? scm_value : NULL);
+        int32_t foreign = 0;
+        if (scm_mode == SH_GAME_SCM_AUTO) {
+            foreign = sh_game_scm_foreign_services();
+            o->event("game-scm-services", foreign);
+        }
+        if (sh_game_scm_wanted(scm_mode, foreign > 0 ? (unsigned)foreign : 0u)) {
+            bool timed_out = false;
+            int32_t outcome = sh_game_scm_start(o, &timed_out);
+            if (timed_out) o->event("game-scm-timeout", 1);
+            else o->event("game-scm", outcome);
+        } else if (scm_mode == SH_GAME_SCM_OFF) o->event("game-scm", SH_INSTALL_SCM_OFF);
+    }
     HKEY active = NULL, machine = NULL;
     int result = 42;
     struct saved_value values[3] = {0};
@@ -294,6 +319,22 @@ int sh_launch(HMODULE module, void *engine, void *client_user,
     uint64_t wait_began = 0, retry_at = 0;
     unsigned retries = 0;
     int32_t logged_error = INT32_MIN;
+    /* ml2020: Valve's client stops reporting the game as running when the
+     * program it started exits, also when that program only handed over to a
+     * launcher that restarts itself or starts the game later. The game's own
+     * process tree is followed while it runs (hold.c); after the report ends,
+     * the session is held while a member still shows a window or is young.
+     * MADEIRA_DOCK_KEEP_ALIVE=0 ends it 3 s after the report as before; a
+     * `;` list of image names adds programs outside the tree to it.
+     */
+    static wchar_t keep_value[1024];
+    DWORD keep_length = GetEnvironmentVariableW(L"MADEIRA_DOCK_KEEP_ALIVE", keep_value, 1024);
+    if (keep_length >= 1024) keep_value[0] = 0;
+    enum sh_keep_alive_mode keep_mode = sh_keep_alive_mode(keep_length ? keep_value : NULL);
+    static struct sh_hold hold;
+    sh_hold_init(&hold, keep_mode == SH_KEEP_ALIVE_OFF ? NULL : keep_value);
+    uint64_t held_since = 0;
+    bool held = false;
     result = 44;
     while (!InterlockedCompareExchange(&interrupted, 0, 0)) {
         for (unsigned batch = 0; batch < 64; ++batch) {
@@ -378,10 +419,22 @@ int sh_launch(HMODULE module, void *engine, void *client_user,
             seen_running = true;
             retry_at = 0;
         }
-        if (running) stopped_at = 0;
+        bool holding = false;
+        if (keep_mode != SH_KEEP_ALIVE_OFF && seen_running) {
+            /* Polled while the game runs too, so the tree is known by the time
+             * the report ends; at most one snapshot a second. */
+            holding = sh_hold_poll(&hold, o) && !running;
+            if (holding && !held) {
+                held = true;
+                held_since = o->now_ms();
+                o->event("launch-keep-alive", (int32_t)hold.holders);
+            }
+        }
+        if (running || holding) stopped_at = 0;
         else if (seen_running) {
             if (!stopped_at) stopped_at = o->now_ms();
             if (o->now_ms() - stopped_at >= 3000) {
+                if (held) o->event("launch-keep-alive-held", (int32_t)((o->now_ms() - held_since) / 1000));
                 o->event("launch-game-ended", 1);
                 result = result_received && !result_rejected ? 0 : 46;
                 break;

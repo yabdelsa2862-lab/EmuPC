@@ -31,7 +31,7 @@ enum EpicFormatError: LocalizedError, Equatable {
         case .decompress(let what): return "A downloaded \(what) could not be decompressed."
         case .missingKey: return "Epic did not send the key for this encrypted game."
         case .decrypt(let what): return "A downloaded \(what) could not be decrypted."
-        case .unsupported(let what): return "This game uses a format Madeira cannot read yet (\(what))."
+        case .unsupported(let what): return "This game uses a format EmuPC cannot read yet (\(what))."
         case .unsafePath: return "This game's file list names a path outside its install folder."
         }
     }

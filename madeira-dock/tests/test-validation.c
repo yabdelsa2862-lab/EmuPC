@@ -178,6 +178,53 @@ int main(void)
     assert(!strcmp(sh_install_scm_word(SH_INSTALL_SCM_OFF), "off"));
     assert(!strcmp(sh_install_scm_word(SH_INSTALL_SCM_FAILED), "failed"));
     assert(!strcmp(sh_install_scm_word(7), "failed"));
-    puts("steam-host: launch-option, launch-arguments, entitlement-list, launch-result, content-wait, config-wait, session-wait, CEG, service-manager "
-         "and install-service-manager validation cases passed");
+    /* ml2020: the game session's service manager (auto: a foreign automatic service). */
+    assert(sh_game_scm_mode(NULL) == SH_GAME_SCM_AUTO && sh_game_scm_mode(L"") == SH_GAME_SCM_AUTO);
+    assert(sh_game_scm_mode(L"0") == SH_GAME_SCM_OFF && sh_game_scm_mode(L"1") == SH_GAME_SCM_ON);
+    assert(sh_game_scm_mode(L"01") == SH_GAME_SCM_AUTO && sh_game_scm_mode(L"auto") == SH_GAME_SCM_AUTO);
+    const wchar_t *windows = L"C:\\windows";
+    assert(sh_path_in_folder(L"C:\\windows\\system32\\services.exe", windows));
+    assert(sh_path_in_folder(L"c:/WINDOWS/system32/svchost.exe", L"C:\\Windows\\"));
+    assert(!sh_path_in_folder(L"C:\\windows2\\x.exe", windows));
+    assert(!sh_path_in_folder(L"C:\\windows", windows) && !sh_path_in_folder(L"C:\\win", windows));
+    assert(!sh_path_in_folder(NULL, windows) && !sh_path_in_folder(L"C:\\windows\\a", NULL) &&
+           !sh_path_in_folder(L"C:\\windows\\a", L"\\"));
+    assert(sh_image_is_windows(L"%SystemRoot%\\system32\\svchost.exe -k netsvcs", windows));
+    assert(sh_image_is_windows(L"\\SystemRoot\\System32\\drivers\\mountmgr.sys", windows));
+    assert(sh_image_is_windows(L"System32\\DRIVERS\\x.sys", windows));
+    assert(sh_image_is_windows(L"\\??\\C:\\windows\\system32\\drivers\\y.sys", windows));
+    assert(sh_image_is_windows(L"\"C:\\windows\\system32\\msiexec.exe\" /V", windows));
+    assert(!sh_image_is_windows(L"\"C:\\Program Files\\Publisher\\Launcher\\Service.exe\"", windows));
+    assert(!sh_image_is_windows(L"C:\\Games\\game\\service.exe", windows) && !sh_image_is_windows(NULL, windows));
+    /* type 0x10 own process, 0x20 shared; start 2 automatic, 3 demand, 4 disabled */
+    assert(sh_service_is_foreign_autostart(0x10, 2, L"\"C:\\Program Files\\Publisher\\Service.exe\"", windows));
+    assert(sh_service_is_foreign_autostart(0x20, 2, L"C:\\Games\\svc.exe --run", windows));
+    assert(sh_service_is_foreign_autostart(0x10, 3, L"C:\\Games\\svc.exe", windows));   /* demand start: the program starts it */
+    assert(!sh_service_is_foreign_autostart(0x10, 4, L"C:\\Games\\svc.exe", windows));  /* disabled */
+    assert(!sh_service_is_foreign_autostart(0x10, 0, L"C:\\Games\\svc.exe", windows) &&
+           !sh_service_is_foreign_autostart(0x10, 1, L"C:\\Games\\svc.exe", windows));  /* boot and system start: drivers */
+    assert(!sh_service_is_foreign_autostart(0x1, 2, L"C:\\Games\\drv.sys", windows));
+    assert(!sh_service_is_foreign_autostart(0x10, 2, L"%SystemRoot%\\system32\\svchost.exe -k x", windows));
+    assert(!sh_service_is_foreign_autostart(0x10, 2, L"C:\\windows\\system32\\spoolsv.exe", windows));
+    assert(!sh_service_is_foreign_autostart(0x10, 2, L"", windows) && !sh_service_is_foreign_autostart(0x10, 2, L"\"\"", windows));
+    assert(!sh_service_is_foreign_autostart(0x10, 2, NULL, windows));
+    assert(!sh_game_scm_wanted(SH_GAME_SCM_OFF, 5) && sh_game_scm_wanted(SH_GAME_SCM_ON, 0));
+    assert(!sh_game_scm_wanted(SH_GAME_SCM_AUTO, 0) && sh_game_scm_wanted(SH_GAME_SCM_AUTO, 1));
+    /* ml2020: the hold while a launcher restarts. */
+    assert(sh_keep_alive_mode(NULL) == SH_KEEP_ALIVE_AUTO && sh_keep_alive_mode(L"") == SH_KEEP_ALIVE_AUTO);
+    assert(sh_keep_alive_mode(L"0") == SH_KEEP_ALIVE_OFF && sh_keep_alive_mode(L"1") == SH_KEEP_ALIVE_AUTO);
+    assert(sh_keep_alive_mode(L"Launcher.exe;Game.exe") == SH_KEEP_ALIVE_AUTO);
+    assert(sh_keep_alive_listed(L"Launcher.exe;Game.exe", L"launcher.EXE"));
+    assert(sh_keep_alive_listed(L"Launcher.exe; Game.exe ", L"game.exe"));
+    assert(sh_keep_alive_listed(L";;Game.exe", L"Game.exe") && sh_keep_alive_listed(L"Game.exe", L"Game.exe"));
+    assert(!sh_keep_alive_listed(L"Launcher.exe;Game.exe", L"Game.ex") && !sh_keep_alive_listed(L"Launcher.exe", L"Launcher.exe2"));
+    assert(!sh_keep_alive_listed(L"", L"Game.exe") && !sh_keep_alive_listed(NULL, L"Game.exe") &&
+           !sh_keep_alive_listed(L"Game.exe", L"") && !sh_keep_alive_listed(L"Game.exe", NULL));
+    assert(!sh_keep_alive_listed(L"1", L"Game.exe"));
+    assert(sh_keep_alive_holds(false, true, 10 * 60000ULL, SH_KEEP_ALIVE_YOUNG_MS));
+    assert(sh_keep_alive_holds(false, false, 5000, SH_KEEP_ALIVE_YOUNG_MS));
+    assert(!sh_keep_alive_holds(false, false, SH_KEEP_ALIVE_YOUNG_MS, SH_KEEP_ALIVE_YOUNG_MS));
+    assert(!sh_keep_alive_holds(true, true, 0, SH_KEEP_ALIVE_YOUNG_MS));
+    puts("steam-host: launch-option, launch-arguments, entitlement-list, launch-result, content-wait, config-wait, session-wait, CEG, service-manager, "
+         "install-service-manager, game-service-manager and keep-alive validation cases passed");
 }

@@ -209,7 +209,7 @@ final class SteamSignInModel: ObservableObject {
         signInTask = nil; qr.onNewChallenge = nil
         qrImage = nil; qrLink = nil; guardPrompt = nil; signInBusy = false
         guard SteamSignIn.store(accountName: account, refreshToken: refresh, accessToken: access) else {
-            signInError = "Steam accepted the sign-in, but Madeira could not save it in this device's Keychain. Check the app's signing and try again."
+            signInError = "Steam accepted the sign-in, but EmuPC could not save it in this device's Keychain. Check the app's signing and try again."
             SteamLog.event("[steam-signin] sign-in keychain-store failed method=\(method)")
             return
         }

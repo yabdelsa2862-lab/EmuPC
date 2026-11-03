@@ -694,6 +694,31 @@ static NTSTATUS key_symmetric_set_auth_data( void *args )
     return STATUS_SUCCESS;
 }
 
+/* iOS-Madeira: GnuTLS hands a CBC cipher's input straight to nettle's cbc_encrypt/cbc_decrypt, which
+ * assert that the length is a multiple of the block size; the assert aborts the whole process
+ * ("Assertion failed: (!(length % block_size)), function nettle_cbc_decrypt"). bcrypt.dll hands this side one block at a
+ * time and rejects an unaligned BCryptEncrypt/BCryptDecrypt itself, so what reaches here with another length is not a
+ * call Windows would have accepted: answer STATUS_INVALID_BUFFER_SIZE, which is what Windows returns for an input that
+ * is not a multiple of the block size (dlls/bcrypt/tests/bcrypt.c), instead of calling GnuTLS. Only the CBC ciphers (AES,
+ * 3DES, and AES-ECB, which is CBC with an empty IV) are checked; GCM and CFB8 take any length. Called after
+ * init_cipher_handle(), so the key's mode and algorithm are known to be ones get_gnutls_cipher() accepts. The first lines
+ * name the key, so the next log shows whose length it was. */
+static NTSTATUS check_cbc_length( const struct key *key, unsigned int input_len, const char *func )
+{
+    static unsigned int reports;
+    unsigned int block = 0;
+
+    if (key->alg_id == ALG_ID_AES && (key->u.s.mode == CHAIN_MODE_CBC || key->u.s.mode == CHAIN_MODE_ECB)) block = 16;
+    else if (key->alg_id == ALG_ID_3DES && key->u.s.mode == CHAIN_MODE_CBC) block = 8;
+    if (!block || !(input_len % block)) return STATUS_SUCCESS;
+
+    if (reports++ < 4)
+        ERR( "[bcrypt-guard] %s: alg %u mode %u cipher block %u, key block %lu, input_len %u, secret_len %u, vector_len %lu"
+             " -> STATUS_INVALID_BUFFER_SIZE (nettle would abort the process)\n", func, key->alg_id, key->u.s.mode, block,
+             (unsigned long)key->u.s.block_size, input_len, key->u.s.secret_len, (unsigned long)key->u.s.vector_len );
+    return STATUS_INVALID_BUFFER_SIZE;
+}
+
 static NTSTATUS key_symmetric_encrypt( void *args )
 {
     const struct key_symmetric_encrypt_params *params = args;
@@ -701,6 +726,7 @@ static NTSTATUS key_symmetric_encrypt( void *args )
     int ret;
 
     if ((status = init_cipher_handle( params->key ))) return status;
+    if ((status = check_cbc_length( params->key, params->input_len, __func__ ))) return status;
 
     if ((ret = pgnutls_cipher_encrypt2( key_data(params->key)->cipher, params->input, params->input_len,
                                         params->output, params->output_len )))
@@ -718,6 +744,7 @@ static NTSTATUS key_symmetric_decrypt( void *args )
     int ret;
 
     if ((status = init_cipher_handle( params->key ))) return status;
+    if ((status = check_cbc_length( params->key, params->input_len, __func__ ))) return status;
 
     if ((ret = pgnutls_cipher_decrypt2( key_data(params->key)->cipher, params->input, params->input_len,
                                         params->output, params->output_len )))

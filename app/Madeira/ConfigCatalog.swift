@@ -72,7 +72,7 @@ struct AllSettingsView: View {
         NavigationStack {
             List {
                 Section {
-                    Text("Every other option EmuPC reads from madeira.cfg. JIT pool, video memory, the swap tier, the sync engine and eco mode are in Settings › Memory & sync; the Direct3D 9/12 routes, the Vulkan driver and windowed mode in Settings › Graphics. Most options are read when Madeira starts, so close it from the app switcher after a change. Default leaves the option out of the file. Swipe left on a row to reset it.")
+                    Text("Every other option EmuPC reads from madeira.cfg. JIT pool, video memory, the swap tier, the sync engine and eco mode are in Settings › Memory & sync; the Direct3D 9/12 routes, the Vulkan driver and windowed mode in Settings › Graphics. Most options are read when EmuPC starts, so close it from the app switcher after a change. Default leaves the option out of the file. Swipe left on a row to reset it.")
                         .font(.footnote).foregroundStyle(.secondary)
                     if changed {
                         Text("Restart EmuPC (close it from the app switcher) for changes to apply.").font(.footnote).foregroundStyle(.orange)

@@ -1253,6 +1253,34 @@ NTSTATUS ProcessInit() {
   }
   PendingImageMapCount = 0;
 
+#ifdef FEX_IOS_HOST
+  /* ml2260 (device log 120): the images the loader mapped for this module before the notification
+   * hook existed (kernel32, kernelbase, ucrtbase) were never queued, so their x64 export thunks
+   * (.hexpthk) stayed out of the executable intervals. A 64-bit x64 installer's first kernel32 call
+   * landed on one: "NoExec instruction in entry block", GuestSignal_SIGSEGV, c0000005. Record the
+   * code sections of every image already on the loader list (not this module). Intervals only, as
+   * NotifyImageMap does; a repeat insert is harmless. MADEIRA_FEX_PRELOADED_IMAGES=0 skips it. */
+  if (const char* PreOpt = getenv("MADEIRA_FEX_PRELOADED_IMAGES"); !(PreOpt && strcmp(PreOpt, "0") == 0)) {
+    const auto* Ldr = reinterpret_cast<__TEB*>(NtCurrentTeb())->Peb->LdrData;
+    uint32_t Added = 0;
+    if (Ldr) {
+      const LIST_ENTRY* Head = &Ldr->InMemoryOrderModuleList;
+      for (const LIST_ENTRY* Link = Head->Flink; Link && Link != Head && Added < 512; Link = Link->Flink) {
+        const auto* Entry = CONTAINING_RECORD(Link, LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks);
+        const uint64_t Base = reinterpret_cast<uint64_t>(Entry->DllBase);
+        if (!Base || Base == reinterpret_cast<uint64_t>(MainModule) || Base == NtDllBase ||
+            Base == reinterpret_cast<uint64_t>(&__ImageBase)) {
+          continue;
+        }
+        fextl::string ModuleName = fextl::string {FEX::Windows::BaseName(FEX::Windows::GetSectionFilePath(Base))};
+        InvalidationTracker->HandleImageMap(ModuleName, Base);
+        Added++;
+      }
+    }
+    LogMan::Msg::EFmt("[img-map] ml2260 {} image(s) already loaded before FEX recorded", Added);
+  }
+#endif
+
   CPUFeatures.emplace(*CTX);
 
   X64ReturnInstr = ::VirtualAlloc(nullptr, FEXCore::Utils::FEX_PAGE_SIZE, MEM_COMMIT | MEM_TOP_DOWN, PAGE_EXECUTE_READWRITE);
