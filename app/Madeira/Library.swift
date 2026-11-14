@@ -3560,6 +3560,9 @@ struct LibraryView: View {
             if settingsShow("Wi-Fi controllers", "controller", "phone", "multiplayer", "QR", "player") {
                 RemotePadSettingsSection()
             }
+            if settingsShow("Steam Controller", "controller", "Bluetooth", "Valve") {
+                SteamControllerSettingsSection()
+            }
             if settingsShow("external display", "AirPlay", "TV", "monitor", "HDMI", "mirroring") {
                 ExternalDisplaySettingsSection()
             }

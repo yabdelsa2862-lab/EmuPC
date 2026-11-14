@@ -5,6 +5,7 @@ import Foundation
 import CoreBluetooth
 @preconcurrency import GameController
 import UIKit
+import SwiftUI
 
 // MARK: - Pure Steam Controller protocol
 
@@ -627,8 +628,21 @@ final class SteamControllerManager: NSObject, @unchecked Sendable, CBCentralMana
     /// Invoked on the main queue when a BLE Steam Controller connects or disconnects.
     var onConnectionChanged: (() -> Void)?
 
+    /// Settings › Steam Controller (Bluetooth). Off by default, so EmuPC only
+    /// asks for Bluetooth when the player turns it on.
+    static let enabledKey = "steamControllerBluetooth"
+    static var enabled: Bool { UserDefaults.standard.bool(forKey: enabledKey) }
+
+    /// Turns the Bluetooth Steam Controller driver on or off and remembers it.
+    func setEnabled(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: Self.enabledKey)
+        if on { start() } else { stop() }
+    }
+
     /// Start CoreBluetooth discovery and connected-peripheral retrieval for Steam Controllers.
+    /// Does nothing until the player turns the setting on.
     func start() {
+        guard Self.enabled else { return }
         lock.lock()
         guard !started else { lock.unlock(); return }
         started = true
@@ -639,6 +653,35 @@ final class SteamControllerManager: NSObject, @unchecked Sendable, CBCentralMana
             self.central = CBCentralManager(delegate: self, queue: self.bleQueue, options: [
                 CBCentralManagerOptionShowPowerAlertKey: false
             ])
+        }
+    }
+
+    /// Disconnects every Steam Controller and releases Bluetooth.
+    func stop() {
+        lock.lock()
+        guard started else { lock.unlock(); return }
+        started = false
+        lock.unlock()
+        bleQueue.async { [weak self] in
+            guard let self else { return }
+            self.stopPeriodicDiscovery()
+            self.lock.lock()
+            let hadReady = self.entries.values.contains { $0.ready }
+            let peripherals = self.entries.values.map { $0.peripheral }
+            self.entries.removeAll()
+            self.slotPeripherals = [nil, nil, nil, nil]
+            self.lock.unlock()
+            for peripheral in peripherals { self.central?.cancelPeripheralConnection(peripheral) }
+            self.central?.delegate = nil
+            self.central = nil
+            self.updateLizardWatchdog()
+            self.updateRumbleWatchdog()
+            if hadReady {
+                DispatchQueue.main.async { [weak self] in
+                    self?.onConnectionChanged?()
+                    NotificationCenter.default.post(name: Self.didDisconnectNotification, object: nil)
+                }
+            }
         }
     }
 
@@ -739,6 +782,10 @@ final class SteamControllerManager: NSObject, @unchecked Sendable, CBCentralMana
 
     private func pollConnectedPeripherals() {
         guard let central, central.state == .poweredOn else { return }
+        lock.lock()
+        let busy = entries.count >= 4
+        lock.unlock()
+        if busy { return }
         let valvePeripherals = central.retrieveConnectedPeripherals(withServices: [Self.valveServiceCBUUID])
         let infoPeripherals = central.retrieveConnectedPeripherals(withServices: [Self.deviceInfoServiceCBUUID])
             .filter { Self.isSteamControllerName($0.name) }
@@ -762,10 +809,16 @@ final class SteamControllerManager: NSObject, @unchecked Sendable, CBCentralMana
         central?.connect(peripheral, options: nil)
     }
 
+    /// Radio scanning runs for a short window after Bluetooth comes on (or the
+    /// setting is turned on), then stops; paired controllers that iOS already
+    /// connected are still picked up by the cheap connected-peripheral poll.
+    private static let scanWindow: DispatchTimeInterval = .seconds(30)
+    private var scanStop: DispatchWorkItem?
+
     private func startPeriodicDiscovery() {
         guard scanTimer == nil else { return }
         let timer = DispatchSource.makeTimerSource(queue: bleQueue)
-        timer.schedule(deadline: .now(), repeating: .seconds(3), leeway: .milliseconds(500))
+        timer.schedule(deadline: .now(), repeating: .seconds(5), leeway: .seconds(1))
         timer.setEventHandler { [weak self] in
             self?.pollConnectedPeripherals()
         }
@@ -774,11 +827,21 @@ final class SteamControllerManager: NSObject, @unchecked Sendable, CBCentralMana
         central?.scanForPeripherals(withServices: [Self.valveServiceCBUUID], options: [
             CBCentralManagerScanOptionAllowDuplicatesKey: false
         ])
+        let stop = DispatchWorkItem { [weak self] in
+            guard let self, let central = self.central, central.isScanning else { return }
+            central.stopScan()
+            LogStore.shared.log("[steam-pad] Bluetooth scan window ended")
+        }
+        scanStop = stop
+        bleQueue.asyncAfter(deadline: .now() + Self.scanWindow, execute: stop)
     }
 
     private func stopPeriodicDiscovery() {
         scanTimer?.cancel()
         scanTimer = nil
+        scanStop?.cancel()
+        scanStop = nil
+        if let central, central.state == .poweredOn, central.isScanning { central.stopScan() }
     }
 
     private func updateLizardWatchdog() {
@@ -1054,6 +1117,27 @@ final class SteamControllerManager: NSObject, @unchecked Sendable, CBCentralMana
 
         if updatedInput {
             onValueChanged?()
+        }
+    }
+}
+
+
+// MARK: - Settings
+
+/// Settings › Steam Controller. Off by default: turning it on asks for Bluetooth.
+struct SteamControllerSettingsSection: View {
+    @State private var on = SteamControllerManager.enabled
+
+    var body: some View {
+        Section {
+            Toggle("Steam Controller over Bluetooth", isOn: Binding(get: { on }, set: { value in
+                on = value
+                SteamControllerManager.shared.setEnabled(value)
+            }))
+        } header: {
+            Text("Steam Controller")
+        } footer: {
+            Text("For Valve's Steam Controllers paired over Bluetooth. EmuPC asks for Bluetooth access when you turn this on. Other controllers don't need it.")
         }
     }
 }

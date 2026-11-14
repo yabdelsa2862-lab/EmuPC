@@ -561,7 +561,15 @@ BLE, `0x1304` wireless, `0x1305` 2.4 GHz Puck) or the 2015 BLE Steam Controller
 than a standard MFi/Xbox/DualSense descriptor.
 
 `SteamController.swift` (`SteamControllerManager` + `SteamControllerGCProfileFallback`)
-provides native support across both Bluetooth LE and USB-C / 2.4 GHz Puck connections:
+provides native support across both Bluetooth LE and USB-C / 2.4 GHz Puck connections.
+
+> **Untested on real hardware.** Written from SDL's Steam Controller driver;
+> nobody on the project has run it with a physical controller yet. Reports welcome.
+
+The Bluetooth driver is **off by default**: Settings › Steam Controller ›
+"Steam Controller over Bluetooth" turns it on (and only then does iOS ask for
+Bluetooth access). It scans for 30 seconds after it starts, then only checks
+controllers iOS already has connected, every 5 seconds.
 
 - **Bluetooth LE GATT (`100F6C32-...`)**:
   - Automatically discovers or retrieves paired Steam Controllers and subscribes to
