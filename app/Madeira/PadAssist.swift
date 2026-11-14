@@ -260,6 +260,7 @@ final class PadAssistSensors: @unchecked Sendable {
     /// A controller's motion sensors, which some pads (DualSense, DualShock 4)
     /// keep off until asked, as they cost battery.
     @MainActor static func setControllerGyro(_ on: Bool) {
+        SteamControllerManager.shared.setIMUEnabled(on)
         for controller in GCController.controllers() {
             guard let motion = controller.motion, motion.sensorsRequireManualActivation,
                   motion.sensorsActive != on else { continue }

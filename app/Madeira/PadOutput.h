@@ -24,4 +24,8 @@ void madeira_pad_output_set_slot(int slot, GCController *_Nullable controller);
 /// adaptive triggers go off. 1 re-applies what the game last asked for.
 void madeira_pad_output_set_active(int active);
 
+/// Optional rumble hook for controllers outside GameController (such as BLE Steam Controllers).
+typedef void (*madeira_pad_rumble_callback_f)(int slot, float low, float high);
+void madeira_pad_output_set_custom_rumble(madeira_pad_rumble_callback_f _Nullable callback);
+
 NS_ASSUME_NONNULL_END

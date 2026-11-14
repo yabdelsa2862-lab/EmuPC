@@ -318,6 +318,7 @@ static void on_main(dispatch_block_t block)
 
 static GCController *g_slot[PAD_SLOTS];
 static MadeiraRumble *g_rumble[PAD_SLOTS];
+static madeira_pad_rumble_callback_f g_custom_rumble;
 static struct winios_hidpad_output g_applied;   // the HID output last applied to slot 0
 static int g_applied_valid;                     // 0: apply everything again next pass
 static int g_triggers_set;                      // a trigger mode other than off is on the pad
@@ -462,7 +463,7 @@ static void pad_output_apply(void)
     for (i = 0; i < PAD_SLOTS; i++) {
         struct winios_gamepad_vibration motors;
         float low = 0, high = 0;
-        if (!g_rumble[i]) continue;
+        if (!g_rumble[i] && !g_custom_rumble) continue;
         if (g_xinput && winios_gamepad_get_vibration(i, &motors)) {
             low = winios_xinput_level(motors.left);
             high = winios_xinput_level(motors.right);
@@ -474,6 +475,7 @@ static void pad_output_apply(void)
         if ((low > 0 || high > 0) && g_logged_rumble++ < PAD_LOG_LIMIT)
             fprintf(stderr, "[hidpad-out] ml2107 slot %d rumble low %.2f high %.2f\n", i, low, high);
         [g_rumble[i] setLow:low high:high];
+        if (g_custom_rumble) g_custom_rumble(i, low, high);
     }
     if (g_hid && g_slot[0]) apply_hid(g_slot[0], &out);
 
@@ -496,8 +498,20 @@ void madeira_pad_output_configure(int xinput, int hid)
         winios_gamepad_set_rumble_caps(g_xinput);
         winios_pad_output_set_notify(g_xinput || g_hid ? pad_output_notify : NULL);
         fprintf(stderr, "[hidpad-out] ml2106 session output: xinput-rumble=%d hid=%d\n", g_xinput, g_hid);
-        if (!g_xinput && !g_hid)
-            for (i = 0; i < PAD_SLOTS; i++) [g_rumble[i] stop];
+        if (!g_xinput && !g_hid) {
+            for (i = 0; i < PAD_SLOTS; i++) {
+                [g_rumble[i] stop];
+                if (g_custom_rumble) g_custom_rumble(i, 0, 0);
+            }
+        }
+        pad_output_apply();
+    });
+}
+
+void madeira_pad_output_set_custom_rumble(madeira_pad_rumble_callback_f callback)
+{
+    on_main(^{
+        g_custom_rumble = callback;
         pad_output_apply();
     });
 }
@@ -529,7 +543,10 @@ void madeira_pad_output_set_active(int active)
             pad_output_apply();
             return;
         }
-        for (i = 0; i < PAD_SLOTS; i++) [g_rumble[i] stop];
+        for (i = 0; i < PAD_SLOTS; i++) {
+            [g_rumble[i] stop];
+            if (g_custom_rumble) g_custom_rumble(i, 0, 0);
+        }
         if (g_hid && g_slot[0]) triggers_off(g_slot[0]);
     });
 }

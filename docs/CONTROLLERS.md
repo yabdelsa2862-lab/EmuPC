@@ -551,6 +551,38 @@ the paired Wine source. Rebuild wow64win for a WOW64 configuration. XInput
 the app changes over the existing prebuilt DLLs will not enable the feature.
 No binaries from the larger fork are included here.
 
+## 2026 Steam Controller ("Triton" / "Ibex") and BLE Steam Controller
+
+iOS's `GameController.framework` does not natively synthesize a `GCExtendedGamepad`
+profile for the 2026 Steam Controller (`VID 0x28DE`, PIDs `0x1302` wired, `0x1303`
+BLE, `0x1304` wireless, `0x1305` 2.4 GHz Puck) or the 2015 BLE Steam Controller
+(`0x1106`), because both use Valve's custom BLE GATT service
+(`100F6C32-1735-4313-B402-38567131E5F3`) and vendor-specific HID reports rather
+than a standard MFi/Xbox/DualSense descriptor.
+
+`SteamController.swift` (`SteamControllerManager` + `SteamControllerGCProfileFallback`)
+provides native support across both Bluetooth LE and USB-C / 2.4 GHz Puck connections:
+
+- **Bluetooth LE GATT (`100F6C32-...`)**:
+  - Automatically discovers or retrieves paired Steam Controllers and subscribes to
+    2026 Triton/Ibex input reports (`0x45` on `100F6C7A-...`, `0x47` on `100F6C7C-...`,
+    `0x42` on `100F6C77-...`), battery status reports (`0x43` on `100F6C78-...`), and
+    2015 BLE input reports (`0x03` on `100F6C33-...`).
+  - Disables BLE Lizard Mode on connect and refreshes every 3 s (`[0x87, 0x03, 0x09, 0x00, 0x00]`
+    on `100F6C34-...`) so the controller does not synthesize conflicting keyboard/mouse
+    HID events on iOS.
+  - Maps dual thumbsticks, analog triggers (plus digital full-pull trigger click bits),
+    A/B/X/Y, LB/RB, D-pad, View/Menu, Steam + Quick Access (`•••`) to Guide, L3/R3,
+    back grip buttons (`L4 -> L3`, `R4 -> R3`, `L5 -> A`, `R5 -> B`), dual trackpads
+    (deflecting the right stick when the right thumbstick is at rest in XInput mode,
+    and mapping to the two-finger `1920x1080` DualSense touchpad + click in HID mode),
+    6-axis IMU (for Gyro Aim and DualSense HID motion), and 9-byte `0x80` haptic
+    rumble output reports (`100F6CB5-...`) refreshed within the hardware's 50 ms watchdog.
+- **USB-C / 2.4 GHz Puck fallback (`GCPhysicalInputProfile`)**:
+  - When iOS attaches a wired or puck-connected Steam Controller to `GCController`
+    with `extendedGamepad == nil`, `SteamControllerGCProfileFallback` samples its raw
+    `physicalInputProfile` axes, buttons, and D-pad directly.
+
 ## Validation
 
 Run on a POSIX host with a C compiler and Swift installed:
@@ -562,6 +594,7 @@ python3 tests/host/check-control-presets.py
 python3 tests/host/check-hidpad.py      # needs the wine submodule or WINE_SRC
 python3 tests/host/check-pad-output.py
 python3 tests/host/check-pad-assist.py
+python3 tests/host/check-steam-controller.py
 ```
 
 `wine/tools/tests/xinput-host.c` and `wine/tools/tests/wgi-host-pads.c` are

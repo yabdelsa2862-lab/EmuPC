@@ -231,6 +231,8 @@
 		A1000960 /* LibraryGridLevels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000960 /* LibraryGridLevels.swift */; };
 		A1000401 /* GuestDisplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000401 /* GuestDisplay.swift */; };
 		A1000243 /* GamepadInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000243 /* GamepadInput.swift */; };
+		A1000249 /* SteamController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000249 /* SteamController.swift */; };
+		A1000309 /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A2000309 /* CoreBluetooth.framework */; };
 		A1000260 /* PadKeyboardMouse.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000260 /* PadKeyboardMouse.swift */; };
 		A1000F51 /* PadAssist.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000F51 /* PadAssist.swift */; };
 		A1000244 /* Winios/WiniosGamepad.c in Sources */ = {isa = PBXBuildFile; fileRef = A2000244 /* Winios/WiniosGamepad.c */; };
@@ -543,6 +545,8 @@
 		A2000960 /* LibraryGridLevels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LibraryGridLevels.swift"; sourceTree = "<group>"; };
 		A2000401 /* GuestDisplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestDisplay.swift; sourceTree = "<group>"; };
 		A2000243 /* GamepadInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GamepadInput.swift"; sourceTree = "<group>"; };
+		A2000249 /* SteamController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SteamController.swift"; sourceTree = "<group>"; };
+		A2000309 /* CoreBluetooth.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreBluetooth.framework; path = System/Library/Frameworks/CoreBluetooth.framework; sourceTree = SDKROOT; };
 		A2000260 /* PadKeyboardMouse.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PadKeyboardMouse.swift"; sourceTree = "<group>"; };
 		A2000F51 /* PadAssist.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PadAssist.swift"; sourceTree = "<group>"; };
 		A2000244 /* Winios/WiniosGamepad.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "Winios/WiniosGamepad.c"; sourceTree = "<group>"; };
@@ -600,6 +604,7 @@
 				A1000302 /* CoreVideo.framework in Frameworks */,
 				A1000303 /* AudioToolbox.framework in Frameworks */,
 				A1000304 /* CoreFoundation.framework in Frameworks */,
+				A1000309 /* CoreBluetooth.framework in Frameworks */,
 				A1000305 /* libavformat.a in Frameworks */,
 				A1000306 /* libavcodec.a in Frameworks */,
 				A1000307 /* libswresample.a in Frameworks */,
@@ -748,6 +753,7 @@
 				A2000203 /* HardwareInput.swift */,
 				A2000281 /* Winios/WiniosCursor.c */,
 				A2000243 /* GamepadInput.swift */,
+				A2000249 /* SteamController.swift */,
 				A2000260 /* PadKeyboardMouse.swift */,
 				A2000F51 /* PadAssist.swift */,
 				A2000002 /* ContentView.swift */,
@@ -904,6 +910,7 @@
 				A2000302 /* CoreVideo.framework */,
 				A2000303 /* AudioToolbox.framework */,
 				A2000304 /* CoreFoundation.framework */,
+				A2000309 /* CoreBluetooth.framework */,
 				A2000305 /* libavformat.a */,
 				A2000306 /* libavcodec.a */,
 				A2000307 /* libswresample.a */,
@@ -1227,6 +1234,7 @@
 				A1000203 /* HardwareInput.swift in Sources */,
 				A1000281 /* Winios/WiniosCursor.c in Sources */,
 				A1000243 /* GamepadInput.swift in Sources */,
+				A1000249 /* SteamController.swift in Sources */,
 				A1000260 /* PadKeyboardMouse.swift in Sources */,
 				A1000F51 /* PadAssist.swift in Sources */,
 				A1000002 /* ContentView.swift in Sources */,

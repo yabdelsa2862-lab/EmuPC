@@ -28,7 +28,7 @@ enum InterfaceMode: String, CaseIterable, Identifiable {
 /// Which front end shows now: the setting, and whether a controller is connected.
 final class InterfaceState: ObservableObject {
     static let shared = InterfaceState()
-    @Published private(set) var controllerConnected = !GCController.controllers().isEmpty
+    @Published private(set) var controllerConnected = !GCController.controllers().isEmpty || SteamControllerManager.shared.hasConnectedController
     /// Menu in the controller home opens the touch library until a controller
     /// connects again or the setting changes.
     @Published var showTouchForNow = false
@@ -36,11 +36,19 @@ final class InterfaceState: ObservableObject {
 
     private init() {
         let center = NotificationCenter.default
-        for name in [Notification.Name.GCControllerDidConnect, .GCControllerDidDisconnect] {
-            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+        let names = [
+            Notification.Name.GCControllerDidConnect,
+            .GCControllerDidDisconnect,
+            SteamControllerManager.didConnectNotification,
+            SteamControllerManager.didDisconnectNotification
+        ]
+        for name in names {
+            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 guard let self else { return }
-                let connected = !GCController.controllers().isEmpty
-                if name == .GCControllerDidConnect { showTouchForNow = false }
+                let connected = !GCController.controllers().isEmpty || SteamControllerManager.shared.hasConnectedController
+                if name == .GCControllerDidConnect || name == SteamControllerManager.didConnectNotification {
+                    showTouchForNow = false
+                }
                 if connected != controllerConnected {
                     controllerConnected = connected
                     LogStore.shared.log("[interface] controller \(connected ? "connected" : "disconnected")")
@@ -1873,6 +1881,7 @@ struct BatteryIndicator: View {
         state = UIDevice.current.batteryState
         let controller = GCController.current ?? GCController.controllers().first
         pad = controller?.battery.map { $0.batteryLevel }.flatMap { $0 > 0 ? $0 : nil }
+            ?? SteamControllerManager.shared.primaryBatteryLevel
     }
 }
 

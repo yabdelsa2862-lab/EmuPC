@@ -2591,7 +2591,9 @@ final class PadStickMouse: ObservableObject {
         started = true
         let nc = NotificationCenter.default
         for name in [Notification.Name.GCControllerDidConnect, .GCControllerDidDisconnect,
-                     .GCControllerDidBecomeCurrent] {
+                     .GCControllerDidBecomeCurrent,
+                     SteamControllerManager.didConnectNotification,
+                     SteamControllerManager.didDisconnectNotification] {
             nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 self?.refreshControllers()
             }
@@ -2623,7 +2625,7 @@ final class PadStickMouse: ObservableObject {
         let pads = GCController.controllers().filter { $0.extendedGamepad != nil }
         let current = GCController.current.flatMap { c in pads.contains { $0 === c } ? c : nil }
         profile = (current ?? pads.first)?.extendedGamepad
-        let connected = profile != nil
+        let connected = profile != nil || SteamControllerManager.shared.hasConnectedController
         if connected != controllerConnected {
             controllerConnected = connected
             HardwareInput.shared.controllersChanged()
@@ -2632,7 +2634,7 @@ final class PadStickMouse: ObservableObject {
     }
 
     private func update() {
-        let want = appActive && wanted && profile != nil
+        let want = appActive && wanted && (profile != nil || SteamControllerManager.shared.hasConnectedController)
         if want, link == nil {
             carry.reset()
             let l = CADisplayLink(target: self, selector: #selector(tick(_:)))
@@ -2649,9 +2651,20 @@ final class PadStickMouse: ObservableObject {
     @objc private func tick(_ l: CADisplayLink) {
         // Keyboard-and-mouse controller mode (PadKeyboardMouse) owns the stick:
         // moving the mouse here as well would double it.
-        guard let p = profile, HardwareInput.shared.baseFocused, !GamepadInput.shared.keyboardMouseOn else { return }
-        let f = StickVelocity.frame(x: Double(p.rightThumbstick.xAxis.value),
-                                    y: Double(p.rightThumbstick.yAxis.value),
+        guard HardwareInput.shared.baseFocused, !GamepadInput.shared.keyboardMouseOn else { return }
+        let rx: Double
+        let ry: Double
+        if let p = profile {
+            rx = Double(p.rightThumbstick.xAxis.value)
+            ry = Double(p.rightThumbstick.yAxis.value)
+        } else if let snap = SteamControllerManager.shared.snapshot(slot: 0) {
+            rx = Double(snap.rx) / 32767.0
+            ry = Double(snap.ry) / 32767.0
+        } else {
+            return
+        }
+        let f = StickVelocity.frame(x: rx,
+                                    y: ry,
                                     gain: InputSettings.shared.sensRel,
                                     dt: l.targetTimestamp - l.timestamp)
         guard f.dx != 0 || f.dy != 0 else { return }

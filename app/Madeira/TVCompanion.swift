@@ -38,7 +38,13 @@ final class TVCompanionModel: ObservableObject {
     private init() {
         refreshControllers()
         let center = NotificationCenter.default
-        for name in [Notification.Name.GCControllerDidConnect, .GCControllerDidDisconnect] {
+        let names = [
+            Notification.Name.GCControllerDidConnect,
+            .GCControllerDidDisconnect,
+            SteamControllerManager.didConnectNotification,
+            SteamControllerManager.didDisconnectNotification
+        ]
+        for name in names {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 self?.refreshControllers()
             })
@@ -51,7 +57,8 @@ final class TVCompanionModel: ObservableObject {
     }
 
     private func refreshControllers() {
-        let now = GCController.controllers().contains { $0.extendedGamepad != nil }
+        let now = GCController.controllers().contains { $0.extendedGamepad != nil || SteamControllerGCProfileFallback.isCandidate($0) }
+            || SteamControllerManager.shared.hasConnectedController
         guard now != controllerConnected else { return }
         controllerConnected = now
         LogStore.shared.log("[tv-companion] controller \(now ? "connected" : "disconnected"): \(mode.rawValue)")
