@@ -566,7 +566,7 @@ provides native support across both Bluetooth LE and USB-C / 2.4 GHz Puck connec
 > **Untested on real hardware.** Written from SDL's Steam Controller driver;
 > nobody on the project has run it with a physical controller yet. Reports welcome.
 
-The Bluetooth driver is **off by default**: Settings › Steam Controller ›
+The Bluetooth driver is **off by default**: Settings › Controllers ›
 "Steam Controller over Bluetooth" turns it on (and only then does iOS ask for
 Bluetooth access). It scans for 30 seconds after it starts, then only checks
 controllers iOS already has connected, every 5 seconds.

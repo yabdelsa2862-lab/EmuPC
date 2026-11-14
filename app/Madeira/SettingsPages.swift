@@ -15,7 +15,7 @@ enum SettingsPages {
     static var enabled: Bool { MadeiraConfig.flag("MADEIRA_SETTINGS_PAGES") }
 
     enum Page: Hashable, CaseIterable {
-        case steam, gog, itch, epic, ea, runtimes, graphics, display, memory, pointer, jit, signing, saves, drives,
+        case steam, gog, itch, epic, ea, runtimes, graphics, display, memory, pointer, controllers, jit, signing, saves, drives,
              appearance, advanced, credits
 
         var title: String {
@@ -30,6 +30,7 @@ enum SettingsPages {
             case .display: return "Display"
             case .memory: return "Memory and sync"
             case .pointer: return "Pointer and touch"
+            case .controllers: return "Controllers"
             case .jit: return "JIT"
             case .signing: return "Signing"
             case .saves: return "Saves and backups"
@@ -52,6 +53,7 @@ enum SettingsPages {
             case .display: return "display"
             case .memory: return "memorychip"
             case .pointer: return "cursorarrow"
+            case .controllers: return "gamecontroller.fill"
             case .jit: return "bolt"
             case .signing: return "signature"
             case .saves: return "externaldrive.badge.timemachine"
@@ -81,7 +83,7 @@ enum SettingsPages {
     /// The rows of the Settings tab, in groups.
     static let groups: [(String?, [Page])] = [
         ("Getting games", [.steam, .gog, .itch, .epic, .ea, .runtimes]),
-        ("Running games", [.graphics, .display, .memory, .pointer]),
+        ("Running games", [.graphics, .display, .memory, .pointer, .controllers]),
         ("Device", [.jit, .signing, .saves, .drives]),
         (nil, [.appearance, .advanced, .credits]),
     ]
@@ -176,6 +178,9 @@ struct SettingsPageView: View {
         case .display: DisplayRateSettings()
         case .memory: RuntimeMemorySyncSettings(open: { sheet = $0 }, refresh: refresh)
         case .pointer: Section("Pointer") { LibraryPointerSettings() }
+        case .controllers:
+            RemotePadSettingsSection()
+            SteamControllerSettingsSection()
         case .jit: JITSettingsSection()
         case .signing: SigningSettingsSection()
         case .saves: SavesSection()
