@@ -571,6 +571,15 @@ The Bluetooth driver is **off by default**: Settings › Controllers ›
 Bluetooth access). It scans for 30 seconds after it starts, then only checks
 controllers iOS already has connected, every 5 seconds.
 
+**Layout** (Settings › Controllers › Steam Controller layout, 2026 model): each back
+button (L4, R4, L5, R5) can press any controller button or nothing (defaults L3, R3,
+A, B). Right trackpad: right stick (default), mouse (moves while touched, click =
+left button, speed slider) or nothing. Left trackpad: D-pad clicks (default), right
+mouse button, or nothing. Stored as `steamControllerMap.*` in UserDefaults.
+`env.MADEIRA_STEAM_GRIPS=0` still turns the back buttons off. Not real Steam Input:
+games that read controllers only through Steam Input (Half-Life 2's current build)
+still don't see the pad, but a trackpad mouse makes their menus usable.
+
 - **Bluetooth LE GATT (`100F6C32-...`)**:
   - Automatically discovers or retrieves paired Steam Controllers and subscribes to
     2026 Triton/Ibex input reports (`0x45` on `100F6C7A-...`, `0x47` on `100F6C7C-...`,

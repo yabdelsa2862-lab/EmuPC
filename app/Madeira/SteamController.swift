@@ -70,6 +70,119 @@ struct SteamControllerSnapshot: Equatable, Sendable {
     var touchpadClicked: Bool { leftPadClicked || rightPadClicked }
 }
 
+/// What a back button (L4, R4, L5, R5) of the 2026 Steam Controller presses.
+enum SteamPadBackAction: String, CaseIterable, Identifiable, Sendable {
+    case none, a, b, x, y, lb, rb, l3, r3, view, menu, up, down, left, right
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .none: return "Nothing"
+        case .a: return "A"
+        case .b: return "B"
+        case .x: return "X"
+        case .y: return "Y"
+        case .lb: return "LB"
+        case .rb: return "RB"
+        case .l3: return "L3 (left stick click)"
+        case .r3: return "R3 (right stick click)"
+        case .view: return "View"
+        case .menu: return "Menu"
+        case .up: return "D-pad up"
+        case .down: return "D-pad down"
+        case .left: return "D-pad left"
+        case .right: return "D-pad right"
+        }
+    }
+    var xinput: UInt16 {
+        typealias P = SteamControllerProtocol
+        switch self {
+        case .none: return 0
+        case .a: return P.xinputA
+        case .b: return P.xinputB
+        case .x: return P.xinputX
+        case .y: return P.xinputY
+        case .lb: return P.xinputLeftShoulder
+        case .rb: return P.xinputRightShoulder
+        case .l3: return P.xinputLeftThumb
+        case .r3: return P.xinputRightThumb
+        // Same as the face buttons: Menu is XInput Back, View is Start (SDL's Triton driver).
+        case .view: return P.xinputStart
+        case .menu: return P.xinputBack
+        case .up: return P.xinputDpadUp
+        case .down: return P.xinputDpadDown
+        case .left: return P.xinputDpadLeft
+        case .right: return P.xinputDpadRight
+        }
+    }
+}
+
+/// What the right trackpad does.
+enum SteamPadRightPad: String, CaseIterable, Identifiable, Sendable {
+    case stick, mouse, off
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .stick: return "Right stick"
+        case .mouse: return "Mouse (click to left-click)"
+        case .off: return "Nothing"
+        }
+    }
+}
+
+/// What the left trackpad does.
+enum SteamPadLeftPad: String, CaseIterable, Identifiable, Sendable {
+    case dpad, rightClick, off
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .dpad: return "D-pad (click a side)"
+        case .rightClick: return "Right mouse click"
+        case .off: return "Nothing"
+        }
+    }
+}
+
+/// The player's 2026 Steam Controller layout (Settings › Controllers). The
+/// defaults are the original fixed layout: L4 → L3, R4 → R3, L5 → A, R5 → B,
+/// right trackpad as the right stick, left trackpad clicks as the D-pad.
+struct SteamControllerMapping: Equatable, Sendable {
+    var l4: SteamPadBackAction = .l3
+    var r4: SteamPadBackAction = .r3
+    var l5: SteamPadBackAction = .a
+    var r5: SteamPadBackAction = .b
+    var rightPad: SteamPadRightPad = .stick
+    var leftPad: SteamPadLeftPad = .dpad
+    /// Trackpad mouse speed, 0.25...4.
+    var mouseSpeed: Double = 1
+
+    private static let prefix = "steamControllerMap."
+
+    static func load() -> SteamControllerMapping {
+        let d = UserDefaults.standard
+        var m = SteamControllerMapping()
+        func back(_ key: String, _ fallback: SteamPadBackAction) -> SteamPadBackAction {
+            d.string(forKey: prefix + key).flatMap(SteamPadBackAction.init(rawValue:)) ?? fallback
+        }
+        m.l4 = back("l4", m.l4); m.r4 = back("r4", m.r4); m.l5 = back("l5", m.l5); m.r5 = back("r5", m.r5)
+        m.rightPad = d.string(forKey: prefix + "rightPad").flatMap(SteamPadRightPad.init(rawValue:)) ?? m.rightPad
+        m.leftPad = d.string(forKey: prefix + "leftPad").flatMap(SteamPadLeftPad.init(rawValue:)) ?? m.leftPad
+        if d.object(forKey: prefix + "mouseSpeed") != nil {
+            m.mouseSpeed = min(max(d.double(forKey: prefix + "mouseSpeed"), 0.25), 4)
+        }
+        return m
+    }
+
+    func save() {
+        let d = UserDefaults.standard
+        d.set(l4.rawValue, forKey: Self.prefix + "l4"); d.set(r4.rawValue, forKey: Self.prefix + "r4")
+        d.set(l5.rawValue, forKey: Self.prefix + "l5"); d.set(r5.rawValue, forKey: Self.prefix + "r5")
+        d.set(rightPad.rawValue, forKey: Self.prefix + "rightPad")
+        d.set(leftPad.rawValue, forKey: Self.prefix + "leftPad")
+        d.set(mouseSpeed, forKey: Self.prefix + "mouseSpeed")
+    }
+}
+
 /// Pure packet encoding and decoding for the 2026 Steam Controller ("Triton" / "Ibex",
 /// Valve VID 0x28DE, PIDs 0x1302..0x1305) and 2015 BLE Steam Controller (PID 0x1106).
 enum SteamControllerProtocol {
@@ -225,7 +338,8 @@ enum SteamControllerProtocol {
         _ data: Data,
         reportID: UInt8? = nil,
         mapBackGrips: Bool = true,
-        trackpadStickFallback: Bool = true
+        trackpadStickFallback: Bool = true,
+        mapping: SteamControllerMapping? = nil
     ) -> SteamControllerSnapshot? {
         var bytes = [UInt8](data)
         var effectiveID = reportID
@@ -263,7 +377,12 @@ enum SteamControllerProtocol {
         if rawButtons & tritonButtonDpadLeft != 0      { xi |= xinputDpadLeft }
         if rawButtons & tritonButtonDpadRight != 0     { xi |= xinputDpadRight }
 
-        if mapBackGrips {
+        if let mapping {
+            if rawButtons & tritonButtonL4 != 0 { xi |= mapping.l4.xinput }
+            if rawButtons & tritonButtonR4 != 0 { xi |= mapping.r4.xinput }
+            if rawButtons & tritonButtonL5 != 0 { xi |= mapping.l5.xinput }
+            if rawButtons & tritonButtonR5 != 0 { xi |= mapping.r5.xinput }
+        } else if mapBackGrips {
             if rawButtons & tritonButtonL4 != 0 { xi |= xinputLeftThumb }
             if rawButtons & tritonButtonR4 != 0 { xi |= xinputRightThumb }
             if rawButtons & tritonButtonL5 != 0 { xi |= xinputA }
@@ -316,15 +435,19 @@ enum SteamControllerProtocol {
             || snap.accelX != 0 || snap.accelY != 0 || snap.accelZ != 0
 
         // Trackpad fallback for XInput games when the player uses the trackpads as right stick / D-pad.
+        // With a mapping, a trackpad set to the mouse or to nothing adds nothing here
+        // (SteamControllerManager moves and clicks the mouse itself).
+        let rightAsStick = mapping.map { $0.rightPad == .stick } ?? true
+        let leftAsDpad = mapping.map { $0.leftPad == .dpad } ?? true
         if trackpadStickFallback {
-            if snap.rightPadClicked {
+            if rightAsStick, snap.rightPadClicked {
                 xi |= xinputRightThumb
             }
-            if snap.rightPadTouched, abs(Int(snap.rx)) < 4000, abs(Int(snap.ry)) < 4000 {
+            if rightAsStick, snap.rightPadTouched, abs(Int(snap.rx)) < 4000, abs(Int(snap.ry)) < 4000 {
                 snap.rx = snap.rightPadX
                 snap.ry = snap.rightPadY
             }
-            if snap.leftPadClicked {
+            if leftAsDpad, snap.leftPadClicked {
                 let threshold: Int16 = 8000
                 var dir: UInt16 = 0
                 if snap.leftPadY > threshold { dir |= xinputDpadUp }
@@ -621,6 +744,19 @@ final class SteamControllerManager: NSObject, @unchecked Sendable, CBCentralMana
     private var scanTimer: DispatchSourceTimer?
     private var imuWanted: Bool = false
     private var started: Bool = false
+    /// The player's layout, read on the Bluetooth queue (under `lock`).
+    private var mapping = SteamControllerMapping.load()
+    /// Trackpad mouse: the previous touch point and the sub-pixel carry.
+    private var mousePrev: (x: Int16, y: Int16)?
+    private var mouseCarry: (x: Double, y: Double) = (0, 0)
+    private var mouseLeftDown = false
+    private var mouseRightDown = false
+
+    /// Settings changed the layout: use it from the next report on.
+    func reloadMapping() {
+        let m = SteamControllerMapping.load()
+        lock.lock(); mapping = m; lock.unlock()
+    }
 
     /// Invoked whenever a BLE Steam Controller input report arrives.
     var onValueChanged: (() -> Void)?
@@ -1066,6 +1202,10 @@ final class SteamControllerManager: NSObject, @unchecked Sendable, CBCentralMana
         guard error == nil, let data = characteristic.value, !data.isEmpty else { return }
         let uuid = characteristic.uuid.uuidString.uppercased()
         let mapGrips = ProcessInfo.processInfo.environment["MADEIRA_STEAM_GRIPS"] != "0"
+        let layout: SteamControllerMapping? = {
+            lock.lock(); defer { lock.unlock() }
+            return mapGrips ? mapping : nil
+        }()
 
         lock.lock()
         guard let entry = entries[peripheral.identifier] else {
@@ -1079,7 +1219,8 @@ final class SteamControllerManager: NSObject, @unchecked Sendable, CBCentralMana
             if let snap = SteamControllerProtocol.parseTritonReport(
                 data,
                 reportID: SteamControllerProtocol.reportIDTritonStateBLE,
-                mapBackGrips: mapGrips
+                mapBackGrips: mapGrips,
+                mapping: layout
             ) {
                 entry.snapshot = snap
                 updatedInput = true
@@ -1088,7 +1229,8 @@ final class SteamControllerManager: NSObject, @unchecked Sendable, CBCentralMana
             if let snap = SteamControllerProtocol.parseTritonReport(
                 data,
                 reportID: SteamControllerProtocol.reportIDTritonStateTimestamp,
-                mapBackGrips: mapGrips
+                mapBackGrips: mapGrips,
+                mapping: layout
             ) {
                 entry.snapshot = snap
                 updatedInput = true
@@ -1097,7 +1239,8 @@ final class SteamControllerManager: NSObject, @unchecked Sendable, CBCentralMana
             if let snap = SteamControllerProtocol.parseTritonReport(
                 data,
                 reportID: SteamControllerProtocol.reportIDTritonState,
-                mapBackGrips: mapGrips
+                mapBackGrips: mapGrips,
+                mapping: layout
             ) {
                 entry.snapshot = snap
                 updatedInput = true
@@ -1113,10 +1256,56 @@ final class SteamControllerManager: NSObject, @unchecked Sendable, CBCentralMana
         default:
             break
         }
+        let mouseSnap = updatedInput && entry.snapshot.model == .triton2026 ? entry.snapshot : nil
         lock.unlock()
 
+        if let mouseSnap, let layout { trackpadMouse(mouseSnap, layout) }
         if updatedInput {
             onValueChanged?()
+        }
+    }
+
+    /// Right trackpad as a mouse (moves while touched, click = left button) and
+    /// left trackpad click as the right button, when the layout asks for them.
+    /// Runs on the Bluetooth queue; the moves and clicks post on the main queue.
+    private func trackpadMouse(_ snap: SteamControllerSnapshot, _ layout: SteamControllerMapping) {
+        var dx: Int32 = 0, dy: Int32 = 0
+        var left: Bool? = nil, right: Bool? = nil
+        if layout.rightPad == .mouse {
+            if snap.rightPadTouched {
+                if let prev = mousePrev {
+                    // Pad coordinates are about ±32767 across; up is positive.
+                    let k = 0.045 * layout.mouseSpeed
+                    mouseCarry.x += Double(Int(snap.rightPadX) - Int(prev.x)) * k
+                    mouseCarry.y -= Double(Int(snap.rightPadY) - Int(prev.y)) * k
+                    dx = Int32(mouseCarry.x.rounded(.towardZero))
+                    dy = Int32(mouseCarry.y.rounded(.towardZero))
+                    mouseCarry.x -= Double(dx); mouseCarry.y -= Double(dy)
+                }
+                mousePrev = (snap.rightPadX, snap.rightPadY)
+            } else {
+                mousePrev = nil
+                mouseCarry = (0, 0)
+            }
+            if snap.rightPadClicked != mouseLeftDown { mouseLeftDown = snap.rightPadClicked; left = mouseLeftDown }
+        } else if mouseLeftDown {
+            mouseLeftDown = false; left = false
+        }
+        if layout.leftPad == .rightClick {
+            if snap.leftPadClicked != mouseRightDown { mouseRightDown = snap.leftPadClicked; right = mouseRightDown }
+        } else if mouseRightDown {
+            mouseRightDown = false; right = false
+        }
+        guard dx != 0 || dy != 0 || left != nil || right != nil else { return }
+        DispatchQueue.main.async {
+            // Only while the game has the screen; a release always goes through.
+            let focused = HardwareInput.shared.baseFocused
+            if focused, dx != 0 || dy != 0 {
+                HardwareInput.shared.stickMoved()
+                HardwareInput.shared.postRelative(dx, dy)
+            }
+            if let left, focused || !left { winios_pointer(0, 0, left ? 0x0002 : 0x0004, 0) }    // LEFTDOWN / LEFTUP
+            if let right, focused || !right { winios_pointer(0, 0, right ? 0x0008 : 0x0010, 0) }  // RIGHTDOWN / RIGHTUP
         }
     }
 }
@@ -1128,6 +1317,8 @@ final class SteamControllerManager: NSObject, @unchecked Sendable, CBCentralMana
 struct SteamControllerSettingsSection: View {
     @State private var on = SteamControllerManager.enabled
 
+    @State private var map = SteamControllerMapping.load()
+
     var body: some View {
         Section {
             Toggle("Steam Controller over Bluetooth", isOn: Binding(get: { on }, set: { value in
@@ -1138,6 +1329,46 @@ struct SteamControllerSettingsSection: View {
             Text("Steam Controller")
         } footer: {
             Text("For Valve's Steam Controllers paired over Bluetooth. EmuPC asks for Bluetooth access when you turn this on. Other controllers don't need it.")
+        }
+        if on {
+            Section {
+                backPicker("L4", \.l4)
+                backPicker("R4", \.r4)
+                backPicker("L5", \.l5)
+                backPicker("R5", \.r5)
+                Picker("Right trackpad", selection: binding(\.rightPad)) {
+                    ForEach(SteamPadRightPad.allCases) { Text($0.title).tag($0) }
+                }
+                Picker("Left trackpad", selection: binding(\.leftPad)) {
+                    ForEach(SteamPadLeftPad.allCases) { Text($0.title).tag($0) }
+                }
+                if map.rightPad == .mouse {
+                    LabeledContent("Mouse speed") {
+                        Slider(value: binding(\.mouseSpeed), in: 0.25...4)
+                    }
+                }
+                Button("Reset layout") { update { $0 = SteamControllerMapping() } }
+            } header: {
+                Text("Steam Controller layout")
+            } footer: {
+                Text("2026 Steam Controller. Back buttons can press any controller button. A trackpad set to Mouse moves the pointer, which helps in menus of games that expect Steam Input.")
+            }
+        }
+    }
+
+    private func update(_ change: (inout SteamControllerMapping) -> Void) {
+        change(&map)
+        map.save()
+        SteamControllerManager.shared.reloadMapping()
+    }
+
+    private func binding<T>(_ key: WritableKeyPath<SteamControllerMapping, T>) -> Binding<T> {
+        Binding(get: { map[keyPath: key] }, set: { value in update { $0[keyPath: key] = value } })
+    }
+
+    private func backPicker(_ name: String, _ key: WritableKeyPath<SteamControllerMapping, SteamPadBackAction>) -> some View {
+        Picker(name, selection: binding(key)) {
+            ForEach(SteamPadBackAction.allCases) { Text($0.title).tag($0) }
         }
     }
 }
