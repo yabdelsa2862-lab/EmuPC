@@ -134,6 +134,8 @@ final class LibraryController: ObservableObject, @unchecked Sendable {
         else if pressed & 0x0400 != 0 { command = own ? "guide" : "menu" }
         // Both sticks clicked together (L3 + R3): the controller keyboard, in games and in it.
         else if buttons & 0xC0 == 0xC0, pressed & 0xC0 != 0 { command = "keyboard" }
+        // EmuPC: View + D-pad down in a game mutes or unmutes the microphone.
+        else if !own, buttons & 0x22 == 0x22, pressed & 0x22 != 0 { command = "mic" }
         else if own {
             for (mask, name): (UInt16, String) in [(1, "up"), (2, "down"), (4, "left"), (8, "right"), (0x1000, "accept"), (0x2000, "back"), (0x8000, "add"), (0x4000, "x"), (0x10, "menu"), (0x100, "tabBack"), (0x200, "tab")] {
                 if pressed & mask != 0 { command = name; break }
@@ -1075,6 +1077,7 @@ final class LibraryModel: ObservableObject {
     private var launchDismissLogged = false
     var menuButtonRect = CGRect.zero
     var performanceRect = CGRect.zero
+    var micButtonRect = CGRect.zero
     /// The in-game menu and the starting screen take every touch.
     var blocksGameplayTouch: Bool { preparing != nil || (current != nil && (menu || launching)) }
     private var timer: Timer?
@@ -5718,6 +5721,12 @@ struct LibraryHUD: View {
                         .padding(.bottom, max(geo.safeAreaInsets.bottom, 12) + 8)
                 }
                 StopLaunchPrompt()
+                // EmuPC: the mic pill, top centre (clear of the Dynamic Island in landscape).
+                if !model.startingScreen {
+                    MicIndicator()
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, Self.topInset(geo) + 6)
+                }
                 LowMemoryBanner()
                     .frame(maxWidth: .infinity).padding(.top, Self.topInset(geo) + 8)
                 HStack {
@@ -5790,6 +5799,7 @@ struct LibraryHUD: View {
         .onChange(of: guide.steamOverlay) { _, _ in LibraryController.shared.configure(enabled: model.enabled, ownsInput: frontendOwnsPad) }
         .onReceive(LibraryController.shared.commands) { command in
             if guide.steamOverlay || SteamOverlayPad.open { return }   // SteamFriendsView reads the pad itself
+            if command == "mic" { MicControl.shared.toggle(); return }
             if command == "keyboard" {
                 if padKeyboard.open { padKeyboard.hide() } else if !model.launching { model.menu = false; padKeyboard.show() }
                 return
@@ -6126,6 +6136,14 @@ struct LibraryHUD: View {
                     Button("Gyro aim & turbo", systemImage: "gyroscope") { assistPage = true }
                 }
                 Button("Keyboard", systemImage: "keyboard") { model.menu = false; ControllerKeyboard.openForSession() }
+                Button { MicControl.shared.toggle() } label: {
+                    LabeledContent {
+                        Text(MicControl.shared.status).foregroundStyle(.secondary)
+                    } label: {
+                        Label("Microphone", systemImage: MicControl.shared.muted ? "mic.slash.fill" : "mic.fill")
+                    }
+                }
+                .tint(.primary)
                 Divider()
                 FPSChoice(mode: Binding(get: { model.fpsMode }, set: { model.setFPS($0) }))
                 // Saved to the game with the rest of the session's profile.

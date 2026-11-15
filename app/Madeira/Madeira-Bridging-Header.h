@@ -115,3 +115,10 @@ const char *madeira_phone_pointer_status(void);
 /* WineProcessBridge.m: whether a game turned the microphone on this run (the
  * session then records; SessionDoctor's music mix keeps that category). */
 int madeira_mic_session_active(void);
+/* audio_null_ios.c: the in-game Microphone button. Muted = the game hears
+ * silence (its voice chat stays connected). live = a game records right now;
+ * level = 0..1000, the loudest sample since the previous call. */
+void madeira_mic_set_muted(int muted);
+int madeira_mic_muted(void);
+int madeira_mic_live(void);
+int madeira_mic_level(void);

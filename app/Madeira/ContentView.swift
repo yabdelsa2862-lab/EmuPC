@@ -4382,7 +4382,8 @@ final class ControlsWindow: UIWindow {
         if library.enabled && library.current == nil { return nil }
         if library.current != nil {
             if library.menu || library.launching || library.menuButtonRect.contains(point) ||
-                (library.performance && library.performanceRect.contains(point)) {
+                (library.performance && library.performanceRect.contains(point)) ||
+                (MicControl.shared.pillVisible && library.micButtonRect.contains(point)) {
                 return super.hitTest(point, with: event)
             }
             guard m.hitsInteractive(point, in: bounds, topBar: false) else { return nil }

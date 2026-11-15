@@ -462,6 +462,8 @@ final class InGameGuide: ObservableObject {
         let inviteCount = SteamFriendsModel.shared.invites.count + SteamFriendsModel.shared.joinableFriends.count
         return [
             Item(title: "Resume", value: nil, symbol: "play.fill") { _ in model.menu = false },
+            Item(title: "Microphone", value: MicControl.shared.status,
+                 symbol: MicControl.shared.muted ? "mic.slash.fill" : "mic.fill") { _ in MicControl.shared.toggle() },
             Item(title: "Steam Overlay", value: inviteCount > 0 ? "\(inviteCount)" : nil, symbol: "person.2.fill") { _ in
                 model.menu = false
                 self.steamOverlay = true
@@ -504,6 +506,7 @@ final class InGameGuide: ObservableObject {
         case "left": list[focus].action(-1)
         case "right": list[focus].action(1)
         case "accept": list[focus].action(0)
+        case "x": MicControl.shared.toggle()   // X: mute or unmute from anywhere in the guide
         case "back", "menu": model.menu = false
         default: break
         }
@@ -516,6 +519,7 @@ struct InGameGuideView: View {
     @ObservedObject private var model = LibraryModel.shared
     @ObservedObject private var theme = ThemeSettings.shared
     @ObservedObject private var controls = TouchControlsModel.shared
+    @ObservedObject private var mic = MicControl.shared
     @State private var now = Date()
 
     var body: some View {
@@ -569,6 +573,7 @@ struct InGameGuideView: View {
             }
             HStack(spacing: 16) {
                 ButtonHint(glyph: "a.circle.fill", label: "Select")
+                ButtonHint(glyph: "x.circle.fill", label: mic.muted ? "Unmute" : "Mute")
                 ButtonHint(glyph: "b.circle.fill", label: "Resume")
             }
             .padding(.top, 8)
@@ -617,6 +622,140 @@ struct StopLaunchPrompt: View {
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
                 .foregroundStyle(.white)
             }
+        }
+    }
+}
+
+// MARK: - Microphone
+
+/// EmuPC: the player's microphone in games (voice chat with friends). The
+/// game's capture (audio_null_ios.c) records from the iPhone or the headset;
+/// this mutes it without disconnecting the game's voice chat (the game keeps
+/// getting audio, but silence). Reached from the mic pill at the top of the
+/// screen (tap), the in-game guide (Microphone row, or X anywhere in it) and
+/// View + D-pad down in a game. The choice is kept between games.
+@MainActor
+final class MicControl: ObservableObject {
+    static let shared = MicControl()
+    static let mutedKey = "emupcMicMuted"
+
+    @Published private(set) var muted: Bool
+    /// A game is recording right now.
+    @Published private(set) var live = false
+    /// 0...1, how loud the mic is (for the pill's meter).
+    @Published private(set) var level: Double = 0
+    @Published private(set) var permission = AVAudioApplication.shared.recordPermission
+    /// A short message on the pill after a change ("Mic muted").
+    @Published private(set) var flash: String?
+
+    private var timer: Timer?
+    private var flashTask: Task<Void, Never>?
+
+    private init() {
+        muted = UserDefaults.standard.bool(forKey: Self.mutedKey)
+        madeira_mic_set_muted(muted ? 1 : 0)
+        timer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { _ in
+            MainActor.assumeIsolated { MicControl.shared.poll() }
+        }
+    }
+
+    private func poll() {
+        let now = madeira_mic_live() != 0
+        if live != now { live = now }
+        let raw = Double(madeira_mic_level()) / 1000
+        // a quick rise, a slower fall, so speech reads as a steady glow
+        let next = muted || !now ? 0 : max(raw, level * 0.6)
+        if abs(next - level) > 0.02 { level = next }
+        let p = AVAudioApplication.shared.recordPermission
+        if p != permission { permission = p }
+    }
+
+    /// The guide row's value.
+    var status: String {
+        if permission == .denied { return "Off in iOS Settings" }
+        if muted { return "Muted" }
+        return live ? "On" : "On (not in use)"
+    }
+
+    var pillVisible: Bool { live || muted || flash != nil }
+
+    func toggle() {
+        if permission == .denied {
+            show("Allow EmuPC in Settings › Privacy › Microphone")
+            if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+            return
+        }
+        if permission == .undetermined {
+            // Ask now rather than in the middle of a game's voice chat.
+            let answered: @Sendable (Bool) -> Void = { _ in
+                DispatchQueue.main.async { MainActor.assumeIsolated { MicControl.shared.poll() } }
+            }
+            AVAudioApplication.requestRecordPermission(completionHandler: answered)
+        }
+        set(muted: !muted)
+    }
+
+    func set(muted value: Bool) {
+        muted = value
+        UserDefaults.standard.set(value, forKey: Self.mutedKey)
+        madeira_mic_set_muted(value ? 1 : 0)
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        show(value ? "Mic muted" : "Mic on")
+        if value { level = 0 }
+    }
+
+    private func show(_ text: String) {
+        flash = text
+        flashTask?.cancel()
+        flashTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.6))
+            if !Task.isCancelled { self.flash = nil }
+        }
+    }
+}
+
+/// The mic pill at the top of a running game: shown while the game records,
+/// while muted, and briefly after a change. Tap to mute or unmute.
+struct MicIndicator: View {
+    @ObservedObject private var mic = MicControl.shared
+
+    var body: some View {
+        if mic.pillVisible {
+            Button { mic.toggle() } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: mic.muted ? "mic.slash.fill" : "mic.fill")
+                        .font(.system(size: 13, weight: .bold))
+                        .frame(width: 16)
+                    if !mic.muted && mic.live {
+                        // the meter: five bars lit by the voice's level
+                        HStack(spacing: 2) {
+                            ForEach(0..<5, id: \.self) { i in
+                                Capsule().frame(width: 3, height: 5 + CGFloat(i) * 2)
+                                    .opacity(mic.level > Double(i) * 0.08 + 0.02 ? 1 : 0.25)
+                            }
+                        }
+                    }
+                    if let text = mic.flash {
+                        Text(text).font(.caption.weight(.semibold)).lineLimit(1)
+                    }
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 10).frame(height: 28)
+                .background(mic.muted ? AnyShapeStyle(Color.red.opacity(0.85)) : AnyShapeStyle(.ultraThinMaterial), in: Capsule())
+                .overlay(Capsule().stroke(.white.opacity(0.18)))
+                .shadow(color: .black.opacity(0.35), radius: 6, y: 2)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(mic.muted ? "Microphone muted. Tap to unmute" : "Microphone on. Tap to mute")
+            .background(GeometryReader { g in
+                let rect = g.frame(in: .global)
+                Color.clear
+                    .onAppear { LibraryModel.shared.micButtonRect = rect }
+                    .onChange(of: rect) { _, r in LibraryModel.shared.micButtonRect = r }
+            })
+            .onDisappear { LibraryModel.shared.micButtonRect = .zero }
+            .animation(.easeOut(duration: 0.15), value: mic.flash)
+            .animation(.easeOut(duration: 0.15), value: mic.muted)
         }
     }
 }

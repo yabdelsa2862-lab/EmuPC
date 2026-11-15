@@ -1234,6 +1234,23 @@ static pthread_mutex_t g_mic_life = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_mic_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct ios_stream *g_cap[IOS_MAX_STREAMS];
 static _Atomic int g_mic_running;
+/* EmuPC mute (the in-game Microphone button): the game keeps getting audio, but
+ * silence, so its voice chat stays connected and only stops sending the voice. */
+static _Atomic int g_mic_muted;
+/* Loudest sample since the app last asked, in thousandths (for the mic meter). */
+static _Atomic int g_mic_peak_milli;
+
+void madeira_mic_set_muted(int muted)
+{
+    int was = atomic_exchange(&g_mic_muted, muted ? 1 : 0);
+    if (was != (muted ? 1 : 0))
+        fprintf(stderr, "[ios_mic] %s\n", muted ? "muted by the player" : "unmuted by the player");
+}
+int madeira_mic_muted(void) { return atomic_load(&g_mic_muted); }
+/* 1 while a game records (the input queue runs). */
+int madeira_mic_live(void) { return atomic_load(&g_mic_running); }
+/* 0..1000, the peak since the previous call (0 while muted). */
+int madeira_mic_level(void) { return atomic_exchange(&g_mic_peak_milli, 0); }
 
 static void ios_cap_store(struct ios_stream *s, BYTE *frame, float v)
 {
@@ -1279,6 +1296,17 @@ static void ios_mic_cb(void *user, AudioQueueRef q, AudioQueueBufferRef buf,
     UInt32 n = buf->mAudioDataByteSize / sizeof(float), i;
     int k;
     (void)user; (void)ts; (void)npd; (void)pd;
+    if (atomic_load_explicit(&g_mic_muted, memory_order_relaxed)) {
+        /* the buffer is ours until it is enqueued again: the clients get silence */
+        memset(buf->mAudioData, 0, (size_t)n * sizeof(float));
+    } else {
+        float bp = 0;
+        int milli, cur;
+        for (i = 0; i < n; i++) { float a = x[i] < 0 ? -x[i] : x[i]; if (a > bp) bp = a; }
+        milli = (int)(bp * 1000.0f); if (milli > 1000) milli = 1000;
+        cur = atomic_load_explicit(&g_mic_peak_milli, memory_order_relaxed);
+        if (milli > cur) atomic_store_explicit(&g_mic_peak_milli, milli, memory_order_relaxed);
+    }
     pthread_mutex_lock(&g_mic_lock);
     for (k = 0; k < IOS_MAX_STREAMS; k++)
         if (g_cap[k]) ios_cap_write(g_cap[k], x, n);
