@@ -1,0 +1,55 @@
+diff --git a/src/d3d11/d3d11_texture_device.cpp b/src/d3d11/d3d11_texture_device.cpp
+index dfc927b..18ff1b0 100644
+--- a/src/d3d11/d3d11_texture_device.cpp
++++ b/src/d3d11/d3d11_texture_device.cpp
+@@ -450,6 +450,7 @@ static inline bool IsBCFormatForClamp(uint32_t f) {
+ struct MipClampAutoConfig {
+   bool enabled;
+   uint32_t threshold_mb;
++  uint32_t bias;      /* EmuPC issue #2: d3d11.mipClampAutoBias, default 1 */
+ };
+ 
+ static const MipClampAutoConfig &
+@@ -465,8 +466,13 @@ GetMipClampAutoConfig() {
+     else
+       c.enabled = kMadeira32BitModule;
+     c.threshold_mb = (uint32_t)std::max(0, Config::getInstance().getOption<int>("d3d11.mipClampAutoMB", 1536));
++    /* EmuPC issue #2: on GPUs that cannot sample BC, a texture expanded to
++     * RGBA8 and clamped by one level costs exactly its BC size again; a
++     * Unity game with ~1500 BC3 textures still needed ~1.25 GB that way on a
++     * 4 GB-limit iPad. d3d11.mipClampAutoBias=2 drops two levels (1/16). */
++    c.bias = (uint32_t)std::min(4, std::max(1, Config::getInstance().getOption<int>("d3d11.mipClampAutoBias", 1)));
+     if (c.enabled)
+-      ERR("[mip-clamp] ml2000 auto on threshold=", c.threshold_mb,
++      ERR("[mip-clamp] ml2000 auto on bias=", c.bias, " threshold=", c.threshold_mb,
+           " MB (d3d11.mipClampAuto=0 or MADEIRA_MIP_CLAMP_AUTO=0 disables; d3d11.mipClampAutoMB sets the threshold)");
+     return c;
+   }();
+@@ -498,7 +504,7 @@ MipClampAutoBias(uint32_t width, uint32_t height, uint32_t mip_levels) {
+   const MipClampAutoConfig &cfg = GetMipClampAutoConfig();
+   if (!cfg.enabled || !cfg.threshold_mb || !mip_clamp::AutoSizeEligible(width, height))
+     return 0;
+-  const uint32_t bias = mip_clamp::ClampBias(1, width, height, mip_levels, true);
++  const uint32_t bias = mip_clamp::ClampBias(cfg.bias, width, height, mip_levels, true);
+   if (!bias)
+     return 0;
+ 
+@@ -509,9 +515,16 @@ MipClampAutoBias(uint32_t width, uint32_t height, uint32_t mip_levels) {
+     const int64_t fresh = QueryHeadroomMB(&foot);
+     if (fresh == mip_clamp::kHeadroomUnavailable && headroom == mip_clamp::kHeadroomUnknown)
+       ERR("[mip-clamp] ml2000 auto: memory headroom unavailable here; auto clamp inactive");
+-    headroom = fresh;
++    /* EmuPC issue #2: the query failed once near the limit (headroom ~0) and
++     * that turned the clamp off for good, mid-load. After a valid reading,
++     * a failed one counts as no headroom left: keep clamping. */
++    if (fresh == mip_clamp::kHeadroomUnavailable && headroom >= 0) {
++      headroom = 0;
++    } else {
++      headroom = fresh;
++      g_auto_footprint_mb.store(foot, std::memory_order_relaxed);
++    }
+     g_auto_headroom_mb.store(headroom, std::memory_order_relaxed);
+-    g_auto_footprint_mb.store(foot, std::memory_order_relaxed);
+   }
+ 
+   const bool pressure = mip_clamp::UnderPressure(headroom, cfg.threshold_mb);

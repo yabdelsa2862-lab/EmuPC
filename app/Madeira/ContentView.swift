@@ -3106,17 +3106,26 @@ struct ContentView: View {
                 }
             }
             // EmuPC issue #2: a 6 GB iPad (A16) lets one app use ~4 GB. This GPU
-            // cannot sample BC, so a Unity game's compressed textures were expanded
-            // to RGBA8 and ~1.5 GB of graphics memory got it killed while loading.
-            // With a limit this small, turn on DXMT's pressure clamp (ml2000: large
-            // BC textures lose their top mip only while within 1.5 GB of the limit)
-            // unless an option already chose a clamp. d3d11.mipClampAuto=0 opts out.
+            // cannot sample BC, so a Unity game's ~1500 BC3 textures were expanded
+            // to RGBA8 (~2.2 GB of graphics memory) and it was killed while loading.
+            // With a limit this small, turn on DXMT's pressure clamp: large BC
+            // textures created within 2 GB of the limit drop two mip levels (1/16
+            // the memory; one level only gets back to the BC size). Each option is
+            // added only if no dxmt option sets it; d3d11.mipClampAuto=0 opts out,
+            // and an explicit d3d11.mipClampBC takes over.
             let limitMB = (Int(os_proc_available_memory()) + Int(MemoryProbe.footprint())) >> 20
             if limitMB > 0 && limitMB <= 4608,
-               !dxmtOptions.contains(where: { $0.hasPrefix("d3d11.mipClampAuto") || $0.hasPrefix("d3d11.mipClampBC") }),
+               !dxmtOptions.contains(where: { $0.hasPrefix("d3d11.mipClampBC") }),
                MadeiraConfig.get("env.MADEIRA_MIP_CLAMP_AUTO") == nil {
-                dxmtOptions.append("d3d11.mipClampAuto=1")
-                logStore.log("DXMT config: d3d11.mipClampAuto=1 because the memory limit is \(limitMB) MB (d3d11.mipClampAuto=0 in dxmt turns it off)")
+                var added: [String] = []
+                for (key, value) in [("d3d11.mipClampAuto", "1"), ("d3d11.mipClampAutoBias", "2"), ("d3d11.mipClampAutoMB", "2048")]
+                where !dxmtOptions.contains(where: { $0.hasPrefix(key + "=") }) {
+                    added.append("\(key)=\(value)")
+                }
+                dxmtOptions += added
+                if !added.isEmpty {
+                    logStore.log("DXMT config: \(added.joined(separator: ";")) because the memory limit is \(limitMB) MB (d3d11.mipClampAuto=0 in dxmt turns it off)")
+                }
             }
             // MetalFX spatial upscaling (metalfx-upscale; Game details › MetalFX
             // upscaling writes it to the game's own lines). The D3D12 runtime reads

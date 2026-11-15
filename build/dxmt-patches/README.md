@@ -12,6 +12,7 @@ patch that is already applied, and `apply.sh --revert` takes them out. The
 | Patch | What it fixes |
 |---|---|
 | `0001-d3d9-index-range-per-draw.patch` | A 32-bit Direct3D 9 indexed draw copies only the index bytes it reads, instead of the whole index buffer before every draw after a lock (Call of Duty: Black Ops drew at 2 to 20 FPS). `env.MADEIRA_D3D9_INDEX_RANGE = 0` goes back to the whole copy. Checked by `tests/host/check-d3d9-index-range.py` |
+| `0002-d3d11-mip-clamp-auto-bias.patch` | `d3d11.mipClampAutoBias=N` (1-4, default 1) sets how many top mip levels the automatic clamp (`d3d11.mipClampAuto`) drops. On GPUs that can't sample BC, one level only gets an expanded texture back to its BC size; two levels is 1/16. A failed memory reading after a valid one now counts as no headroom instead of turning the clamp off mid-load. EmuPC issue #2 (6 GB iPad). The shipped 64-bit `d3d11.dll` is dxmt `82a2913` plus this patch |
 
 A patch must apply on the current `dxmt` pin. When the pin moves, rebase the
 patches onto it (or drop a patch the new pin already covers).
