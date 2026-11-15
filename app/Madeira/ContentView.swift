@@ -3105,6 +3105,19 @@ struct ContentView: View {
                     logStore.log("DXMT config: \(parts.joined(separator: ";")) via \(source) (\(parts.count) option\(parts.count == 1 ? "" : "s"))")
                 }
             }
+            // EmuPC issue #2: a 6 GB iPad (A16) lets one app use ~4 GB. This GPU
+            // cannot sample BC, so a Unity game's compressed textures were expanded
+            // to RGBA8 and ~1.5 GB of graphics memory got it killed while loading.
+            // With a limit this small, turn on DXMT's pressure clamp (ml2000: large
+            // BC textures lose their top mip only while within 1.5 GB of the limit)
+            // unless an option already chose a clamp. d3d11.mipClampAuto=0 opts out.
+            let limitMB = (Int(os_proc_available_memory()) + Int(MemoryProbe.footprint())) >> 20
+            if limitMB > 0 && limitMB <= 4608,
+               !dxmtOptions.contains(where: { $0.hasPrefix("d3d11.mipClampAuto") || $0.hasPrefix("d3d11.mipClampBC") }),
+               MadeiraConfig.get("env.MADEIRA_MIP_CLAMP_AUTO") == nil {
+                dxmtOptions.append("d3d11.mipClampAuto=1")
+                logStore.log("DXMT config: d3d11.mipClampAuto=1 because the memory limit is \(limitMB) MB (d3d11.mipClampAuto=0 in dxmt turns it off)")
+            }
             // MetalFX spatial upscaling (metalfx-upscale; Game details › MetalFX
             // upscaling writes it to the game's own lines). The D3D12 runtime reads
             // the key itself; D3D11 games get DXMT's MetalFX swapchain at the same

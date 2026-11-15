@@ -1305,6 +1305,22 @@ static void *ios_pool_warmer_thread( void *arg )
                             (unsigned long long)vmi.compressed >> 20,
                             (unsigned long long)vmi.external >> 20,
                             (unsigned long long)vmi.reusable >> 20, cycle);
+                    /* EmuPC issue #2: on a 4 GB-limit iPad, ~1.5 GB of the
+                     * footprint was none of internal/compressed/external. The
+                     * kernel ledgers name it: graphics = Metal/IOSurface (DXMT
+                     * textures and buffers), media/neural = other tagged IOKit
+                     * memory, purgeable = non-volatile purgeable. limit = what
+                     * jetsam still allows. Only when the kernel filled them. */
+                    if (vmi_cnt >= TASK_VM_INFO_REV4_COUNT)
+                        dprintf(2, "[footprint-ledger] graphics=%lld MB (+%lld compressed) "
+                                "media=%lld MB neural=%lld MB purgeable=%lld MB "
+                                "limit-left=%llu MB (cycle=%u)\n",
+                                (long long)vmi.ledger_tag_graphics_footprint >> 20,
+                                (long long)vmi.ledger_tag_graphics_footprint_compressed >> 20,
+                                (long long)vmi.ledger_tag_media_footprint >> 20,
+                                (long long)vmi.ledger_tag_neural_footprint >> 20,
+                                (long long)vmi.ledger_purgeable_nonvolatile >> 20,
+                                (unsigned long long)vmi.limit_bytes_remaining >> 20, cycle);
                 }
             }
             /* ml566: WHEN does the host malloc zone become corrupt?
@@ -31167,8 +31183,13 @@ static void ios_vm_note_free( void *base, SIZE_T size, ULONG type )
 {
     UINT64 b = (UINT64)(ULONG_PTR)base, w = ios_vm_watch();
     int hits = (w && b <= w && (size == 0 || w < b + size));
+    static int log_all = -1;
     if (b < 0x100000000ull) return;
-    if (hits || ios_vm_free_logged < 3000)
+    /* EmuPC issue #2: the unconditional first 3000 frees were ~1800 lines of
+     * every shared log. Plain frees now log only while a vmwatch address is
+     * set or MADEIRA_VALLOC_LOG_ALL=1; a watch hit always logs. */
+    if (log_all < 0) { const char *e = getenv( "MADEIRA_VALLOC_LOG_ALL" ); log_all = e && e[0] == '1'; }
+    if (hits || ((log_all || w) && ios_vm_free_logged < 3000))
     {
         ios_vm_free_logged++;
         dprintf( 2, "[vfree] ml842 %s base=0x%llx size=0x%llx type=0x%x tid=%04x\n",
