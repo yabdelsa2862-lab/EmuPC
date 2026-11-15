@@ -12,6 +12,7 @@ These patches are for Madeira only and are not to be sent to FEX-Emu.
 | Patch | What it fixes |
 |---|---|
 | `0001-windows-ios-smc-traps-per-16k-host-page.patch` | Self-modifying-code write traps per 16 KB iOS host page, both modules (The Escapists 2, Project Zomboid) |
+| `0002-windows-ios-smc-straddling-writes.patch` | A write that crosses into the next page untraps that page too; it used to fault forever at one address (R.E.P.O. froze loading a level) |
 
 A patch must apply on the current FEX pin. When the pin moves, rebase the
 patches onto it (or drop a patch the new pin already covers).

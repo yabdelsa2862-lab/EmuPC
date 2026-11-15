@@ -1,0 +1,54 @@
+diff --git a/Source/Windows/Common/InvalidationTracker.cpp b/Source/Windows/Common/InvalidationTracker.cpp
+--- a/Source/Windows/Common/InvalidationTracker.cpp
++++ b/Source/Windows/Common/InvalidationTracker.cpp
+@@ -545,6 +545,7 @@
+     if (HotPage) {
+       *HotPage = true;
+     }
++    HandleStraddlingWrite(Thread, HostPc, FaultAddress, HotPage);
+     return true;
+   }
+ 
+@@ -587,11 +588,31 @@
+       }
+     }
+     DetectMonoBackpatcherBlock(Thread, HostPc);
++    HandleStraddlingWrite(Thread, HostPc, FaultAddress, HotPage);
+     return true;
+   }
+   return false;
+ }
+ 
++// MADEIRA straddling writes: a store that starts in the last bytes of a page and ends in
++// the next one faults with the address of its first byte. Only the first page was
++// untrapped, so the store faulted again at the same address, forever: R.E.P.O. (Unity,
++// Mono) froze loading a level with 2.4 million write faults at one pc on ...3FFF. The
++// next page is handled as its own fault too (it returns at once when that page is not
++// tracked). A store is at most 16 bytes here (SIMD q registers; stp is two 8-byte halves).
++void InvalidationTracker::HandleStraddlingWrite(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPc,
++                                                uint64_t FaultAddress, bool* HotPage) {
++  const uint64_t Next = (FaultAddress + 15) & FEXCore::Utils::FEX_PAGE_MASK;
++  if (Next <= FaultAddress) {
++    return;
++  }
++  static std::atomic<uint32_t> LogCount {0};
++  if (LogCount.fetch_add(1, std::memory_order_relaxed) < 8) {
++    LogMan::Msg::EFmt("[smc-straddle] write at {:#x} reaches page {:#x}: untrapping it too", FaultAddress, Next);
++  }
++  HandleRWXAccessViolation(Thread, HostPc, Next, HotPage);
++}
++
+ bool InvalidationTracker::BeginUntrackedWriteLocked(uint64_t Address, uint64_t Size) {
+   return ProtectRWXIntervalsInternal(Address, Size, true);
+ }
+diff --git a/Source/Windows/Common/InvalidationTracker.h b/Source/Windows/Common/InvalidationTracker.h
+--- a/Source/Windows/Common/InvalidationTracker.h
++++ b/Source/Windows/Common/InvalidationTracker.h
+@@ -159,6 +159,7 @@
+   // HotPages is read without the lock: a slot holds a page address or 0.
+   // Returns true when this fault made the page hot. NOTE: HotPagesLock must not be held.
+   bool CountSMCWriteFault(uint64_t Page);
++  void HandleStraddlingWrite(FEXCore::Core::InternalThreadState* Thread, uint64_t HostPc, uint64_t FaultAddress, bool* HotPage);
+   // Forgets hot pages in [Begin, End) when their memory is freed.
+   void ForgetHotSMCPages(uint64_t Begin, uint64_t End);
+ 
