@@ -31,12 +31,12 @@ stores and quality-of-life features on top.
   <img src="docs/screenshots/guide.jpg" alt="The guide, opened with the Xbox button" width="49%">
   <img src="docs/screenshots/download.jpg" alt="A store page while downloading, with the compatibility estimate" width="49%">
 </p>
-<p align="center">
-  <img src="docs/screenshots/touch-library.jpg" alt="The touch library" width="70%">
-</p>
-
 ### In game
 
+<p align="center">
+  <img src="docs/screenshots/ets2-title.jpg" alt="Euro Truck Simulator 2 running at 60 FPS on an iPhone with MetalFX" width="49%">
+  <img src="docs/screenshots/ets2-gameplay.jpg" alt="Euro Truck Simulator 2 in-cab driving at 58 FPS on iPhone in EmuPC" width="49%">
+</p>
 <p align="center">
   <img src="docs/screenshots/quake2.jpg" alt="Quake II PC game running at 72 FPS on an iPhone 16 Pro Max in EmuPC" width="49%">
   <img src="docs/screenshots/quake2-action.jpg" alt="Quake II Windows version played with a controller on iPhone" width="49%">
@@ -45,6 +45,9 @@ stores and quality-of-life features on top.
   <img src="docs/screenshots/mecha-chameleon.jpg" alt="Steam game Mecha Chameleon running on iPhone with EmuPC" width="49%">
   <img src="docs/screenshots/launching.jpg" alt="EmuPC starting a GOG game on iPhone" width="49%">
 </p>
+<p align="center">
+  <img src="docs/screenshots/repo-launch.jpg" alt="Launching R.E.P.O. from Steam inside EmuPC" width="70%">
+</p>
 
 | | |
 |---|---|
@@ -52,7 +55,6 @@ stores and quality-of-life features on top.
 | **Store** | Steam, GOG and Epic Games together, with filters and compatibility badges. |
 | **Guide** | The Xbox button opens it from anywhere: profile, store, settings, restart. |
 | **Store page** | Download progress, download versus installed size, and whether it will run. |
-| **Touch library** | Everything also works by touch when no controller is connected. |
 
 ## What EmuPC adds
 
