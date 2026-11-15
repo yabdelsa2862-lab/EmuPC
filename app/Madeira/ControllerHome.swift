@@ -234,12 +234,40 @@ struct ControllerHome: View {
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
+    /// The Store's lists, built once per change instead of on every redraw: each
+    /// tile used to filter and sort the whole Steam library again, many times a
+    /// frame while the pad moved focus (lag on the Download tab).
+    private final class StoreCache {
+        var key: [Int] = []
+        var filtered: [StoreItem] = []
+        var steamNames: [Int: String] = [:]
+    }
+    @State private var storeCache = StoreCache()
+
+    private var storeCacheKey: [Int] {
+        [storeFilter.rawValue, store.owned.count, steam.games.lazy.filter(\.installed).count,
+         gog.signedIn ? 1 : 0, gog.owned.count, gog.installed.count,
+         epic.signedIn ? 1 : 0, epic.owned.count, epic.installed.count,
+         compat.reports.count, storeCompat.reports.count,
+         store.downloads.count, gog.downloads.count, epic.downloads.count]
+    }
+
+    private func refreshStoreCache() -> StoreCache {
+        let key = storeCacheKey
+        if key != storeCache.key {
+            let steamGames = downloadable
+            storeCache.steamNames = Dictionary(steamGames.map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
+            let items: [StoreItem] = steamGames.map { .steam($0.id) }
+                + (gog.signedIn ? gog.notInstalled.map { .gog($0.id) } : [])
+                + (epic.signedIn ? epic.notInstalled.map { .epic($0.appName) } : [])
+            storeCache.filtered = items.filter(matchesFilter)
+            storeCache.key = key
+        }
+        return storeCache
+    }
+
     /// The Store: Steam games, then GOG games, that are not installed.
     private enum StoreItem: Hashable { case steam(Int), gog(String), epic(String) }
-    private var storeItems: [StoreItem] {
-        downloadable.map { .steam($0.id) } + (gog.signedIn ? gog.notInstalled.map { .gog($0.id) } : [])
-            + (epic.signedIn ? epic.notInstalled.map { .epic($0.appName) } : [])
-    }
     private var focusedStore: StoreItem? {
         let items = filteredStore
         return items.isEmpty ? nil : items[min(downloadFocus, items.count - 1)]
@@ -271,17 +299,17 @@ struct ControllerHome: View {
         case .epic(let app): return epic.downloads[app] != nil
         }
     }
-    private var filteredStore: [StoreItem] {
-        storeItems.filter { item in
-            switch storeFilter {
-            case .all: return true
-            case .steam: if case .steam = item { return true }; return false
-            case .gog: if case .gog = item { return true }; return false
-            case .epic: if case .epic = item { return true }; return false
-            case .ready: return [.tested, .likely].contains(verdict(item))
-            case .offline: return verdict(item) == .offlineOnly
-            case .downloading: return isDownloading(item)
-            }
+    private var filteredStore: [StoreItem] { refreshStoreCache().filtered }
+
+    private func matchesFilter(_ item: StoreItem) -> Bool {
+        switch storeFilter {
+        case .all: return true
+        case .steam: if case .steam = item { return true }; return false
+        case .gog: if case .gog = item { return true }; return false
+        case .epic: if case .epic = item { return true }; return false
+        case .ready: return [.tested, .likely].contains(verdict(item))
+        case .offline: return verdict(item) == .offlineOnly
+        case .downloading: return isDownloading(item)
         }
     }
 
@@ -870,8 +898,8 @@ struct ControllerHome: View {
     private func storeTileInfo(_ item: StoreItem) -> (title: String, source: String, image: URL?, fraction: Double?) {
         switch item {
         case .steam(let id):
-            let g = downloadable.first { $0.id == id }
-            return (g?.name ?? "", "STEAM", SteamCatalog.hero(id), store.downloads[id].map { $0.progress.fraction })
+            let name = refreshStoreCache().steamNames[id]
+            return (name ?? "", "STEAM", SteamCatalog.hero(id), store.downloads[id].map { $0.progress.fraction })
         case .gog(let id):
             let g = gog.owned.first { $0.id == id }
             return (g?.title ?? "", "GOG", g?.image.flatMap(URL.init(string:)), gog.downloads[id].map(\.fraction))

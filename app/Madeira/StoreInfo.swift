@@ -241,8 +241,21 @@ final class StoreDetailsModel: ObservableObject {
         }
     }
 
+    /// Coalesced: browsing the Store fetches many pages in a row, and writing the
+    /// whole file on the main thread for each one stuttered the Download tab.
+    private var persistPending = false
     private func persist() {
-        if let data = try? JSONEncoder().encode(saved) { try? data.write(to: Self.fileURL, options: .atomic) }
+        guard !persistPending else { return }
+        persistPending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self else { return }
+            persistPending = false
+            let snapshot = saved
+            let url = Self.fileURL
+            DispatchQueue.global(qos: .utility).async {
+                if let data = try? JSONEncoder().encode(snapshot) { try? data.write(to: url, options: .atomic) }
+            }
+        }
     }
 
     /// The pictures a page will show, fetched ahead into the image cache.

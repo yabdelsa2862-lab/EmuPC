@@ -746,9 +746,22 @@ final class GameCompatibility: ObservableObject {
         worker = nil
     }
 
+    /// Coalesced and written off the main thread (one write per few seconds, not
+    /// one per game the Store shows).
+    private var savePending = false
     private func save() {
-        try? FileManager.default.createDirectory(at: Self.folder, withIntermediateDirectories: true)
-        try? JSONEncoder().encode(reports).write(to: Self.reportsURL, options: .atomic)
+        guard !savePending else { return }
+        savePending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self else { return }
+            savePending = false
+            let snapshot = reports
+            let folder = Self.folder, url = Self.reportsURL
+            DispatchQueue.global(qos: .utility).async {
+                try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                try? JSONEncoder().encode(snapshot).write(to: url, options: .atomic)
+            }
+        }
     }
 
     // MARK: Sources
