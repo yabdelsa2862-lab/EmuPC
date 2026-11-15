@@ -132,30 +132,20 @@ enum GOGTokenStore {
     private static let service = "madeira.gog.tokens"
     private static let account = "session"
 
+    /// The stored session, `.missing`, or `.unavailable` (Keychain locked: not signed out).
+    static func read() -> StoreKeychain.Read { StoreKeychain.read(service: service, account: account) }
+
     static func load() -> GOGSession? {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-                                    kSecAttrAccount as String: account, kSecReturnData as String: true,
-                                    kSecMatchLimit as String: kSecMatchLimitOne]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
+        guard case .found(let data) = read() else { return nil }
         return try? JSONDecoder().decode(GOGSession.self, from: data)
     }
 
     @discardableResult static func save(_ session: GOGSession) -> Bool {
         guard let data = try? JSONEncoder().encode(session) else { return false }
-        delete()
-        let item: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-                                   kSecAttrAccount as String: account, kSecValueData as String: data,
-                                   kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-                                   kSecAttrSynchronizable as String: false]
-        return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
+        return StoreKeychain.write(data, service: service, account: account)
     }
 
-    static func delete() {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-                                    kSecAttrAccount as String: account]
-        SecItemDelete(query as CFDictionary)
-    }
+    static func delete() { StoreKeychain.delete(service: service, account: account) }
 }
 
 actor GOGAPI {
@@ -216,7 +206,14 @@ actor GOGAPI {
     }
 
     private func stored() -> GOGSession? {
-        if !loaded { session = GOGTokenStore.load(); loaded = true }
+        if !loaded {
+            switch GOGTokenStore.read() {
+            case .found: session = GOGTokenStore.load(); loaded = true
+            case .missing: session = nil; loaded = true
+            // Locked Keychain: not signed out. Leave `loaded` false so the next call reads again.
+            case .unavailable: return nil
+            }
+        }
         return session
     }
 
@@ -248,7 +245,11 @@ actor GOGAPI {
 
     /// A session whose access token is good for at least five more minutes.
     func validSession() async throws -> GOGSession {
-        guard let current = stored() else { throw GOGAPIError.signedOut }
+        guard let current = stored() else {
+            // Keychain locked (not read yet): a network-style failure, never a sign-out.
+            if !loaded { throw URLError(.userAuthenticationRequired) }
+            throw GOGAPIError.signedOut
+        }
         if current.accessExpires.timeIntervalSinceNow > 300 { return current }
         if let refreshing { return try await refreshing.value }
         let task = Task { try await self.token(["grant_type": "refresh_token", "refresh_token": current.refreshToken], userName: current.userName) }

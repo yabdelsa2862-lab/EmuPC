@@ -245,34 +245,23 @@ enum ItchFormat {
     }
 }
 
-/// The Keychain item: service `madeira.itch.key`, this device only, while unlocked.
+/// The Keychain item: service `madeira.itch.key`, this device only (StoreKeychain).
 enum ItchKeyStore {
     private static let service = "madeira.itch.key"
     private static let account = "api-key"
 
+    static func read() -> StoreKeychain.Read { StoreKeychain.read(service: service, account: account) }
+
     static func load() -> String? {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-                                    kSecAttrAccount as String: account, kSecReturnData as String: true,
-                                    kSecMatchLimit as String: kSecMatchLimitOne]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
+        guard case .found(let data) = read() else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
     @discardableResult static func save(_ key: String) -> Bool {
-        delete()
-        let item: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-                                   kSecAttrAccount as String: account, kSecValueData as String: Data(key.utf8),
-                                   kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-                                   kSecAttrSynchronizable as String: false]
-        return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
+        StoreKeychain.write(Data(key.utf8), service: service, account: account)
     }
 
-    static func delete() {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-                                    kSecAttrAccount as String: account]
-        SecItemDelete(query as CFDictionary)
-    }
+    static func delete() { StoreKeychain.delete(service: service, account: account) }
 }
 
 actor ItchAPI {
@@ -281,7 +270,23 @@ actor ItchAPI {
     /// Where a player makes an API key.
     static let keysPage = URL(string: "https://itch.io/user/settings/api-keys")!
 
-    private var key: String? = ItchKeyStore.load()
+    private var cachedKey: String?
+    private var keyLoaded = false
+    /// The API key, read from the Keychain on first use. A locked Keychain is read
+    /// again next time instead of counting as signed out.
+    private var key: String? {
+        get {
+            if !keyLoaded {
+                switch ItchKeyStore.read() {
+                case .found(let data): cachedKey = String(data: data, encoding: .utf8); keyLoaded = true
+                case .missing: cachedKey = nil; keyLoaded = true
+                case .unavailable: break
+                }
+            }
+            return cachedKey
+        }
+        set { cachedKey = newValue; keyLoaded = true }
+    }
 
     var signedIn: Bool { key != nil }
 

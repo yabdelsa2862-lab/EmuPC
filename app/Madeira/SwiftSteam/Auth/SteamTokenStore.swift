@@ -37,41 +37,18 @@ class SteamTokenStore {
             return
         }
 
-        // Delete existing entry first
-        deleteKeychainItem()
-
-        // Add new entry
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: serviceName,
-            kSecAttrAccount as String: "steam_tokens",
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
-        ]
-
-        let status = SecItemAdd(query as CFDictionary, nil)
-        if status == errSecSuccess {
+        // Update in place (StoreKeychain): never delete first, so a failed save
+        // can't lose the sign-in.
+        if StoreKeychain.write(data, service: serviceName, account: "steam_tokens") {
             SteamLog.trace("Tokens saved to Keychain")
         } else {
-            SteamLog.trace("Failed to save tokens to Keychain: \(status)")
+            SteamLog.trace("Failed to save tokens to Keychain")
         }
     }
 
     /// Load tokens from Keychain
     func loadTokens() -> StoredTokens? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: serviceName,
-            kSecAttrAccount as String: "steam_tokens",
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-        guard status == errSecSuccess,
-              let data = result as? Data,
+        guard case .found(let data) = StoreKeychain.read(service: serviceName, account: "steam_tokens"),
               let tokens = try? JSONDecoder().decode(StoredTokens.self, from: data) else {
             return nil
         }

@@ -93,31 +93,20 @@ enum EATokenStore {
     private static let service = "madeira.ea.tokens"
     private static let account = "session"
 
+    /// The stored session, `.missing`, or `.unavailable` (Keychain locked: not signed out).
+    static func read() -> StoreKeychain.Read { StoreKeychain.read(service: service, account: account) }
+
     static func load() -> EASession? {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-                                    kSecAttrAccount as String: account, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
-        var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
+        guard case .found(let data) = read() else { return nil }
         return try? JSONDecoder().decode(EASession.self, from: data)
     }
 
     @discardableResult static func save(_ session: EASession) -> Bool {
         guard let data = try? JSONEncoder().encode(session) else { return false }
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
-        let attributes: [String: Any] = [kSecValueData as String: data,
-                                         kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-                                         kSecAttrSynchronizable as String: false]
-        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        if status == errSecItemNotFound {
-            return SecItemAdd(query.merging(attributes) { $1 } as CFDictionary, nil) == errSecSuccess
-        }
-        return status == errSecSuccess
+        return StoreKeychain.write(data, service: service, account: account)
     }
 
-    static func delete() {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
-        SecItemDelete(query as CFDictionary)
-    }
+    static func delete() { StoreKeychain.delete(service: service, account: account) }
 }
 
 /// The machine EA sees: the values Madeira's Wine reports to a game (EAFormats.swift),
@@ -183,7 +172,14 @@ final class EAAPI: @unchecked Sendable {
 
     private func stored() -> EASession? {
         lock.lock(); defer { lock.unlock() }
-        if !loaded { session = EATokenStore.load(); loaded = true }
+        if !loaded {
+            switch EATokenStore.read() {
+            case .found: session = EATokenStore.load(); loaded = true
+            case .missing: session = nil; loaded = true
+            // Locked Keychain: not signed out. Leave `loaded` false so the next call reads again.
+            case .unavailable: return nil
+            }
+        }
         return session
     }
 
@@ -265,7 +261,11 @@ final class EAAPI: @unchecked Sendable {
 
     /// A session whose access token is good for at least five more minutes.
     func validSession() async throws -> EASession {
-        guard let current = stored() else { throw EAAPIError.signedOut }
+        guard let current = stored() else {
+            // Keychain locked (not read yet): a network-style failure, never a sign-out.
+            if !loaded { throw URLError(.userAuthenticationRequired) }
+            throw EAAPIError.signedOut
+        }
         if current.accessExpires.timeIntervalSinceNow > 300 { return current }
         lock.lock()
         if let refreshing { lock.unlock(); return try await refreshing.value }
