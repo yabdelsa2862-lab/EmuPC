@@ -31,6 +31,7 @@ stores and quality-of-life features on top.
   <img src="docs/screenshots/guide.jpg" alt="The guide, opened with the Xbox button" width="49%">
   <img src="docs/screenshots/download.jpg" alt="A store page while downloading, with the compatibility estimate" width="49%">
 </p>
+
 ### In game
 
 <p align="center">
