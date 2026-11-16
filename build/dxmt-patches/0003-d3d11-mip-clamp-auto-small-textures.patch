@@ -1,0 +1,94 @@
+diff -ru a/src/d3d11/d3d11_mip_clamp_policy.hpp b/src/d3d11/d3d11_mip_clamp_policy.hpp
+--- a/src/d3d11/d3d11_mip_clamp_policy.hpp	2026-11-16 08:12:50
++++ b/src/d3d11/d3d11_mip_clamp_policy.hpp	2026-11-16 08:12:50
+@@ -40,8 +40,15 @@
+   return bias;
+ }
+ 
+-inline bool AutoSizeEligible(uint32_t width, uint32_t height) {
+-  return width >= kAutoMinDimension || height >= kAutoMinDimension;
++inline bool AutoSizeEligible(uint32_t width, uint32_t height, uint32_t min_dim = kAutoMinDimension) {
++  return width >= min_dim || height >= min_dim;
++}
++
++/* EmuPC issue #2: a texture below kAutoMinDimension that is still eligible
++ * (d3d11.mipClampAutoMinDim lowered it) drops one level fewer than the large
++ * ones, but at least one: 2D games draw these at near their full size. */
++inline uint32_t SmallTextureBias(uint32_t bias) {
++  return bias > 1 ? bias - 1 : 1;
+ }
+ 
+ /* Must the headroom be re-read before deciding auto candidate number `n`
+diff -ru a/src/d3d11/d3d11_texture_device.cpp b/src/d3d11/d3d11_texture_device.cpp
+--- a/src/d3d11/d3d11_texture_device.cpp	2026-11-16 08:12:50
++++ b/src/d3d11/d3d11_texture_device.cpp	2026-11-16 08:12:50
+@@ -451,6 +451,7 @@
+   bool enabled;
+   uint32_t threshold_mb;
+   uint32_t bias;      /* EmuPC issue #2: d3d11.mipClampAutoBias, default 1 */
++  uint32_t min_dim;   /* EmuPC issue #2: d3d11.mipClampAutoMinDim, default 1024 */
+ };
+ 
+ static const MipClampAutoConfig &
+@@ -471,8 +472,11 @@
+      * Unity game with ~1500 BC3 textures still needed ~1.25 GB that way on a
+      * 4 GB-limit iPad. d3d11.mipClampAutoBias=2 drops two levels (1/16). */
+     c.bias = (uint32_t)std::min(4, std::max(1, Config::getInstance().getOption<int>("d3d11.mipClampAutoBias", 1)));
++    /* EmuPC issue #2: the same game also creates ~1400 BC3 textures smaller
++     * than 1024 (sprites); unclamped they still held ~1.2 GB as RGBA8. */
++    c.min_dim = (uint32_t)std::min(4096, std::max(64, Config::getInstance().getOption<int>("d3d11.mipClampAutoMinDim", (int)mip_clamp::kAutoMinDimension)));
+     if (c.enabled)
+-      ERR("[mip-clamp] ml2000 auto on bias=", c.bias, " threshold=", c.threshold_mb,
++      ERR("[mip-clamp] ml2000 auto on bias=", c.bias, " min-dim=", c.min_dim, " threshold=", c.threshold_mb,
+           " MB (d3d11.mipClampAuto=0 or MADEIRA_MIP_CLAMP_AUTO=0 disables; d3d11.mipClampAutoMB sets the threshold)");
+     return c;
+   }();
+@@ -497,16 +501,45 @@
+ static std::atomic<int64_t> g_auto_headroom_mb{mip_clamp::kHeadroomUnknown};
+ static std::atomic<int64_t> g_auto_footprint_mb{0};
+ static std::atomic<bool> g_auto_pressure_logged{false};
++static std::atomic<uint64_t> g_auto_skipped_small{0};
++static std::atomic<uint64_t> g_auto_skipped_onelevel{0};
++static std::atomic<uint64_t> g_auto_skipped_bytes{0};
+ 
++/* EmuPC issue #2: count what pressure could not shrink, so a log shows
++ * whether small or single-level textures are what is left. RGBA8 estimate. */
++static void
++NoteAutoSkipped(bool small, uint32_t width, uint32_t height, uint32_t mip_levels) {
++  int64_t headroom = g_auto_headroom_mb.load(std::memory_order_relaxed);
++  if (!mip_clamp::UnderPressure(headroom, GetMipClampAutoConfig().threshold_mb))
++    return;
++  uint64_t bytes = (uint64_t)width * height * 4;
++  if (mip_levels > 1)
++    bytes = bytes * 4 / 3;
++  const uint64_t total = g_auto_skipped_bytes.fetch_add(bytes, std::memory_order_relaxed) + bytes;
++  const uint64_t n = (small ? g_auto_skipped_small : g_auto_skipped_onelevel).fetch_add(1, std::memory_order_relaxed) + 1;
++  if (n == 1 || n % 256 == 0)
++    ERR("[mip-clamp] ml2000 auto not shrunk under pressure: small=", g_auto_skipped_small.load(std::memory_order_relaxed),
++        " one-level=", g_auto_skipped_onelevel.load(std::memory_order_relaxed), " ~", total >> 20,
++        " MB as RGBA8 (last ", width, "x", height, " mips ", mip_levels, ")");
++}
++
+ /* Bias for an auto candidate already known to pass the mipClampBC filter. */
+ static uint32_t
+ MipClampAutoBias(uint32_t width, uint32_t height, uint32_t mip_levels) {
+   const MipClampAutoConfig &cfg = GetMipClampAutoConfig();
+-  if (!cfg.enabled || !cfg.threshold_mb || !mip_clamp::AutoSizeEligible(width, height))
++  if (!cfg.enabled || !cfg.threshold_mb)
+     return 0;
+-  const uint32_t bias = mip_clamp::ClampBias(cfg.bias, width, height, mip_levels, true);
+-  if (!bias)
++  if (!mip_clamp::AutoSizeEligible(width, height, cfg.min_dim)) {
++    NoteAutoSkipped(true, width, height, mip_levels);
+     return 0;
++  }
++  const bool large = mip_clamp::AutoSizeEligible(width, height);
++  const uint32_t bias = mip_clamp::ClampBias(large ? cfg.bias : mip_clamp::SmallTextureBias(cfg.bias),
++                                             width, height, mip_levels, true);
++  if (!bias) {
++    NoteAutoSkipped(false, width, height, mip_levels);
++    return 0;
++  }
+ 
+   const uint64_t n = g_auto_candidates.fetch_add(1, std::memory_order_relaxed) + 1;
+   int64_t headroom = g_auto_headroom_mb.load(std::memory_order_relaxed);

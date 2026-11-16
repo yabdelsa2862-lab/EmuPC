@@ -3121,7 +3121,7 @@ struct ContentView: View {
                !dxmtOptions.contains(where: { $0.hasPrefix("d3d11.mipClampBC") }),
                MadeiraConfig.get("env.MADEIRA_MIP_CLAMP_AUTO") == nil {
                 var added: [String] = []
-                for (key, value) in [("d3d11.mipClampAuto", "1"), ("d3d11.mipClampAutoBias", "2"), ("d3d11.mipClampAutoMB", "2048")]
+                for (key, value) in [("d3d11.mipClampAuto", "1"), ("d3d11.mipClampAutoBias", "2"), ("d3d11.mipClampAutoMB", "2048"), ("d3d11.mipClampAutoMinDim", "512")]
                 where !dxmtOptions.contains(where: { $0.hasPrefix(key + "=") }) {
                     added.append("\(key)=\(value)")
                 }
