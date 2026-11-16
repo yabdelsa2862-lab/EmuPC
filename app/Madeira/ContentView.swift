@@ -1734,8 +1734,11 @@ struct ContentView: View {
         logStore.log("  extended-virtual-addressing: \(ents.extendedVA)", level: ents.extendedVA ? .success : .debug)
         // The memory limit is the entitlement a session needs; the address map may
         // be the standard 63 GB one.
-        if !ents.increasedMemory {
-            logStore.log("  Tip: Use GetMoreRam to add increased-memory-limit", level: .info)
+        if !ents.increasedMemory || !ents.extendedVA {
+            // EmuPC issue #3: without extended virtual addressing a large 64-bit
+            // game can crash before its window (no room for its reservations).
+            let missing = [ents.increasedMemory ? nil : "increased-memory-limit", ents.extendedVA ? nil : "extended-virtual-addressing"].compactMap { $0 }
+            logStore.log("  Tip: Use GetMoreRam to add \(missing.joined(separator: " and "))", level: .info)
         }
     }
 

@@ -263,7 +263,14 @@ enum DockStartStatus {
     /// non-zero result is a failure too. nil when the start goes on.
     static func failure(result: Int?, words: String?, launching: Bool) -> String? {
         guard let result, launching || result != 0 else { return nil }
-        return words ?? "Madeira Dock exited before a game window appeared. Export the diagnostic log."
+        if let words { return words }
+        // EmuPC issue #3: without extended virtual addressing iOS guards most of the
+        // address space, and a large 64-bit game (Unity reserves 512 MB blocks)
+        // crashes before its window. Say so instead of only "exported the log".
+        if !EntitlementStatus.check().extendedVA {
+            return "Madeira Dock exited before a game window appeared. EmuPC is signed without extended virtual addressing, so large 64-bit games often run out of memory space. Add it with GetMoreRam, re-sign EmuPC, then try again."
+        }
+        return "Madeira Dock exited before a game window appeared. Export the diagnostic log."
     }
 }
 

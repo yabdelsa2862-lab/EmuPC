@@ -90,6 +90,12 @@ enum LogSummary {
         var smallPool = false
         var poolAllocationFailed = false
         var guestWindowFailed = false
+        /// EmuPC issue #3: reservations of 256 MB or more refused for lack of address
+        /// space ([alloc-fail] status=c0000017), and whether the app has
+        /// extended virtual addressing ("extended-virtual-addressing: true").
+        var bigReserveFailed = 0
+        var bigReserveMB: UInt64 = 0
+        var extendedVA: Bool?
         var poolPeak: UInt64 = 0
         var poolTotal: UInt64 = 0
         var exhausted = 0
@@ -153,6 +159,17 @@ enum LogSummary {
                 facts.lastTime = time
             }
             if line.contains("Running full Wine sequence") { facts.sawSession = true }
+            if line.contains("extended-virtual-addressing: ") {
+                facts.extendedVA = line.hasSuffix("true")
+            }
+            if let r = line.range(of: "[alloc-fail] ") {
+                let fields = LogSummary.fields(String(line[r.upperBound...]))
+                if fields["status"] == "c0000017", let size = fields["size"].flatMap({ UInt64($0.dropFirst(2), radix: 16) }),
+                   size >= 256 << 20 {
+                    facts.bigReserveFailed += 1
+                    facts.bigReserveMB = max(facts.bigReserveMB, LogSummary.mb(size))
+                }
+            }
             if let r = line.range(of: "[WineProc] Target exe: ") {
                 facts.sawSession = true
                 // "C:\Program Files\...\Game.exe (bundle=...)": the path has spaces, so the
@@ -288,6 +305,12 @@ enum LogSummary {
         }
         if f.guestWindowFailed {
             problems.append("A 32-bit program could not reserve its 4 GB guest-memory window. See the [wow-window] lines in the full log for the reservation failure.")
+        }
+        if f.bigReserveFailed > 0 {
+            problems.append("The game could not reserve memory space \(f.bigReserveFailed)x (\(f.bigReserveMB) MB blocks): the address space was full, and the game usually crashes right after."
+                + (f.extendedVA == false
+                    ? " EmuPC is signed without extended virtual addressing, which leaves too little space for large 64-bit games (Unity games reserve 512 MB blocks). Add it with GetMoreRam, then re-sign EmuPC."
+                    : ""))
         }
         if f.smallPool, let mb = f.poolMB {
             problems.append("The JIT pool (the memory games' code runs from) got \(mb) MB"
