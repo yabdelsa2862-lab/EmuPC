@@ -318,12 +318,43 @@ enum ButtonLayout {
     static func activate(for entry: LibraryEntry?) {
         let map = entry?.buttonLayout ?? global
         lock.lock(); activeMap = map; lock.unlock()
-        releaseInputs()
+        releaseInputs("layout activated")
         if !map.isEmpty { LogStore.shared.log("[buttons] \(entry?.buttonLayout == nil ? "global" : "game") layout: " + map.sorted { $0.key < $1.key }.map { "\($0.key)->\($0.value)" }.joined(separator: " ")) }
     }
 
     // Keys and mouse buttons held through the layout (player 1's queue only).
     nonisolated(unsafe) private static var heldInputs: Set<String> = []
+    // EmuPC issue #1: keys stuck down after quick switches between mapped keys
+    // and controller buttons. Every release is sent again ~120 ms later (a key
+    // that is already up stays up), in case the game missed the first one.
+    nonisolated(unsafe) private static var echoes: [(target: String, due: UInt64)] = []
+    nonisolated(unsafe) private static var loggedEdges = 0
+    private static let echoDelay: UInt64 = {
+        var tb = mach_timebase_info_data_t(); mach_timebase_info(&tb)
+        return 120_000_000 * UInt64(tb.denom) / UInt64(tb.numer)
+    }()
+
+    private static func note(_ t: String, down: Bool, _ why: String) {
+        guard loggedEdges < 400 else { return }
+        loggedEdges += 1
+        LogStore.shared.log("[buttons] \(label(t)) \(down ? "down" : "up") (\(why))")
+    }
+
+    /// Sends the release echoes that are due; called with each pad sample.
+    private static func flushEchoes(holding: Set<String>) {
+        guard !echoes.isEmpty else { return }
+        let now = mach_absolute_time()
+        lock.lock()
+        let due = echoes.filter { $0.due <= now }.map(\.target)
+        echoes.removeAll { $0.due <= now }
+        lock.unlock()
+        for t in Set(due) where !holding.contains(t) { post(t, down: false) }
+    }
+
+    private static func release(_ t: String, _ why: String) {
+        post(t, down: false); note(t, down: false, why)
+        lock.lock(); echoes.append((t, mach_absolute_time() + echoDelay)); lock.unlock()
+    }
 
     private static func post(_ target: String, down: Bool) {
         if target == mouseLeft { winios_pointer(0, 0, down ? 0x0002 : 0x0004, 0) }        // LEFTDOWN / LEFTUP
@@ -332,9 +363,10 @@ enum ButtonLayout {
     }
 
     /// Lets go of every key and mouse button the layout is holding.
-    static func releaseInputs() {
+    static func releaseInputs(_ why: String) {
         lock.lock(); let held = heldInputs; heldInputs = []; lock.unlock()
-        for t in held { post(t, down: false) }
+        for t in held { release(t, why) }
+        flushEchoes(holding: [])
     }
 
     /// The pad state with the running game's layout applied. The guide (Home) bit stays.
@@ -364,8 +396,9 @@ enum ButtonLayout {
         }
         if inputs {
             lock.lock(); let old = heldInputs; heldInputs = pressedInputs; lock.unlock()
-            for t in old.subtracting(pressedInputs) { post(t, down: false) }
-            for t in pressedInputs.subtracting(old) { post(t, down: true) }
+            for t in old.subtracting(pressedInputs) { release(t, "button up") }
+            for t in pressedInputs.subtracting(old) { post(t, down: true); note(t, down: true, "button down") }
+            flushEchoes(holding: pressedInputs)
         }
         return out
     }

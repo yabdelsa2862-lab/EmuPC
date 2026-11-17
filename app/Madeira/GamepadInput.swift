@@ -668,6 +668,9 @@ final class GamepadInput: @unchecked Sendable {
             if i == 0, !hasPhysical, keyboardMouse != nil, PadKeyboardMouse.shared.holding {
                 PadKeyboardMouse.shared.releaseAll("controller disconnected")
             }
+            // EmuPC issue #1: the same for keys and clicks a button layout holds
+            // (pad gone, app inactive, or keyboard-and-mouse mode taking over).
+            if i == 0, !(active && hasPhysical) || keyboardMouse != nil { ButtonLayout.releaseInputs("pad idle") }
             let hid = i == 0 && hidActive
             // EmuPC: playing on a TV with the phone as the controller
             // (TVCompanion.swift): the phone's buttons also browse the TV's home screen.
@@ -771,11 +774,11 @@ final class GamepadInput: @unchecked Sendable {
                         hidSteam = nil
                         assisted = true
                         if keyboardMouse != nil { PadKeyboardMouse.shared.releaseAll("library menu") }
-                        ButtonLayout.releaseInputs()
+                        ButtonLayout.releaseInputs("library menu")
                     } else if keyboardMouse == nil {
                         // EmuPC: the game's controller layout (GameTuning.swift).
                         state = ButtonLayout.apply(state, inputs: HardwareInput.shared.baseFocused)
-                        if !HardwareInput.shared.baseFocused { ButtonLayout.releaseInputs() }
+                        if !HardwareInput.shared.baseFocused { ButtonLayout.releaseInputs("unfocused") }
                     } else if let kbm = keyboardMouse {
                         applyAssist(&state, mouse: gyroMouse(physical: true, touch: touchConnected))
                         assisted = true
