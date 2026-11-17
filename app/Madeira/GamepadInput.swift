@@ -771,9 +771,11 @@ final class GamepadInput: @unchecked Sendable {
                         hidSteam = nil
                         assisted = true
                         if keyboardMouse != nil { PadKeyboardMouse.shared.releaseAll("library menu") }
+                        ButtonLayout.releaseInputs()
                     } else if keyboardMouse == nil {
                         // EmuPC: the game's controller layout (GameTuning.swift).
-                        state = ButtonLayout.apply(state)
+                        state = ButtonLayout.apply(state, inputs: HardwareInput.shared.baseFocused)
+                        if !HardwareInput.shared.baseFocused { ButtonLayout.releaseInputs() }
                     } else if let kbm = keyboardMouse {
                         applyAssist(&state, mouse: gyroMouse(physical: true, touch: touchConnected))
                         assisted = true

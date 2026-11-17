@@ -271,13 +271,40 @@ enum ButtonLayout {
         set { UserDefaults.standard.set(newValue.filter { $0.key != $0.value }, forKey: globalKey) }
     }
 
-    /// What a physical button sends under a layout ("none" or a PadButton raw value).
+    /// What a physical button sends under a layout: "none", a PadButton raw value,
+    /// a keyboard key ("key:<VK hex>") or a mouse button ("mouse:left"/"mouse:right").
     static func target(_ button: PadButton, in map: Map) -> String { map[button.rawValue] ?? button.rawValue }
-    static func label(_ target: String) -> String { PadButton(rawValue: target)?.label ?? "Nothing" }
+    static func label(_ target: String) -> String {
+        if let b = PadButton(rawValue: target) { return b.label }
+        if let k = keyTargets.first(where: { $0.value == target }) { return "\(k.label) key" }
+        if target == mouseLeft { return "Left click" }
+        if target == mouseRight { return "Right click" }
+        return "Nothing"
+    }
+
+    // EmuPC issue #1: a button can press a keyboard key or a mouse button while
+    // the rest of the controller stays a controller (ULTRAKILL: X presses F).
+    static let mouseLeft = "mouse:left", mouseRight = "mouse:right"
+    static func keyTarget(_ vk: Int32) -> String { String(format: "key:%02X", vk) }
+    static let keyTargets: [(label: String, value: String)] = {
+        var list: [(String, Int32)] = []
+        for c in UnicodeScalar("A").value...UnicodeScalar("Z").value { list.append((String(UnicodeScalar(c)!), Int32(c))) }
+        for d in 0...9 { list.append(("\(d)", Int32(0x30 + d))) }
+        for f in 1...12 { list.append(("F\(f)", Int32(0x6F + f))) }
+        list += [("Esc", 0x1B), ("Tab", 0x09), ("Space", 0x20), ("Enter", 0x0D), ("Backspace", 0x08),
+                 ("Shift", 0x10), ("Ctrl", 0x11), ("Alt", 0x12), ("Caps Lock", 0x14),
+                 ("Up arrow", 0x26), ("Down arrow", 0x28), ("Left arrow", 0x25), ("Right arrow", 0x27),
+                 ("Insert", 0x2D), ("Delete", 0x2E), ("Home", 0x24), ("End", 0x23), ("Page Up", 0x21), ("Page Down", 0x22),
+                 ("-", 0xBD), ("=", 0xBB), ("[", 0xDB), ("]", 0xDD), (";", 0xBA), ("'", 0xDE),
+                 (",", 0xBC), (".", 0xBE), ("/", 0xBF), ("\\", 0xDC), ("`", 0xC0)]
+        return list.map { ($0.0, keyTarget($0.1)) }
+    }()
+    /// Mouse buttons, then keys: what a button can press outside the controller.
+    static var inputTargets: [String] { [mouseLeft, mouseRight] + keyTargets.map(\.value) }
 
     /// The next choice for a button's target: every button, then nothing.
     static func cycle(_ button: PadButton, in map: inout Map, _ d: Int) {
-        let choices = PadButton.allCases.map(\.rawValue) + [none]
+        let choices = PadButton.allCases.map(\.rawValue) + inputTargets + [none]
         let i = choices.firstIndex(of: target(button, in: map)) ?? 0
         let next = choices[(i + (d < 0 ? choices.count - 1 : 1)) % choices.count]
         if next == button.rawValue { map.removeValue(forKey: button.rawValue) } else { map[button.rawValue] = next }
@@ -291,13 +318,31 @@ enum ButtonLayout {
     static func activate(for entry: LibraryEntry?) {
         let map = entry?.buttonLayout ?? global
         lock.lock(); activeMap = map; lock.unlock()
+        releaseInputs()
         if !map.isEmpty { LogStore.shared.log("[buttons] \(entry?.buttonLayout == nil ? "global" : "game") layout: " + map.sorted { $0.key < $1.key }.map { "\($0.key)->\($0.value)" }.joined(separator: " ")) }
     }
 
+    // Keys and mouse buttons held through the layout (player 1's queue only).
+    nonisolated(unsafe) private static var heldInputs: Set<String> = []
+
+    private static func post(_ target: String, down: Bool) {
+        if target == mouseLeft { winios_pointer(0, 0, down ? 0x0002 : 0x0004, 0) }        // LEFTDOWN / LEFTUP
+        else if target == mouseRight { winios_pointer(0, 0, down ? 0x0008 : 0x0010, 0) }  // RIGHTDOWN / RIGHTUP
+        else if target.hasPrefix("key:"), let vk = Int32(target.dropFirst(4), radix: 16) { winios_post_key(vk, down ? 1 : 0) }
+    }
+
+    /// Lets go of every key and mouse button the layout is holding.
+    static func releaseInputs() {
+        lock.lock(); let held = heldInputs; heldInputs = []; lock.unlock()
+        for t in held { post(t, down: false) }
+    }
+
     /// The pad state with the running game's layout applied. The guide (Home) bit stays.
-    static func apply(_ s: winios_gamepad) -> winios_gamepad {
+    /// `inputs`: press the layout's keys and mouse buttons (player 1 while the game has focus).
+    static func apply(_ s: winios_gamepad, inputs: Bool = false) -> winios_gamepad {
         lock.lock(); let map = activeMap; lock.unlock()
         guard !map.isEmpty else { return s }
+        var pressedInputs: Set<String> = []
         var out = s
         out.buttons = s.buttons & 0x0400
         out.left_trigger = 0; out.right_trigger = 0
@@ -308,12 +353,19 @@ enum ButtonLayout {
             case .rt: analog = s.right_trigger
             default: analog = s.buttons & (button.mask ?? 0) != 0 ? 255 : 0
             }
-            guard analog > 0, let to = PadButton(rawValue: target(button, in: map)) else { continue }
+            let t = target(button, in: map)
+            if analog > 30, t.hasPrefix("key:") || t.hasPrefix("mouse:") { pressedInputs.insert(t); continue }
+            guard analog > 0, let to = PadButton(rawValue: t) else { continue }
             switch to {
             case .lt: out.left_trigger = max(out.left_trigger, analog)
             case .rt: out.right_trigger = max(out.right_trigger, analog)
             default: if analog > 30 { out.buttons |= to.mask ?? 0 }
             }
+        }
+        if inputs {
+            lock.lock(); let old = heldInputs; heldInputs = pressedInputs; lock.unlock()
+            for t in old.subtracting(pressedInputs) { post(t, down: false) }
+            for t in pressedInputs.subtracting(old) { post(t, down: true) }
         }
         return out
     }
@@ -329,6 +381,7 @@ struct ButtonLayoutRows: View {
                 get: { ButtonLayout.target(button, in: map) },
                 set: { v in if v == button.rawValue { map.removeValue(forKey: button.rawValue) } else { map[button.rawValue] = v } })) {
                 ForEach(PadButton.allCases, id: \.self) { Text($0.label).tag($0.rawValue) }
+                ForEach(ButtonLayout.inputTargets, id: \.self) { Text(ButtonLayout.label($0)).tag($0) }
                 Text("Nothing").tag(ButtonLayout.none)
             }
         }
@@ -533,12 +586,14 @@ final class LayoutEditor: ObservableObject {
         }
     }
 
-    /// The command list: the button itself, every other button, nothing.
+    /// The command list: the button itself, every other button, mouse buttons, keys, nothing.
     func choices(_ b: PadButton) -> [String] {
-        [b.rawValue] + PadButton.allCases.filter { $0 != b }.map(\.rawValue) + [ButtonLayout.none]
+        [b.rawValue] + PadButton.allCases.filter { $0 != b }.map(\.rawValue) + ButtonLayout.inputTargets + [ButtonLayout.none]
     }
     func choiceLabel(_ c: String, for b: PadButton) -> String {
-        c == b.rawValue ? "\(b.longLabel) (default)" : PadButton(rawValue: c)?.longLabel ?? "Nothing (off)"
+        if c == b.rawValue { return "\(b.longLabel) (default)" }
+        if let p = PadButton(rawValue: c) { return p.longLabel }
+        return c == ButtonLayout.none ? "Nothing (off)" : ButtonLayout.label(c)
     }
 
     func choose(_ c: String) {
