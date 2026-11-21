@@ -288,13 +288,7 @@ struct OnboardingView: View {
                 .animation(.default, value: pairing.phase)
             }
             .scrollContentBackground(.hidden)
-            .background {
-                ZStack {
-                    ThemeBackdrop()
-                    Color.black.opacity(0.45)
-                }
-                .ignoresSafeArea()
-            }
+            .background { AmbientGlassBackdrop() }
         }
         .preferredColorScheme(.dark)
         .interactiveDismissDisabled()

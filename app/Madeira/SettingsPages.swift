@@ -114,14 +114,7 @@ struct SettingsPagesList: View {
         }
         .scrollContentBackground(colorScheme == .dark ? .hidden : .automatic)
         .background {
-            if colorScheme == .dark {
-                ZStack {
-                    ThemeBackdrop().opacity(0.55)
-                    LinearGradient(colors: [.black.opacity(0.55), .black.opacity(0.35), .black.opacity(0.65)],
-                                   startPoint: .top, endPoint: .bottom)
-                }
-                .ignoresSafeArea()
-            }
+            if colorScheme == .dark { AmbientGlassBackdrop() }
         }
     }
 

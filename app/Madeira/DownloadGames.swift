@@ -371,6 +371,7 @@ struct DownloadGamesView: View {
                         ForEach(Source.allCases, id: \.rawValue) { item in
                             let on = item == source
                             Button {
+                                UISound.shared.play(.move)
                                 withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) { sourceRaw = item.rawValue }
                             } label: {
                                 Text(item.label)
@@ -383,7 +384,6 @@ struct DownloadGamesView: View {
                                             Capsule()
                                                 .fill(theme.accent.color)
                                                 .overlay(Capsule().stroke(.white.opacity(0.45), lineWidth: 1))
-                                                .shadow(color: theme.accent.color.opacity(0.4), radius: 8)
                                         } else {
                                             Capsule()
                                                 .fill(.ultraThinMaterial)
@@ -413,14 +413,7 @@ struct DownloadGamesView: View {
         .listStyle(.insetGrouped)
         .scrollContentBackground(colorScheme == .dark ? .hidden : .automatic)
         .background {
-            if colorScheme == .dark {
-                ZStack {
-                    ThemeBackdrop().opacity(0.55)
-                    LinearGradient(colors: [.black.opacity(0.55), .black.opacity(0.35), .black.opacity(0.65)],
-                                   startPoint: .top, endPoint: .bottom)
-                }
-                .ignoresSafeArea()
-            }
+            if colorScheme == .dark { AmbientGlassBackdrop() }
         }
         .refreshable { await SteamGamesSection.refresh() }
         .onAppear {

@@ -660,9 +660,11 @@ struct ControllerHome: View {
 
     private func openHomeSelection() {
         if focusedHomeID == Self.storeTileID {
+            UISound.shared.play(.select)
             storeInSidebar = false
             withAnimation(.easeInOut(duration: 0.2)) { section = .download }
         } else if focusedHomeID == Self.settingsTileID {
+            UISound.shared.play(.select)
             inOptions = false
             withAnimation(.easeInOut(duration: 0.2)) { section = .settings }
         } else if let game = current {
@@ -776,17 +778,26 @@ struct ControllerHome: View {
     private func openCard(_ game: LibraryEntry) {
         if let id = game.steamAppID ?? game.steamID { StoreDetailsModel.shared.requestSteam(id) }
         UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+        UISound.shared.play(.select)
         cardFocus = 0
         withAnimation(Self.cardSpring) { card = game }
     }
 
     private func closeCard() {
+        UISound.shared.play(.back)
         withAnimation(Self.cardSpring) { card = nil }
     }
 
     private func cardAction(_ entry: LibraryEntry) {
-        if cardFocus == 0 { closeCard(); play(entry) }
-        else { closeCard(); pageFocus = 0; page = entry }
+        if cardFocus == 0 {
+            UISound.shared.play(.launch)
+            withAnimation(Self.cardSpring) { card = nil }
+            play(entry)
+        } else {
+            UISound.shared.play(.select)
+            withAnimation(Self.cardSpring) { card = nil }
+            pageFocus = 0; page = entry
+        }
     }
 
     /// The focused game, grown into a glass card in place: cover, name, a short
@@ -941,18 +952,22 @@ struct ControllerHome: View {
 
     private func gamePage(_ entry: LibraryEntry) -> some View {
         let rows = pageRows(entry)
-        return DetailPanel(side: side, close: { page = nil },
-                           hints: [("a.circle.fill", pageFocus == 0 ? "Play" : "Change"), ("b.circle.fill", "Back")]) {
+        return DetailPanel(side: side, close: { UISound.shared.play(.back); page = nil },
+                           hints: [("a.circle.fill", pageFocus == 0 ? "Play" : "Change"), ("b.circle.fill", "Back")],
+                           scrollTo: "row-\(pageFocus)") {
             LibraryArtwork(entry: entry)
         } backdrop: {
             LibraryArtwork(entry: entry, backdrop: true)
         } content: {
-                    Text(entry.title).font(.largeTitle.weight(.heavy)).lineLimit(2).minimumScaleFactor(0.6)
+                    Text(entry.title).font(.title.weight(.heavy)).lineLimit(2).minimumScaleFactor(0.7)
+                        .padding(.bottom, 4)
                     ForEach(rows.indices, id: \.self) { i in
                         optionRow(rows[i].title, value: rows[i].value, focused: i == pageFocus, prominent: i == 0)
-                            .onTapGesture { pageFocus = i; rows[i].action(i == 0 ? 0 : 1) }
+                            .id("row-\(i)")
+                            .onTapGesture { pageFocus = i; UISound.shared.play(i == 0 ? .launch : .select); rows[i].action(i == 0 ? 0 : 1) }
                     }
                     Text("Left and right change a setting. B to go back.").font(.footnote).foregroundStyle(.secondary)
+                        .padding(.top, 4)
         }
     }
 
@@ -1575,6 +1590,8 @@ struct ControllerHome: View {
                     note: "Behind the home: the focused game's art, a moving aurora, a glow in your accent colour, or plain dark.") { d in theme.cycleBackground(d) },
             Setting(title: "Startup animation", value: theme.startup ? "On" : "Off",
                     note: "Plays when EmuPC opens with a controller.") { _ in theme.startup.toggle() },
+            Setting(title: "UI sound effects", value: theme.sounds ? "On" : "Off",
+                    note: "Subtle ticks and chimes when moving through EmuPC.") { _ in theme.sounds.toggle() },
         ])
         // EmuPC: the global controller layout (GameTuning.swift ButtonLayout).
         let layout = ButtonLayout.global
@@ -1888,10 +1905,13 @@ struct ControllerHome: View {
                 guard !ids.isEmpty else { return }
                 let i = ids.firstIndex(of: focusedHomeID) ?? 0
                 let next = ids[command == "left" ? max(i - 1, 0) : min(i + 1, ids.count - 1)]
-                if next != focusedHomeID { UISelectionFeedbackGenerator().selectionChanged() }
+                if next != focusedHomeID {
+                    UISelectionFeedbackGenerator().selectionChanged()
+                    UISound.shared.play(.move)
+                }
                 focused = next
             case "accept": openHomeSelection()
-            case "add": if let game = current { pageFocus = 0; page = game }
+            case "add": if let game = current { UISound.shared.play(.select); pageFocus = 0; page = game }
             default: break
             }
         case .download:
@@ -1901,22 +1921,22 @@ struct ControllerHome: View {
             if storeInSidebar {
                 let filters = StoreFilter.allCases
                 switch command {
-                case "up": storeFilter = filters[max(storeFilter.rawValue - 1, 0)]; downloadFocus = 0
-                case "down": storeFilter = filters[min(storeFilter.rawValue + 1, filters.count - 1)]; downloadFocus = 0
-                case "right", "accept": if !list.isEmpty { storeInSidebar = false }
-                case "back": withAnimation(.easeInOut(duration: 0.2)) { section = .games }
+                case "up": storeFilter = filters[max(storeFilter.rawValue - 1, 0)]; downloadFocus = 0; UISound.shared.play(.move)
+                case "down": storeFilter = filters[min(storeFilter.rawValue + 1, filters.count - 1)]; downloadFocus = 0; UISound.shared.play(.move)
+                case "right", "accept": if !list.isEmpty { storeInSidebar = false; UISound.shared.play(.select) }
+                case "back": UISound.shared.play(.back); withAnimation(.easeInOut(duration: 0.2)) { section = .games }
                 default: break
                 }
             } else {
                 switch command {
-                case "left": if i % cols == 0 { storeInSidebar = true } else { downloadFocus = i - 1 }
-                case "right": downloadFocus = min(i + 1, max(list.count - 1, 0))
-                case "up": if i - cols >= 0 { downloadFocus = i - cols }
-                case "down": if i + cols < list.count { downloadFocus = i + cols } else if i / cols < (list.count - 1) / cols { downloadFocus = list.count - 1 }
+                case "left": if i % cols == 0 { storeInSidebar = true } else { downloadFocus = i - 1 }; UISound.shared.play(.move)
+                case "right": downloadFocus = min(i + 1, max(list.count - 1, 0)); UISound.shared.play(.move)
+                case "up": if i - cols >= 0 { downloadFocus = i - cols; UISound.shared.play(.move) }
+                case "down": if i + cols < list.count { downloadFocus = i + cols; UISound.shared.play(.move) } else if i / cols < (list.count - 1) / cols { downloadFocus = list.count - 1; UISound.shared.play(.move) }
                 // A opens the game's page (A there downloads); Y downloads from the grid.
-                case "accept": if let item = focusedStore { downloadPageFocus = 0; downloadPage = item }
-                case "add": if let item = focusedStore { runStoreAction(item) }
-                case "back": withAnimation(.easeInOut(duration: 0.2)) { section = .games }
+                case "accept": if let item = focusedStore { UISound.shared.play(.select); downloadPageFocus = 0; downloadPage = item }
+                case "add": if let item = focusedStore { UISound.shared.play(.select); runStoreAction(item) }
+                case "back": UISound.shared.play(.back); withAnimation(.easeInOut(duration: 0.2)) { section = .games }
                 default: break
                 }
             }
@@ -1926,19 +1946,19 @@ struct ControllerHome: View {
             if inOptions {
                 let i = min(settingsFocus, max(items.count - 1, 0))
                 switch command {
-                case "up": settingsFocus = max(i - 1, 0)
-                case "down": settingsFocus = min(i + 1, max(items.count - 1, 0))
-                case "left": if items.indices.contains(i) { items[i].change(-1) }
-                case "right", "accept": if items.indices.contains(i) { items[i].change(1) }
-                case "back": inOptions = false
+                case "up": settingsFocus = max(i - 1, 0); UISound.shared.play(.move)
+                case "down": settingsFocus = min(i + 1, max(items.count - 1, 0)); UISound.shared.play(.move)
+                case "left": if items.indices.contains(i) { items[i].change(-1); UISound.shared.play(.select) }
+                case "right", "accept": if items.indices.contains(i) { items[i].change(1); UISound.shared.play(.select) }
+                case "back": inOptions = false; UISound.shared.play(.back)
                 default: break
                 }
             } else {
                 switch command {
-                case "up": settingsCategory = max(settingsCategory - 1, 0); settingsFocus = 0
-                case "down": settingsCategory = min(settingsCategory + 1, categories.count - 1); settingsFocus = 0
-                case "right", "accept": inOptions = true
-                case "back": withAnimation(.easeInOut(duration: 0.2)) { section = .games }
+                case "up": settingsCategory = max(settingsCategory - 1, 0); settingsFocus = 0; UISound.shared.play(.move)
+                case "down": settingsCategory = min(settingsCategory + 1, categories.count - 1); settingsFocus = 0; UISound.shared.play(.move)
+                case "right", "accept": inOptions = true; UISound.shared.play(.select)
+                case "back": UISound.shared.play(.back); withAnimation(.easeInOut(duration: 0.2)) { section = .games }
                 default: break
                 }
             }
@@ -1983,22 +2003,31 @@ struct DetailPanel<Art: View, Backdrop: View, Content: View>: View {
                         }
                         .padding(.top, 12)
                     } else {
-                        HStack(alignment: .center, spacing: 32) {
+                        HStack(alignment: .center, spacing: 26) {
                             art
-                                .frame(width: geo.size.height * 0.42, height: geo.size.height * 0.63)
-                                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.18), lineWidth: 1))
-                                .shadow(color: .black.opacity(0.6), radius: 24, y: 10)
-                            // Centred when it fits, scrolling when it is taller than the screen.
+                                .frame(width: geo.size.height * 0.4, height: geo.size.height * 0.6)
+                                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(.white.opacity(0.24), lineWidth: 1.2))
+                                .shadow(color: .black.opacity(0.55), radius: 22, y: 10)
+                            // Scrolls cleanly with controller focus and touch, framed in a floating glass panel.
                             ScrollViewReader { reader in
                                 ScrollView(.vertical, showsIndicators: false) {
-                                    VStack(alignment: .leading, spacing: 10) { Color.clear.frame(height: 0).id("top"); content }
-                                        .padding(.vertical, 16)
-                                        .frame(maxWidth: .infinity, minHeight: geo.size.height * 0.78, alignment: .leading)
+                                    VStack(alignment: .leading, spacing: 9) {
+                                        Color.clear.frame(height: 0).id("top")
+                                        content
+                                    }
+                                    .padding(16)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
                                 }
                                 .scrollBounceBehavior(.basedOnSize)
-                                .onChange(of: scrollTo) { _, id in withAnimation { reader.scrollTo(id ?? "top", anchor: id == nil ? .top : .center) } }
+                                .onChange(of: scrollTo) { _, id in
+                                    withAnimation(.easeOut(duration: 0.18)) {
+                                        reader.scrollTo(id ?? "top", anchor: id == nil ? .top : .center)
+                                    }
+                                }
                             }
+                            .frame(maxHeight: geo.size.height - 92)
+                            .homePanelGlass(cornerRadius: 24)
                         }
                     }
                 }
@@ -2009,11 +2038,11 @@ struct DetailPanel<Art: View, Backdrop: View, Content: View>: View {
                 .padding(.horizontal, 18).padding(.vertical, 9)
                 .homeGlass()
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
+                .padding(.vertical, 10)
             }
-            // Clear of the Dynamic Island on its side only, trimmed to the island.
-            .padding(.leading, IslandMargins.current(tight: true).leading)
-            .padding(.trailing, IslandMargins.current(tight: true).trailing)
+            // Clear of the Dynamic Island completely on its side so the cover art never touches it.
+            .padding(.leading, IslandMargins.current(tight: false).leading)
+            .padding(.trailing, IslandMargins.current(tight: false).trailing)
             .frame(width: geo.size.width, height: geo.size.height)
             .foregroundStyle(.white)
             .background {
@@ -2171,13 +2200,11 @@ struct HomeGlass<S: Shape>: ViewModifier {
                 .background(tint?.opacity(0.16) ?? Color.clear, in: shape)
                 .glassEffect(.regular, in: shape)
                 .overlay(shape.stroke(rim, lineWidth: 1))
-                .shadow(color: .black.opacity(0.28), radius: 14, y: 6)
         } else {
             content
                 .background(tint?.opacity(0.16) ?? Color.clear, in: shape)
                 .background(.ultraThinMaterial, in: shape)
                 .overlay(shape.stroke(rim, lineWidth: 1))
-                .shadow(color: .black.opacity(0.32), radius: 14, y: 6)
         }
     }
 }

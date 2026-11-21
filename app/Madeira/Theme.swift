@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Madeira Converter Exception: see LICENSE-EXCEPTION.md
 
+import AVFoundation
 import PhotosUI
 import SwiftUI
 
@@ -49,7 +50,7 @@ enum ThemeBackground: String, CaseIterable, Identifiable {
 
 final class ThemeSettings: ObservableObject {
     static let shared = ThemeSettings()
-    static let accentKey = "madeiraThemeAccent", backgroundKey = "madeiraThemeBackground", startupKey = "madeiraStartupAnimation"
+    static let accentKey = "madeiraThemeAccent", backgroundKey = "madeiraThemeBackground", startupKey = "madeiraStartupAnimation", soundsKey = "madeiraUISounds"
 
     @Published var accent: ThemeAccent {
         didSet { UserDefaults.standard.set(accent.rawValue, forKey: Self.accentKey) }
@@ -59,6 +60,9 @@ final class ThemeSettings: ObservableObject {
     }
     @Published var startup: Bool {
         didSet { UserDefaults.standard.set(startup, forKey: Self.startupKey) }
+    }
+    @Published var sounds: Bool {
+        didSet { UserDefaults.standard.set(sounds, forKey: Self.soundsKey) }
     }
     /// The photo behind the home (Background: Your photo).
     @Published private(set) var photo: UIImage?
@@ -84,6 +88,7 @@ final class ThemeSettings: ObservableObject {
         accent = d.string(forKey: Self.accentKey).flatMap(ThemeAccent.init(rawValue:)) ?? .green
         background = d.string(forKey: Self.backgroundKey).flatMap(ThemeBackground.init(rawValue:)) ?? .gameArt
         startup = d.object(forKey: Self.startupKey) as? Bool ?? true
+        sounds = d.object(forKey: Self.soundsKey) as? Bool ?? true
         photo = UIImage(contentsOfFile: Self.photoURL.path)
     }
 
@@ -179,19 +184,138 @@ struct ThemeBackdrop: View {
                 RadialGradient(colors: [theme.accent.color.opacity(0.25), .clear], center: .bottomLeading, startRadius: 10, endRadius: 500)
             }
         case .aurora:
-            TimelineView(.animation(minimumInterval: 1 / 30)) { context in
+            TimelineView(.animation(minimumInterval: 1 / 24)) { context in
                 let t = context.date.timeIntervalSinceReferenceDate
                 ZStack {
                     Color.black
-                    Circle().fill(theme.accent.color.opacity(0.5)).frame(width: 700).blur(radius: 140)
-                        .offset(x: cos(t / 7) * 260, y: sin(t / 9) * 120 - 120)
-                    Circle().fill(Color.blue.opacity(0.35)).frame(width: 600).blur(radius: 150)
-                        .offset(x: sin(t / 11) * 300, y: cos(t / 8) * 140 + 80)
-                    Circle().fill(Color.purple.opacity(0.3)).frame(width: 500).blur(radius: 130)
-                        .offset(x: cos(t / 13) * -280, y: sin(t / 10) * 100)
+                    Circle()
+                        .fill(RadialGradient(colors: [theme.accent.color.opacity(0.42), .clear], center: .center, startRadius: 0, endRadius: 340))
+                        .frame(width: 680, height: 680)
+                        .offset(x: cos(t / 7) * 240, y: sin(t / 9) * 110 - 110)
+                    Circle()
+                        .fill(RadialGradient(colors: [Color.blue.opacity(0.3), .clear], center: .center, startRadius: 0, endRadius: 300))
+                        .frame(width: 600, height: 600)
+                        .offset(x: sin(t / 11) * 260, y: cos(t / 8) * 120 + 80)
+                    Circle()
+                        .fill(RadialGradient(colors: [Color.purple.opacity(0.24), .clear], center: .center, startRadius: 0, endRadius: 260))
+                        .frame(width: 520, height: 520)
+                        .offset(x: cos(t / 13) * -240, y: sin(t / 10) * 90)
                 }
             }
         }
+    }
+}
+
+/// Zero-redraw static ambient backdrop for scrollable Touch Library, Downloads,
+/// Settings, and Onboarding — 0 CPU, 120Hz smooth scrolling, makes Liquid Glass
+/// and the animated cover shine stand out cleanly.
+struct AmbientGlassBackdrop: View {
+    @ObservedObject private var theme = ThemeSettings.shared
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [Color(red: 0.03, green: 0.04, blue: 0.07), Color(red: 0.01, green: 0.02, blue: 0.04)],
+                startPoint: .topLeading, endPoint: .bottomTrailing
+            )
+            RadialGradient(
+                colors: [theme.accent.color.opacity(0.22), .clear],
+                center: .topTrailing, startRadius: 10, endRadius: 460
+            )
+            RadialGradient(
+                colors: [Color.blue.opacity(0.14), .clear],
+                center: .bottomLeading, startRadius: 10, endRadius: 420
+            )
+        }
+        .ignoresSafeArea()
+    }
+}
+
+/// Subtle, zero-latency console UI sound effects synthesized once into tiny PCM
+/// buffers (no files, no disk I/O, respects iOS silent switch, never interrupts
+/// game audio).
+@MainActor
+final class UISound {
+    static let shared = UISound()
+
+    enum Kind { case move, select, back, launch }
+
+    private var engine: AVAudioEngine?
+    private var player: AVAudioPlayerNode?
+    private var buffers: [Kind: AVAudioPCMBuffer] = [:]
+    private var lastPlay: CFTimeInterval = 0
+
+    func play(_ kind: Kind) {
+        guard ThemeSettings.shared.sounds else { return }
+        // Never fight an active game's audio engine.
+        if LibraryModel.shared.activeEntry != nil && kind == .move { return }
+        let now = CACurrentMediaTime()
+        if kind == .move && now - lastPlay < 0.045 { return }
+        lastPlay = now
+        prepareIfNeeded()
+        guard let engine, let player, let buffer = buffers[kind] else { return }
+        if !engine.isRunning {
+            try? engine.start()
+        }
+        if !player.isPlaying { player.play() }
+        player.scheduleBuffer(buffer, at: nil, options: .interrupts, completionHandler: nil)
+    }
+
+    private func prepareIfNeeded() {
+        guard engine == nil else { return }
+        let session = AVAudioSession.sharedInstance()
+        if LibraryModel.shared.activeEntry == nil {
+            try? session.setCategory(.ambient, options: [.mixWithOthers])
+        }
+        let eng = AVAudioEngine()
+        let node = AVAudioPlayerNode()
+        let format = AVAudioFormat(standardFormatWithSampleRate: 44100, channels: 1)!
+        eng.attach(node)
+        eng.connect(node, to: eng.mainMixerNode, format: format)
+        eng.prepare()
+        engine = eng
+        player = node
+        buffers[.move]   = makeTone(format: format, duration: 0.018, f0: 620, f1: 480, gain: 0.075, harmonic: 0.15)
+        buffers[.select] = makeTone(format: format, duration: 0.036, f0: 540, f1: 820, gain: 0.095, harmonic: 0.25)
+        buffers[.back]   = makeTone(format: format, duration: 0.028, f0: 440, f1: 290, gain: 0.085, harmonic: 0.12)
+        buffers[.launch] = makeChord(format: format, duration: 0.11, freqs: [440, 659.25, 880], gain: 0.085)
+    }
+
+    private func makeTone(format: AVAudioFormat, duration: Double, f0: Double, f1: Double, gain: Float, harmonic: Float) -> AVAudioPCMBuffer? {
+        let sr = format.sampleRate
+        let count = AVAudioFrameCount(sr * duration)
+        guard let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: count),
+              let data = buf.floatChannelData?[0] else { return nil }
+        buf.frameLength = count
+        var phase = 0.0
+        for i in 0..<Int(count) {
+            let t = Double(i) / Double(count)
+            let freq = f0 + (f1 - f0) * t
+            phase += 2.0 * .pi * freq / sr
+            let env = Float(sin(.pi * min(t / 0.12, 1.0) * 0.5) * pow(1.0 - t, 2.2))
+            let sample = Float(sin(phase)) + harmonic * Float(sin(phase * 2.0))
+            data[i] = sample * env * gain
+        }
+        return buf
+    }
+
+    private func makeChord(format: AVAudioFormat, duration: Double, freqs: [Double], gain: Float) -> AVAudioPCMBuffer? {
+        let sr = format.sampleRate
+        let count = AVAudioFrameCount(sr * duration)
+        guard let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: count),
+              let data = buf.floatChannelData?[0] else { return nil }
+        buf.frameLength = count
+        let inv = gain / Float(max(freqs.count, 1))
+        for i in 0..<Int(count) {
+            let t = Double(i) / Double(count)
+            let sec = Double(i) / sr
+            let attack = min(t / 0.15, 1.0)
+            let decay = pow(1.0 - t, 1.8)
+            var sum: Float = 0
+            for f in freqs { sum += Float(sin(2.0 * .pi * f * sec)) }
+            data[i] = sum * Float(attack * decay) * inv
+        }
+        return buf
     }
 }
 
@@ -266,6 +390,7 @@ struct ThemeSettingsSection: View {
                 Button("Remove background photo", role: .destructive) { theme.setPhoto(nil) }
             }
             Toggle("Startup animation", isOn: $theme.startup)
+            Toggle("UI sound effects", isOn: $theme.sounds)
         } header: { Text("Theme") } footer: {
             Text("The controller home's colours and background, and the animation when EmuPC opens with a controller. With Game art, a game without art (or no games yet) shows Waves.")
         }
