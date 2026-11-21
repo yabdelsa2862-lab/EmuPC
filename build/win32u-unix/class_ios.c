@@ -1,3 +1,5 @@
+/* Portions copyright 2026 thebcd69 (BCD): code taken from https://github.com/thebcd69/bcd-games
+ * under GPL-3.0-or-later and modified for Madeira in October and November 2026. See THIRD-PARTY-NOTICES.md. */
 /*
  * Window classes functions
  *
@@ -1465,6 +1467,7 @@ static void register_builtins(void)
 
     for (i = 0; i < ARRAYSIZE(builtin_classes); i++) register_builtin( &builtin_classes[i] );
     register_builtin( &edit_class );
+    register_builtin( &message_builtin_class );
     KeUserModeCallback( NtUserInitBuiltinClasses, NULL, 0, &ret_ptr, &ret_len );
 }
 

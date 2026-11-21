@@ -20,7 +20,7 @@ dependency license texts are in `LICENSES/`. See "Why GPL-3.0-or-later" below.
 | **GMP** 6.3.0 | **LGPL-3.0-or-later** or GPL-2.0-or-later | Static (`libgmp.a`). |
 | **Nettle / Hogweed** 3.10.1 | **LGPL-3.0-or-later** or GPL-2.0-or-later | Static (`libnettle.a`, `libhogweed.a`). |
 | **GnuTLS** 3.8.9 | LGPL-2.1-or-later | Static (`libgnutls.a`). Used by Wine's bcrypt/secur32/crypt32. |
-| **FFmpeg** 7.1.1 — libavformat, libavcodec, libavutil, libswresample | **LGPL-2.1-or-later** | Static (`libavformat.a`, `libavcodec.a`, `libavutil.a`, `libswresample.a`). Configured `--disable-gpl --disable-nonfree --disable-version3 --disable-everything`, then only: the WMA-family decoders (`wmav1,wmav2,wmapro,wmalossless,xma1,xma2`), the `mp1,mp2,mp3` and `pcm_u8,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,pcm_f64le` decoders, the `mp3`, `wav` and `mov` (MP4/MOV/M4A) demuxers and the `mpegaudio` parser. No H.264, HEVC or AAC decoder or parser (those streams are decoded by Apple's VideoToolbox/AudioToolbox), no protocols, no muxers, no zlib. No GPL, version3 or non-free component is enabled, so the result is LGPL-2.1-or-later. Used only by `build/ntdll-unix/winegstreamer_unixlib_ios.c` and `build/ntdll-unix/wg_parser_av_ios.c`, winegstreamer's unix side on this port (the Windows WMA decoder MFT/DMO, and the wg_parser behind quartz's MP3/WAV splitters and Media Foundation's MP4 source); upstream Wine implements both with GStreamer, which does not exist on iOS. |
+| **FFmpeg** 7.1.5 — libavformat, libavcodec, libavutil, libswresample | **LGPL-2.1-or-later** | Static (`libavformat.a`, `libavcodec.a`, `libavutil.a`, `libswresample.a`). Configured `--disable-gpl --disable-nonfree --disable-version3 --disable-everything`, then only: the WMA-family decoders (`wmav1,wmav2,wmapro,wmalossless,xma1,xma2`), the `mp1,mp2,mp3` and `pcm_u8,pcm_s16le,pcm_s24le,pcm_s32le,pcm_f32le,pcm_f64le` decoders, the `mp3`, `wav` and `mov` (MP4/MOV/M4A) demuxers and the `mpegaudio` parser. No H.264, HEVC or AAC decoder or parser (those streams are decoded by Apple's VideoToolbox/AudioToolbox), no protocols, no muxers, no zlib. No GPL, version3 or non-free component is enabled, so the result is LGPL-2.1-or-later. Used only by `build/ntdll-unix/winegstreamer_unixlib_ios.c` and `build/ntdll-unix/wg_parser_av_ios.c`, winegstreamer's unix side on this port (the Windows WMA decoder MFT/DMO, and the wg_parser behind quartz's MP3/WAV splitters and Media Foundation's MP4 source); upstream Wine implements both with GStreamer, which does not exist on iOS. |
 | **{fmt}** | MIT | Static (`libfmt.a`), via FEX. |
 | **xxHash** | BSD-2-Clause | Static (`libxxhash.a`). |
 | **Cephes** | permissive (Moshier) | Static (`libcephes_128bit.a`), via FEX. |
@@ -39,6 +39,7 @@ dependency license texts are in `LICENSES/`. See "Why GPL-3.0-or-later" below.
 | **libxml2** 2.12.10 and **libxslt** 1.1.45 | MIT (Daniel Veillard and contributors) | Unmodified, statically linked into Wine's `msxml3.dll` (`arm64ec-windows`) | Wine's bundled copies (`wine/libs/xml2`, `wine/libs/xslt`), built with the module by `build/wine-pe/build-modules.sh`. Licence texts in `LICENSES/MIT-libxml2.txt` and `LICENSES/MIT-libxslt.txt`. |
 | **NVAPI SDK headers** | MIT (NVIDIA Corporation & affiliates) | Unmodified headers, compiled into DXMT's `nvapi64.dll` (`arm64ec-windows`) | `dxmt/external/nvapi`. DXMT's own NVAPI implementation answers only with Madeira's opt-in "Report an NVIDIA GPU" switch; no NVIDIA binary is shipped. Licence text in `LICENSES/MIT-NVAPI.txt`. |
 | **Wine Mono** 11.0.0 | Mono: LGPL or MIT X11 per part; FNA: Ms-PL and MIT; FAudio, FNA3D, MojoShader, SDL3: zlib; winforms, wpf, monoDX, System.Speech and Wine Mono's own code: MIT (`build/wine-mono/COPYING`) | Prebuilt runtime, unmodified except `lib/mono/4.5/mscorlib.dll` (4 IL bytes in `GC.Collect`, `build/wine-mono/bundle.sh`), bundled as `wine-mono/` with that COPYING only in a development build made after `build/wine-mono/fetch.sh`; **release builds do not include it** (the packaging step removes `wine-mono/`). Instead the app downloads it from WineHQ when the user asks (setup or Settings › .NET Framework, `app/Madeira/WineMono.swift`), checks it against the same SHA-256, unpacks it without `lib/mono/*-api` and applies the same mscorlib patch on the device | Runs .NET Framework programs; Wine's mscoree loads it. The x86 tarball from `dl.winehq.org`, SHA-256 pinned in `build/wine-mono/pin.sh`. The compile-time reference assemblies (`lib/mono/*-api`, which include the GPL-licensed ICSharpCode.SharpZipLib) are not bundled. Exact corresponding source: `wine-mono-11.0.0-src.tar.xz` from the same folder; see "Corresponding source" below. |
+| **Noto Sans JP** (Noto Sans CJK, SubsetOTF Regular) | SIL OFL 1.1 | Unmodified font file `app/Madeira/fonts-ja/NotoSansJP-Regular.otf` from [`notofonts/noto-cjk`](https://github.com/notofonts/noto-cjk) commit `f8d1575`, SHA-256 `dff723ba59d57d136764a04b9b2d03205544f7cd785a711442d6d2d085ac5073` | Copied into the prefix's `C:\windows\Fonts` only for a game with **Japanese locale** on, so Japanese text has a font. Licence text in `app/Madeira/fonts-ja/LICENSE-NotoSansJP-OFL-1.1.txt`. Wine's code page tables `c_932/936/949/950.nls` (`app/Madeira/nls/extra`) come unmodified from the Wine fork. |
 | **Wine Gecko** 2.47.4 | MPL-2.0 | **Not bundled.** The app downloads Wine's own installers, `wine-gecko-2.47.4-x86.msi` and `wine-gecko-2.47.4-x86_64.msi`, from WineHQ (`app/Madeira/WineGecko.swift`), checks them against the SHA-256s in `wine/dlls/appwiz.cpl/addons.c`, and Wine installs them unmodified into the prefix | Wine's mshtml (Internet Explorer's web view) for 32-bit and 64-bit programs. Source: `wine-gecko-2.47.4-src.tar.xz` at `https://dl.winehq.org/wine/wine-gecko/2.47.4/`. |
 | **Mesa** 26.2.4 — `opengl32.dll`, `libgallium_wgl.dll` (`x86_64-opengl`, when built) | MIT (most files; each file's SPDX identifier governs), with BSL-1.0 (`src/c11/impl/threads_win32.c`), BLAKE3 (Apache-2.0 selected of CC0-1.0 / Apache-2.0), Berkeley SoftFloat 3e (BSD-3-Clause), zlib 1.3.1 (Zlib) and DirectX-Headers v1.619.1 (MIT) | upstream licences + **Madeira's two patches GPL-3.0-or-later** (`build/mesa-d3d12/patches/`) | Windows x64 OpenGL driver on D3D12 (OpenGL → D3D12 → `madeira_d3d12` → Metal). Built from the pinned release tarball by `build/mesa-d3d12/build.sh`; not committed as a binary. Licence texts in `LICENSES/MIT-Mesa.txt`, `BSL-1.0-Mesa.txt`, `Apache-2.0-BLAKE3.txt`, `BSD-3-SoftFloat-3e.txt`, `Zlib-zlib.txt`, `MIT-DirectX-Headers.txt`. |
 
@@ -119,6 +120,86 @@ files that do not carry another license notice are licensed under
 GPL-3.0-or-later.** Files carrying their own copyright or license header are
 governed by that header.
 
+## Code from BCD (thebcd69/bcd-games)
+
+[BCD](https://github.com/thebcd69/bcd-games) is a GPL-3.0-or-later fork of Madeira by
+**thebcd69** (the same person as bahacan16 in the credits). Two sets of his work entered
+this repository through pull request #516 (merged 2026-11-01) without naming him, and
+this section corrects that:
+
+- **His pull requests willfaust/Madeira#337 to #346**, which he opened on 2026-10-15 and
+  closed on 2026-10-18 before they were merged. This credits him for them. Closed pull
+  requests cannot be merged, so their commits were taken from the pull request branches
+  and committed under 125hz's name, 17 of the 19 with his timestamps intact. About 1,200
+  of those lines are still in the tree.
+- **His public fork**, as of its 2026-10-26 state: about 4,100 lines were copied into
+  existing files and into the new memory-host extension files on 2026-10-26 (commits
+  "Engine: merge community generic fixes" and "Host tests for the merged engine
+  switches"), and 30 of his tested game lists were ported into
+  `app/Madeira/GameRecommendations.swift`. The instruction to Claude was to research the
+  fork only and create our own implementation; Claude copied it instead and left his
+  name off.
+
+The copied code is his under GPL-3.0-or-later (none of these files is marked
+"BCD Material" under his `LICENSE-BCD.md`, so its section 7 terms do not attach). Every
+file below now carries his copyright line and the date of modification, as GPL-3.0
+section 5 requires. Counts are non-trivial lines identical to his, by source:
+
+| File | from PRs #337-#346 | from the fork |
+|---|---|---|
+| `app/Madeira/GameRecommendations.swift` | 102 | 0 |
+| `app/Madeira/MemoryHostProtocol.h` | 0 | 36 |
+| `app/Madeira/MemoryHostTest.h` | 0 | 7 |
+| `app/Madeira/MemoryHostTest.m` | 0 | 174 |
+| `app/Madeira/Winios/Winios.m` | 0 | 3 |
+| `app/MadeiraMemoryHost/Info.plist` | 0 | 22 |
+| `app/MadeiraMemoryHost/MemoryHost.m` | 0 | 55 |
+| `build/madeira-d3d12/build-pe.sh` | 3 | 9 |
+| `build/ntdll-unix/audio_null_ios.c` | 24 | 114 |
+| `build/ntdll-unix/env_ios.c` | 0 | 10 |
+| `build/ntdll-unix/hw_registry_ios.h` | 0 | 15 |
+| `build/ntdll-unix/loader_ios.c` | 0 | 43 |
+| `build/ntdll-unix/process_ios.c` | 2 | 134 |
+| `build/ntdll-unix/server_ios.c` | 0 | 345 |
+| `build/ntdll-unix/signal_arm64_ios.c` | 0 | 340 |
+| `build/ntdll-unix/thread_ios.c` | 39 | 125 |
+| `build/ntdll-unix/virtual_ios.c` | 209 | 633 |
+| `build/tools/gen-config-catalog.py` | 8 | 9 |
+| `build/win32u-unix/class_ios.c` | 0 | 18 |
+| `build/win32u-unix/d3dkmt_ios.c` | 0 | 183 |
+| `build/win32u-unix/driver_ios.c` | 0 | 112 |
+| `build/win32u-unix/madeira_kmt.h` | 0 | 1 |
+| `build/win32u-unix/sysparams_ios.c` | 0 | 121 |
+| `build/wineserver/mapping_ios.c` | 0 | 70 |
+| `build/wineserver/queue_ios.c` | 0 | 19 |
+| `madeira-d3d12/src/madeira_ir_abi.h` | 0 | 3 |
+| `madeira-d3d12/src/pe/madeira_d3d12.c` | 668 | 209 |
+| `madeira-d3d12/src/unix/madeira_ir_unix.mm` | 0 | 3 |
+| `madeira-d3d12/tests/windows/cube_window.c` | 0 | 7 |
+| `tests/host/check-alias-release.py` | 0 | 209 |
+| `tests/host/check-avail-phys.py` | 0 | 96 |
+| `tests/host/check-d3d12-fl-12-1.py` | 0 | 80 |
+| `tests/host/check-fence-early.py` | 0 | 145 |
+| `tests/host/check-fex-band-keep.py` | 0 | 69 |
+| `tests/host/check-game-recommendations.py` | 111 | 5 |
+| `tests/host/check-hw-registry.py` | 0 | 7 |
+| `tests/host/check-jit-dump-optin.py` | 0 | 41 |
+| `tests/host/check-jumbo-half.py` | 0 | 81 |
+| `tests/host/check-kmt-adapter.py` | 0 | 4 |
+| `tests/host/check-quiet-log.py` | 13 | 0 |
+| `tests/host/check-reserved-area-retry.py` | 0 | 202 |
+| `tests/host/check-spawn-cwd-log.py` | 0 | 22 |
+| `tests/host/check-tail-carve-exec.py` | 0 | 68 |
+| `tests/host/check-tiny-window.py` | 0 | 57 |
+| `tests/host/check-va-pressure-gap.py` | 0 | 46 |
+| `tests/host/check-vcrt-arm64-key.py` | 0 | 138 |
+| `tests/host/check-vmon-identity.py` | 0 | 42 |
+
+The generated `app/Madeira/ConfigCatalog.generated.swift` carries his option entries
+through `build/tools/gen-config-catalog.py`. A few files share one to four lines with his
+fork (`Onboarding.swift`, `check-onboarding.py`, `check-pool-split.py`,
+`storage_device_ios.h` and others) and are not listed.
+
 ## Microsoft Visual C++ runtime redistributables — NOT DISTRIBUTED
 
 Games built with MSVC require Microsoft's Visual C++ runtime DLLs. Those are
@@ -170,7 +251,7 @@ FFmpeg's archives are git-ignored outputs of its build script (like
 `libntdll_unix.a`), but the app links them, so a built package contains them
 and the exact source they are built from is tracked here in the same way:
 
-- `build/ffmpeg/src/ffmpeg-7.1.1.tar.xz` -- the unmodified upstream release
+- `build/ffmpeg/src/ffmpeg-7.1.5.tar.xz` -- the unmodified upstream release
   from `ffmpeg.org`
 - `build/ffmpeg/src/SHA256SUMS` -- its checksum
   (`733984395e0dbbe5c046abda2dc49a5544e7e0e1e2366bba849222ae9e3a03b1`), which

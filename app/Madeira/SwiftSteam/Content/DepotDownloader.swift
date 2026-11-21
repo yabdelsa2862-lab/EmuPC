@@ -71,6 +71,9 @@ final class DepotDownloader {
     private let maxConcurrentChunks = 8
     private let attemptsPerChunk = 5
     private let hostPoolSize = 6
+    /// Whether a content server leaves the chunk rotation only after repeated
+    /// failures (ContentHostHealth). Set by the owner from its switch.
+    var rotatesContentServers = true
 
     private nonisolated static let http: URLSession = {
         let config = URLSessionConfiguration.ephemeral
@@ -127,7 +130,7 @@ final class DepotDownloader {
         report(state)
         let prepStarted = Date()
         manifestStats = ManifestStats()
-        let health = ContentHostHealth()
+        let health = ContentHostHealth(rotates: rotatesContentServers)
         let pool = Array(hosts.prefix(hostPoolSize))
         var plans: [DepotPlan] = []
         var licenseSkipped: [UInt32] = []
@@ -439,11 +442,12 @@ final class DepotDownloader {
         // the earlier depot's chunks over the later one's, flipping the file
         // on every repair (Borderlands 2: the same 552 MB on each Repair, and
         // Steam's CEG step ending with 53, DataCorruption). Only the last
-        // depot that lists a path writes it.
+        // depot that lists a path writes it. A redistributable goes to its
+        // owner's folder, so the same name there is another file.
         var lastOwner: [String: Int] = [:]
         for (index, plan) in plans.enumerated() {
             for file in plan.manifest.files where !file.isDirectory && file.flags & 0x200 == 0 {
-                lastOwner[Self.overlapKey(file.filename)] = index
+                lastOwner[Self.overlapKey(file.filename, in: plan.installURL)] = index
             }
         }
         var overridden = 0
@@ -458,7 +462,7 @@ final class DepotDownloader {
             for (fileIndex, file) in plan.manifest.files.enumerated() {
                 // A later depot lists this file too: its copy is the one installed.
                 if !file.isDirectory, file.flags & 0x200 == 0,
-                   let owner = lastOwner[Self.overlapKey(file.filename)], owner != planIndex {
+                   let owner = lastOwner[Self.overlapKey(file.filename, in: plan.installURL)], owner != planIndex {
                     overridden += 1
                     paths.append(""); existing.append(false); continue
                 }
@@ -514,9 +518,9 @@ final class DepotDownloader {
         return result
     }
 
-    /// One install path, compared as Windows compares names: any case, either slash.
-    private nonisolated static func overlapKey(_ filename: String) -> String {
-        filename.replacingOccurrences(of: "\\", with: "/").lowercased()
+    /// One install path in one folder, compared as Windows compares names: any case, either slash.
+    private nonisolated static func overlapKey(_ filename: String, in folder: URL) -> String {
+        folder.path + "\n" + filename.replacingOccurrences(of: "\\", with: "/").lowercased()
     }
 
     /// Create or resize a file to its manifest length. Existing bytes below
@@ -1284,26 +1288,49 @@ final class DepotDownloader {
 }
 
 /// Per-install content-server health. Chunks start on different servers
-/// (spreading load) and servers that keep failing move to the back of every
-/// chunk's rotation, instead of each chunk rediscovering a bad server.
+/// (spreading load); a server that keeps failing moves to the back of every
+/// chunk's rotation, instead of each chunk rediscovering a bad server. A server
+/// with only an occasional failure stays in the rotation: moving it back after
+/// one failure would send every first attempt to the servers with none, and
+/// since only a server that is tried can recover, the install would end up
+/// on one server.
 final class ContentHostHealth: @unchecked Sendable {
+    /// Failures after which a server is demoted: it goes behind every server
+    /// that has fewer, and the log says so.
+    static let demoteAfter = 3
+
     private let lock = NSLock()
     private var failures: [String: Int] = [:]
     private var reported = 0
+    private let rotates: Bool
+
+    /// `rotates: false` orders by failure count first, as before: one failure
+    /// sends a server behind every server with none.
+    init(rotates: Bool = true) {
+        self.rotates = rotates
+    }
 
     func order(_ hosts: [String], seed: Int) -> [String] {
         guard !hosts.isEmpty else { return hosts }
         let rotated = (0..<hosts.count).map { hosts[($0 + seed) % hosts.count] }
         lock.lock(); let counts = failures; lock.unlock()
+        let demoteAfter = Self.demoteAfter
+        // Sort key: servers below the demotion point keep the seed rotation;
+        // demoted ones follow, fewest failures first, then in rotation order.
+        func key(_ entry: (offset: Int, element: String)) -> (Int, Int, Int) {
+            let count = counts[entry.element] ?? 0
+            if !rotates { return (count, entry.offset, 0) }
+            return count >= demoteAfter ? (1, count, entry.offset) : (0, 0, entry.offset)
+        }
         return rotated.enumerated()
-            .sorted { ((counts[$0.element] ?? 0), $0.offset) < ((counts[$1.element] ?? 0), $1.offset) }
+            .sorted { key($0) < key($1) }
             .map(\.element)
     }
 
     func recordFailure(_ host: String, reason: String) {
         lock.lock()
         failures[host, default: 0] += 1
-        let report = failures[host] == 3 && reported < 8
+        let report = failures[host] == Self.demoteAfter && reported < 8
         if report { reported += 1 }
         lock.unlock()
         if report {
@@ -1408,7 +1435,7 @@ extension DepotDownloader {
         let pool = Array(hosts.prefix(hostPoolSize))
         let auth = await cdnAuthFragments(depotID: appID, appID: appID, hosts: pool)
         let plan = DepotPlan(depotID: appID, manifestGID: manifestGID, key: key, manifest: manifest, hosts: pool, auth: auth,
-                             declaredSize: manifest.totalUncompressedSize, health: ContentHostHealth(), installURL: folder)
+                             declaredSize: manifest.totalUncompressedSize, health: ContentHostHealth(rotates: rotatesContentServers), installURL: folder)
         let prepared = try await Task.detached(priority: .userInitiated) {
             try Self.prepare(plans: [plan], journalDir: journalDir)
         }.value
