@@ -5,8 +5,10 @@ PC emulator for iOS and iPadOS: it runs real Windows games from **Steam**,
 **GOG** and **Epic Games** inside a single app, with a console-style home
 screen built for a controller.
 
-**[⬇ Download the latest EmuPC IPA](https://github.com/yabdelsa2862-lab/EmuPC/releases/latest)**,
-then sideload it and turn on JIT ([how](#faq)).
+- **[⬇ Download EmuPC 1.5 (Latest Stable)](https://github.com/yabdelsa2862-lab/EmuPC/releases/tag/v1.5)**
+- **[🧪 Try EmuPC 2.0 (Test Pre-release — new Liquid Glass UI, subtle UI sounds & performance updates)](https://github.com/yabdelsa2862-lab/EmuPC/releases/tag/v2.0)**
+
+Sideload the IPA and turn on JIT ([how](#faq)).
 
 EmuPC is built on [Madeira](https://github.com/willfaust/Madeira) by Will Faust
 and its contributors. It keeps Madeira's engine (the FEX-Emu x86 emulator,
@@ -79,7 +81,12 @@ stores and quality-of-life features on top.
   performance overlay and touch controls.
 - **Two-pane Liquid Glass Store & Settings**: floating glass filter rail and
   16:9 store tiles with frosted store/compatibility badges, plus a two-pane
-  glass Settings layout and Liquid Glass Onboarding and launch screen.
+  glass Settings layout, Liquid Glass Onboarding and launch screen, and a
+  unified zero-lag ambient Liquid Glass Touch Library, Downloads and Settings
+  (keeping the animated ambient cover glow).
+- **Subtle UI sound effects**: synthesized, zero-latency console ticks and
+  chimes as you navigate (respects the silent switch, toggleable in Settings ›
+  Theme).
 - **Controller keyboard**: when a game asks for text, click both sticks (L3 + R3) or open *Keyboard* from the
   in-game guide and type with the controller, symbols and @ included (A types, B deletes, Y space,
   X Shift, Menu Enter). Without a controller the iOS keyboard opens instead.
