@@ -434,28 +434,23 @@ struct ControllerHome: View {
     // EmuPC 2.0: SteamOS Big Picture × visionOS Liquid Glass top bar.
     private func topBarContent(compact: Bool) -> some View {
         HStack(spacing: compact ? 6 : 12) {
-            // Floating visionOS profile capsule — morphs directly into the Guide panel.
+            // Floating visionOS profile capsule (hides cleanly when Guide is open so nothing ghosts).
             HStack(spacing: 10) {
                 ProfileAvatar(size: compact ? 28 : 32)
                     .overlay(Circle().stroke(.white.opacity(0.28), lineWidth: 1))
-                    .matchedGeometryEffect(id: "guideAvatar", in: guideSpace, isSource: !guide)
                 if !compact {
                     Text(ProfileSettings.shared.displayName)
                         .font(.subheadline.weight(.semibold)).lineLimit(1).fixedSize()
-                        .matchedGeometryEffect(id: "guideName", in: guideSpace, isSource: !guide)
                 }
             }
             .padding(.leading, 5).padding(.trailing, compact ? 5 : 14).padding(.vertical, 5)
-            .background {
-                Capsule().fill(.clear)
-                    .homeGlass()
-                    .matchedGeometryEffect(id: "guideGlassShell", in: guideSpace, isSource: !guide)
-            }
+            .homeGlass()
             .opacity(guide ? 0 : 1)
+            .allowsHitTesting(!guide)
             .onTapGesture {
                 UISound.shared.play(.select)
                 guideFocus = 0
-                withAnimation(.spring(response: 0.38, dampingFraction: 0.84)) { guide = true }
+                withAnimation(Self.guideSpring) { guide = true }
             }
             if showTabs {
                 Spacer(minLength: compact ? 4 : 8)
@@ -587,7 +582,8 @@ struct ControllerHome: View {
                             }
                             .foregroundStyle(.white)
                             .padding(.horizontal, 10).padding(.vertical, 5)
-                            .homeGlass()
+                            .background(.black.opacity(0.45), in: Capsule())
+                            .overlay(Capsule().stroke(.white.opacity(0.24), lineWidth: 0.8))
                             .padding(10)
                         }
                         .overlay(alignment: .bottomLeading) {
@@ -740,9 +736,8 @@ struct ControllerHome: View {
                                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                                     .stroke(on ? AnyShapeStyle(focusRim) : AnyShapeStyle(Color.white.opacity(0.14)), lineWidth: on ? 2.5 : 1)
                             )
-                            .shadow(color: on ? theme.accent.color.opacity(0.38) : .clear, radius: 18)
-                            // Only the focused cover casts a shadow: one per cover was a blur pass each, every frame of a move.
-                            .shadow(color: .black.opacity(on ? 0.6 : 0), radius: on ? 22 : 0, y: on ? 10 : 0)
+                            // Single shadow on the focused cover only (avoids dual offscreen blur passes per frame).
+                            .shadow(color: on ? theme.accent.color.opacity(0.32) : .clear, radius: on ? 14 : 0, y: on ? 8 : 0)
                             .scaleEffect(on ? 1.09 : 0.87)
                             .opacity(on ? 1 : 0.64)
                             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: on)
@@ -1730,23 +1725,21 @@ struct ControllerHome: View {
          GuideItem(title: "Close EmuPC", symbol: "power") { AppRelaunch.close() }]
     }
 
-    private static let guideSpring = Animation.spring(response: 0.38, dampingFraction: 0.84)
+    private static let guideSpring = Animation.spring(response: 0.32, dampingFraction: 0.86)
 
-    /// EmuPC 2.0: floating visionOS Liquid Glass guide panel, morphing out of the
-    /// top-left Profile pill on Controller Home.
+    /// EmuPC 2.0: floating visionOS Liquid Glass guide panel, blooming cleanly
+    /// out of the top-left Profile corner with a readable dark glass backing.
     private var guidePanel: some View {
         ZStack(alignment: .leading) {
-            Color.black.opacity(0.42).ignoresSafeArea()
+            Color.black.opacity(0.52).ignoresSafeArea()
                 .onTapGesture { UISound.shared.play(.back); withAnimation(Self.guideSpring) { guide = false } }
                 .transition(.opacity)
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 12) {
-                    ProfileAvatar(size: 42)
+                    ProfileAvatar(size: 40)
                         .overlay(Circle().stroke(.white.opacity(0.32), lineWidth: 1))
-                        .matchedGeometryEffect(id: "guideAvatar", in: guideSpace, isSource: guide)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(ProfileSettings.shared.displayName).font(.headline)
-                            .matchedGeometryEffect(id: "guideName", in: guideSpace, isSource: guide)
+                        Text(ProfileSettings.shared.displayName).font(.headline).lineLimit(1)
                         HStack(spacing: 10) {
                             Text(now.formatted(date: .omitted, time: .shortened)).monospacedDigit()
                             BatteryIndicator(compact: true)
@@ -1802,15 +1795,12 @@ struct ControllerHome: View {
             .padding(18)
             .frame(width: 316)
             .frame(maxHeight: .infinity, alignment: .top)
-            .background {
-                RoundedRectangle(cornerRadius: 28, style: .continuous).fill(.clear)
-                    .homePanelGlass(cornerRadius: 28)
-                    .matchedGeometryEffect(id: "guideGlassShell", in: guideSpace, isSource: guide)
-            }
-            .padding(.leading, max(IslandMargins.current().leading, 14))
+            .background(Color.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
+            .homePanelGlass(cornerRadius: 28)
+            .padding(.leading, max(side, 14))
             .padding(.vertical, 14)
         }
-        .transition(.opacity)
+        .transition(.scale(scale: 0.86, anchor: .topLeading).combined(with: .opacity))
     }
 
     private func handle(_ command: String) {

@@ -596,35 +596,38 @@ struct InGameGuideView: View {
         .padding(18)
         .frame(width: 316)
         .frame(maxHeight: .infinity, alignment: .top)
+        .background(Color.black.opacity(0.58), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         .homePanelGlass(cornerRadius: 28)
         .padding(.vertical, 14)
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { now = $0 }
     }
 }
 
-/// Real translucent tinted Liquid Glass selection lens (iOS 26+ `.glassEffect(.regular.tint(...))`
-/// with a specular rim, smoothly gliding between rows via `matchedGeometryEffect`).
+/// Translucent tinted Liquid Glass selection lens designed to glide smoothly
+/// inside an already-refracting Liquid Glass panel at locked 120Hz (avoids
+/// nested `.glassEffect` re-rasterization overhead).
 struct LiquidFocusLens: View {
     let accent: Color
     var cornerRadius: CGFloat = 14
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        let rim = LinearGradient(
-            colors: [.white.opacity(0.75), accent.opacity(0.65), .white.opacity(0.22)],
+        let fill = LinearGradient(
+            colors: [accent.opacity(0.62), accent.opacity(0.36)],
             startPoint: .topLeading, endPoint: .bottomTrailing
         )
-        if #available(iOS 26, *) {
-            shape
-                .fill(accent.opacity(0.22))
-                .glassEffect(.regular.tint(accent.opacity(0.45)), in: shape)
-                .overlay(shape.stroke(rim, lineWidth: 1.25))
-        } else {
-            shape
-                .fill(accent.opacity(0.32))
-                .background(.ultraThinMaterial, in: shape)
-                .overlay(shape.stroke(rim, lineWidth: 1.25))
-        }
+        let sheen = LinearGradient(
+            colors: [.white.opacity(0.28), .white.opacity(0.04), .clear],
+            startPoint: .top, endPoint: .bottom
+        )
+        let rim = LinearGradient(
+            colors: [.white.opacity(0.8), accent.opacity(0.75), .white.opacity(0.22)],
+            startPoint: .topLeading, endPoint: .bottomTrailing
+        )
+        shape
+            .fill(fill)
+            .overlay(shape.fill(sheen))
+            .overlay(shape.stroke(rim, lineWidth: 1.25))
     }
 }
 

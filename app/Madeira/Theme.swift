@@ -232,27 +232,34 @@ struct AmbientGlassBackdrop: View {
 }
 
 /// Subtle, zero-latency console UI sound effects synthesized once into tiny PCM
-/// buffers (no files, no disk I/O, respects iOS silent switch, never interrupts
-/// game audio).
-@MainActor
-final class UISound {
+/// buffers on a dedicated background queue (never blocks the main thread, no
+/// files, no disk I/O, respects iOS silent switch, never interrupts game audio).
+final class UISound: @unchecked Sendable {
     static let shared = UISound()
 
     enum Kind { case move, select, back, launch }
 
+    private let queue = DispatchQueue(label: "emupc.uisound", qos: .userInteractive)
     private var engine: AVAudioEngine?
     private var player: AVAudioPlayerNode?
     private var buffers: [Kind: AVAudioPCMBuffer] = [:]
     private var lastPlay: CFTimeInterval = 0
 
+    @MainActor
     func play(_ kind: Kind) {
         guard ThemeSettings.shared.sounds else { return }
-        // Never fight an active game's audio engine.
-        if LibraryModel.shared.activeEntry != nil && kind == .move { return }
+        let inGame = LibraryModel.shared.activeEntry != nil
+        if inGame && kind == .move { return }
         let now = CACurrentMediaTime()
         if kind == .move && now - lastPlay < 0.045 { return }
         lastPlay = now
-        prepareIfNeeded()
+        queue.async { [self] in
+            self.playOnQueue(kind, inGame: inGame)
+        }
+    }
+
+    private func playOnQueue(_ kind: Kind, inGame: Bool) {
+        prepareIfNeeded(inGame: inGame)
         guard let engine, let player, let buffer = buffers[kind] else { return }
         if !engine.isRunning {
             try? engine.start()
@@ -261,11 +268,10 @@ final class UISound {
         player.scheduleBuffer(buffer, at: nil, options: .interrupts, completionHandler: nil)
     }
 
-    private func prepareIfNeeded() {
+    private func prepareIfNeeded(inGame: Bool) {
         guard engine == nil else { return }
-        let session = AVAudioSession.sharedInstance()
-        if LibraryModel.shared.activeEntry == nil {
-            try? session.setCategory(.ambient, options: [.mixWithOthers])
+        if !inGame {
+            try? AVAudioSession.sharedInstance().setCategory(.ambient, options: [.mixWithOthers])
         }
         let eng = AVAudioEngine()
         let node = AVAudioPlayerNode()
