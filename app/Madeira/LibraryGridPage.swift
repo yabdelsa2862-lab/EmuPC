@@ -650,15 +650,22 @@ private struct LibraryGridNotInstalledToggle: View {
     @AppStorage("madeiraSteamShowUninstalled") private var showUninstalled = true
     var body: some View {
         Button {
-            withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .easeInOut(duration: 0.2)) { showUninstalled.toggle() }
+            withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .spring(response: 0.28, dampingFraction: 0.84)) { showUninstalled.toggle() }
         } label: {
-            HStack {
-                Text("Not installed").font(.headline)
-                Text("\(count)").font(.subheadline).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Text("Not installed").font(.subheadline.weight(.bold))
+                Text("\(count)")
+                    .font(.caption.weight(.bold).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(.ultraThinMaterial, in: Capsule())
                 Spacer()
-                Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+                Image(systemName: "chevron.right").font(.caption.weight(.bold))
                     .rotationEffect(.degrees(showUninstalled ? 90 : 0)).foregroundStyle(.secondary)
-            }.contentShape(Rectangle()).frame(minHeight: 44)
+            }
+            .padding(.horizontal, 16).frame(minHeight: 46)
+            .homePanelGlass(cornerRadius: 16)
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }.buttonStyle(.plain)
             .accessibilityValue(showUninstalled ? "Shown" : "Hidden")
     }

@@ -64,8 +64,9 @@ stores and quality-of-life features on top.
   combining SteamOS Big Picture navigation with floating visionOS-style Liquid
   Glass panels, specular rims, luminous accent focus halos, smooth spring
   animations and haptics over the selected game's blurred hero art.
-- **Floating top tab bar**: **Home · Store · Settings** pills across the top
-  (switched with **LB / RB**), on by default and optional in Settings.
+- **Console app tiles on Home**: **Store** and **Settings** sit right on your
+  Home shelf as floating Liquid Glass app tiles (like Xbox / PlayStation), with
+  a clean top bar (optional LB/RB tab bar still available in Settings).
 - **Game card & metadata pill**: a floating glass metadata capsule under your
   focused cover; press **A** to expand into a floating Liquid Glass card with
   description, developer, last played, install size, and accent **Play** /

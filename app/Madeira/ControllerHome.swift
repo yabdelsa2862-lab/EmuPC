@@ -143,9 +143,9 @@ struct ControllerHome: View {
     @ObservedObject private var epic = EpicLibrary.shared
     @ObservedObject private var theme = ThemeSettings.shared
     @AppStorage(SessionDoctor.thermalKey) private var thermalGuard = true
-    /// EmuPC 2.0: floating SteamOS-style Home / Store / Settings tabs across the
-    /// top, switched with LB/RB. On by default; can be hidden in Settings.
-    @AppStorage("madeiraShowTabs") private var showTabs = true
+    /// Optional top tab bar (Home / Store / Settings via LB/RB). Off by default:
+    /// Store and Settings live right on the Home shelf as console app tiles (like Xbox / PS5).
+    @AppStorage("madeiraShowTabs") private var showTabs = false
     /// The game page's Delete game, waiting for A (delete) or B (keep).
     @State private var confirmDelete: LibraryEntry?
     @ObservedObject private var pads = RemotePadServer.shared
@@ -221,10 +221,14 @@ struct ControllerHome: View {
             if $0.lastPlayed != $1.lastPlayed { return ($0.lastPlayed ?? .distantPast) > ($1.lastPlayed ?? .distantPast) }
             return $0.title.localizedStandardCompare($1.title) == .orderedAscending
         }
-        if focused == nil || !games.contains(where: { $0.id == focused }) { focused = games.first?.id }
+        if focused == nil || !homeShelfIDs.contains(focused!) { focused = games.first?.id ?? Self.storeTileID }
     }
 
-    private var current: LibraryEntry? { games.first { $0.id == focused } ?? games.first }
+    private static let storeTileID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+    private static let settingsTileID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+    private var homeShelfIDs: [UUID] { games.map(\.id) + [Self.storeTileID, Self.settingsTileID] }
+    private var focusedHomeID: UUID { focused ?? homeShelfIDs.first ?? Self.storeTileID }
+    private var current: LibraryEntry? { games.first { $0.id == focusedHomeID } }
 
     /// Owned Steam games that are not installed (DLC and tools left out).
     private var downloadable: [SteamOwnedGame] {
@@ -470,7 +474,15 @@ struct ControllerHome: View {
                 .homeGlass()
                 .animation(.spring(response: 0.3, dampingFraction: 0.85), value: section)
             } else if section != .games {
-                Text(section.title).font(.title3.weight(.heavy)).lineLimit(1).fixedSize().padding(.leading, 6)
+                Button { withAnimation(.easeInOut(duration: 0.2)) { section = .games } } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chevron.left").font(.caption.weight(.bold))
+                        Text(section.title).font(.subheadline.weight(.heavy)).lineLimit(1).fixedSize()
+                    }
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .homeGlass()
+                }
+                .buttonStyle(.plain)
             }
             Spacer(minLength: compact ? 6 : 12)
             HStack(spacing: compact ? 8 : 12) {
@@ -511,6 +523,8 @@ struct ControllerHome: View {
             case .games where current != nil:
                 ButtonHint(glyph: "a.circle.fill", label: "Select")
                 ButtonHint(glyph: "y.circle.fill", label: compact ? "Options" : "Game options")
+            case .games:
+                ButtonHint(glyph: "a.circle.fill", label: "Open")
             case .download where focusedStore != nil:
                 ButtonHint(glyph: "a.circle.fill", label: "Details")
                 switch focusedStore! {
@@ -521,9 +535,13 @@ struct ControllerHome: View {
                 case .epic(let app):
                     ButtonHint(glyph: "y.circle.fill", label: epicAction(app).label)
                 }
+                if !showTabs { ButtonHint(glyph: "b.circle.fill", label: "Home") }
+            case .download:
+                if !showTabs { ButtonHint(glyph: "b.circle.fill", label: "Home") }
             case .settings:
                 ButtonHint(glyph: "a.circle.fill", label: inOptions ? "Change" : "Open")
                 if inOptions { ButtonHint(glyph: "b.circle.fill", label: compact ? "Back" : "Categories") }
+                else if !showTabs { ButtonHint(glyph: "b.circle.fill", label: "Home") }
             default:
                 EmptyView()
             }
@@ -537,47 +555,53 @@ struct ControllerHome: View {
 
     @ViewBuilder private func gamesSection(height: CGFloat) -> some View {
         Spacer(minLength: 8)
-        if let game = current {
-            shelf(ids: games.map(\.id), focusedID: current?.id, height: min(height * 0.46, 300),
-                  wideID: games.first?.lastPlayed != nil ? games.first.map { AnyHashable($0.id) } : nil) { id in
-                if let game = games.first(where: { AnyHashable($0.id) == id }) {
-                    if game.id == games.first?.id, game.lastPlayed != nil {
-                        // "Jump back in": the last game played, wide, with a SteamOS × visionOS glass badge.
-                        LibraryArtwork(entry: game, backdrop: true)
-                            .overlay(alignment: .topLeading) {
-                                HStack(spacing: 5) {
-                                    Circle().fill(theme.accent.color).frame(width: 6, height: 6)
-                                    Text("JUMP BACK IN").font(.caption2.weight(.heavy)).kerning(1)
-                                }
-                                .foregroundStyle(.white)
-                                .padding(.horizontal, 10).padding(.vertical, 5)
-                                .homeGlass()
-                                .padding(10)
+        shelf(ids: homeShelfIDs, focusedID: focusedHomeID, height: min(height * 0.46, 300),
+              wideID: games.first?.lastPlayed != nil ? games.first.map { AnyHashable($0.id) } : nil) { id in
+            if id == AnyHashable(Self.storeTileID) {
+                homeAppTile(title: "Store", subtitle: "Steam · GOG · Epic", symbol: "bag.fill",
+                            colors: [theme.accent.color.opacity(0.65), Color(red: 0.08, green: 0.16, blue: 0.34)])
+            } else if id == AnyHashable(Self.settingsTileID) {
+                homeAppTile(title: "Settings", subtitle: "Controls · Theme · System", symbol: "gearshape.fill",
+                            colors: [Color(red: 0.24, green: 0.27, blue: 0.34), Color(red: 0.09, green: 0.1, blue: 0.14)])
+            } else if let game = games.first(where: { AnyHashable($0.id) == id }) {
+                if game.id == games.first?.id, game.lastPlayed != nil {
+                    // "Jump back in": the last game played, wide, with a SteamOS × visionOS glass badge.
+                    LibraryArtwork(entry: game, backdrop: true)
+                        .overlay(alignment: .topLeading) {
+                            HStack(spacing: 5) {
+                                Circle().fill(theme.accent.color).frame(width: 6, height: 6)
+                                Text("JUMP BACK IN").font(.caption2.weight(.heavy)).kerning(1)
                             }
-                            .overlay(alignment: .bottomLeading) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(game.title).font(.headline.weight(.bold)).foregroundStyle(.white).lineLimit(1)
-                                    if let played = game.lastPlayed {
-                                        Text("Played \(played.formatted(.relative(presentation: .named)))")
-                                            .font(.caption.weight(.medium)).foregroundStyle(.white.opacity(0.75))
-                                    }
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .homeGlass()
+                            .padding(10)
+                        }
+                        .overlay(alignment: .bottomLeading) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(game.title).font(.headline.weight(.bold)).foregroundStyle(.white).lineLimit(1)
+                                if let played = game.lastPlayed {
+                                    Text("Played \(played.formatted(.relative(presentation: .named)))")
+                                        .font(.caption.weight(.medium)).foregroundStyle(.white.opacity(0.75))
                                 }
-                                .padding(14)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(LinearGradient(colors: [.clear, .black.opacity(0.82)], startPoint: .top, endPoint: .bottom))
                             }
-                    } else {
-                        LibraryArtwork(entry: game)
-                            .matchedGeometryEffect(id: game.id, in: cardSpace, isSource: card?.id != game.id)
-                            .opacity(card?.id == game.id ? 0 : 1)
-                    }
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(LinearGradient(colors: [.clear, .black.opacity(0.82)], startPoint: .top, endPoint: .bottom))
+                        }
+                } else {
+                    LibraryArtwork(entry: game)
+                        .matchedGeometryEffect(id: game.id, in: cardSpace, isSource: card?.id != game.id)
+                        .opacity(card?.id == game.id ? 0 : 1)
                 }
-            } tapped: { id in
-                guard let uuid = id.base as? UUID else { return }
-                if uuid == current?.id, let game = current { openCard(game) } else { focused = uuid }
             }
-            // The focused game's name and floating visionOS metadata pill, centred under it.
-            VStack(spacing: 8) {
+        } tapped: { id in
+            guard let uuid = id.base as? UUID else { return }
+            if uuid == focusedHomeID { openHomeSelection() } else { focused = uuid }
+        }
+        // The focused tile's name and floating visionOS metadata pill, centred under it.
+        VStack(spacing: 8) {
+            if let game = current {
                 Text(game.title).font(.title2.weight(.heavy)).lineLimit(1).minimumScaleFactor(0.7)
                     .foregroundStyle(.white).shadow(color: .black.opacity(0.65), radius: 10)
                 HStack(spacing: 10) {
@@ -598,14 +622,76 @@ struct ControllerHome: View {
                 .font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.85))
                 .padding(.horizontal, 14).padding(.vertical, 6)
                 .homeGlass()
+            } else if focusedHomeID == Self.storeTileID {
+                Text("Store").font(.title2.weight(.heavy))
+                    .foregroundStyle(.white).shadow(color: .black.opacity(0.65), radius: 10)
+                HStack(spacing: 8) {
+                    Text("APP").font(.caption2.weight(.heavy)).kerning(1)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 9).padding(.vertical, 3)
+                        .background(theme.accent.color.opacity(0.38), in: Capsule())
+                        .overlay(Capsule().stroke(theme.accent.color.opacity(0.75), lineWidth: 1))
+                    Text("Steam · GOG · Epic Games")
+                }
+                .font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.85))
+                .padding(.horizontal, 14).padding(.vertical, 6)
+                .homeGlass()
+            } else {
+                Text("Settings").font(.title2.weight(.heavy))
+                    .foregroundStyle(.white).shadow(color: .black.opacity(0.65), radius: 10)
+                HStack(spacing: 8) {
+                    Text("APP").font(.caption2.weight(.heavy)).kerning(1)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 9).padding(.vertical, 3)
+                        .background(Color.white.opacity(0.18), in: Capsule())
+                        .overlay(Capsule().stroke(.white.opacity(0.4), lineWidth: 1))
+                    Text("Controls · Theme · Memory · JIT")
+                }
+                .font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.85))
+                .padding(.horizontal, 14).padding(.vertical, 6)
+                .homeGlass()
             }
-            .frame(maxWidth: .infinity)
-            .id(game.id).transition(.opacity)
-            .animation(.easeInOut(duration: 0.2), value: game.id)
-            Spacer(minLength: 8)
-        } else {
-            message("No games installed yet", detail: "Press RB to go to Download and get one.", symbol: "gamecontroller")
-            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .id(focusedHomeID).transition(.opacity)
+        .animation(.easeInOut(duration: 0.2), value: focusedHomeID)
+        Spacer(minLength: 8)
+    }
+
+    private func openHomeSelection() {
+        if focusedHomeID == Self.storeTileID {
+            storeInSidebar = false
+            withAnimation(.easeInOut(duration: 0.2)) { section = .download }
+        } else if focusedHomeID == Self.settingsTileID {
+            inOptions = false
+            withAnimation(.easeInOut(duration: 0.2)) { section = .settings }
+        } else if let game = current {
+            openCard(game)
+        }
+    }
+
+    /// Xbox / PS5-style console app tile (Store, Settings) in visionOS Liquid Glass.
+    private func homeAppTile(title: String, subtitle: String, symbol: String, colors: [Color]) -> some View {
+        ZStack {
+            LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing)
+            Rectangle().fill(.ultraThinMaterial.opacity(0.45))
+            RadialGradient(colors: [.white.opacity(0.22), .clear], center: .topLeading, startRadius: 10, endRadius: 220)
+            VStack(spacing: 14) {
+                Spacer(minLength: 0)
+                Image(systemName: symbol)
+                    .font(.system(size: 46, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 84, height: 84)
+                    .background(.ultraThinMaterial, in: Circle())
+                    .overlay(Circle().stroke(.white.opacity(0.35), lineWidth: 1.2))
+                    .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
+                VStack(spacing: 3) {
+                    Text(title).font(.headline.weight(.heavy)).foregroundStyle(.white)
+                    Text(subtitle).font(.caption2.weight(.semibold)).foregroundStyle(.white.opacity(0.72)).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(14)
         }
     }
 
@@ -1798,12 +1884,13 @@ struct ControllerHome: View {
         case .games:
             switch command {
             case "left", "right":
-                guard !games.isEmpty else { return }
-                let i = games.firstIndex { $0.id == current?.id } ?? 0
-                let next = games[command == "left" ? max(i - 1, 0) : min(i + 1, games.count - 1)].id
-                if next != current?.id { UISelectionFeedbackGenerator().selectionChanged() }
+                let ids = homeShelfIDs
+                guard !ids.isEmpty else { return }
+                let i = ids.firstIndex(of: focusedHomeID) ?? 0
+                let next = ids[command == "left" ? max(i - 1, 0) : min(i + 1, ids.count - 1)]
+                if next != focusedHomeID { UISelectionFeedbackGenerator().selectionChanged() }
                 focused = next
-            case "accept": if let game = current { openCard(game) }
+            case "accept": openHomeSelection()
             case "add": if let game = current { pageFocus = 0; page = game }
             default: break
             }
@@ -1817,6 +1904,7 @@ struct ControllerHome: View {
                 case "up": storeFilter = filters[max(storeFilter.rawValue - 1, 0)]; downloadFocus = 0
                 case "down": storeFilter = filters[min(storeFilter.rawValue + 1, filters.count - 1)]; downloadFocus = 0
                 case "right", "accept": if !list.isEmpty { storeInSidebar = false }
+                case "back": withAnimation(.easeInOut(duration: 0.2)) { section = .games }
                 default: break
                 }
             } else {
@@ -1828,6 +1916,7 @@ struct ControllerHome: View {
                 // A opens the game's page (A there downloads); Y downloads from the grid.
                 case "accept": if let item = focusedStore { downloadPageFocus = 0; downloadPage = item }
                 case "add": if let item = focusedStore { runStoreAction(item) }
+                case "back": withAnimation(.easeInOut(duration: 0.2)) { section = .games }
                 default: break
                 }
             }
@@ -1849,6 +1938,7 @@ struct ControllerHome: View {
                 case "up": settingsCategory = max(settingsCategory - 1, 0); settingsFocus = 0
                 case "down": settingsCategory = min(settingsCategory + 1, categories.count - 1); settingsFocus = 0
                 case "right", "accept": inOptions = true
+                case "back": withAnimation(.easeInOut(duration: 0.2)) { section = .games }
                 default: break
                 }
             }

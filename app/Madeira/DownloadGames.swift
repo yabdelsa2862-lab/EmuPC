@@ -360,14 +360,43 @@ struct DownloadGamesView: View {
     }
     @AppStorage("madeiraDownloadSource") private var sourceRaw = Source.steam.rawValue
     private var source: Source { Source(rawValue: sourceRaw) ?? .steam }
+    @ObservedObject private var theme = ThemeSettings.shared
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         List {
             Section {
-                Picker("Store", selection: $sourceRaw) {
-                    ForEach(Source.allCases, id: \.rawValue) { Text($0.label).tag($0.rawValue) }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(Source.allCases, id: \.rawValue) { item in
+                            let on = item == source
+                            Button {
+                                withAnimation(.spring(response: 0.28, dampingFraction: 0.84)) { sourceRaw = item.rawValue }
+                            } label: {
+                                Text(item.label)
+                                    .font(.subheadline.weight(on ? .bold : .semibold))
+                                    .lineLimit(1).fixedSize()
+                                    .padding(.horizontal, 15).padding(.vertical, 8)
+                                    .foregroundStyle(on ? theme.accent.onAccent : Color.primary.opacity(0.88))
+                                    .background {
+                                        if on {
+                                            Capsule()
+                                                .fill(theme.accent.color)
+                                                .overlay(Capsule().stroke(.white.opacity(0.45), lineWidth: 1))
+                                                .shadow(color: theme.accent.color.opacity(0.4), radius: 8)
+                                        } else {
+                                            Capsule()
+                                                .fill(.ultraThinMaterial)
+                                                .overlay(Capsule().stroke(.white.opacity(0.16), lineWidth: 0.9))
+                                        }
+                                    }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 4)
                 }
-                .pickerStyle(.segmented)
+                .scrollClipDisabled()
                 .listRowBackground(Color.clear)
                 .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
             }
@@ -382,6 +411,17 @@ struct DownloadGamesView: View {
             installToSection
         }
         .listStyle(.insetGrouped)
+        .scrollContentBackground(colorScheme == .dark ? .hidden : .automatic)
+        .background {
+            if colorScheme == .dark {
+                ZStack {
+                    ThemeBackdrop().opacity(0.55)
+                    LinearGradient(colors: [.black.opacity(0.55), .black.opacity(0.35), .black.opacity(0.65)],
+                                   startPoint: .top, endPoint: .bottom)
+                }
+                .ignoresSafeArea()
+            }
+        }
         .refreshable { await SteamGamesSection.refresh() }
         .onAppear {
             drive.restore()

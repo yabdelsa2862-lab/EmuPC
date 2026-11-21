@@ -3021,15 +3021,27 @@ struct LibrarySectionHeader<Trailing: View>: View {
     @ViewBuilder var trailing: Trailing
     var body: some View {
         if let collapsed {
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .center, spacing: 10) {
                 Button {
-                    withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .easeInOut(duration: 0.2)) { collapsed.wrappedValue.toggle() }
+                    withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .spring(response: 0.28, dampingFraction: 0.82)) { collapsed.wrappedValue.toggle() }
                 } label: {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(title).font(.title2.bold())
-                        if let count, count > 0 { Text("\(count)").font(.subheadline).foregroundStyle(.secondary) }
-                        Image(systemName: "chevron.right").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                    HStack(alignment: .center, spacing: 8) {
+                        Text(title).font(.title3.weight(.heavy))
+                        if let count, count > 0 {
+                            Text("\(count)")
+                                .font(.caption.weight(.bold).monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 8).padding(.vertical, 3)
+                                .background(.ultraThinMaterial, in: Capsule())
+                                .overlay(Capsule().stroke(.primary.opacity(0.14), lineWidth: 0.8))
+                        }
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.secondary)
                             .rotationEffect(.degrees(collapsed.wrappedValue ? 0 : 90))
+                            .frame(width: 24, height: 24)
+                            .background(.ultraThinMaterial, in: Circle())
+                            .overlay(Circle().stroke(.primary.opacity(0.12), lineWidth: 0.8))
                     }.contentShape(Rectangle()).frame(minHeight: 44)
                 }.buttonStyle(.plain)
                     .accessibilityAddTraits(.isHeader)
@@ -3038,9 +3050,16 @@ struct LibrarySectionHeader<Trailing: View>: View {
                 trailing
             }
         } else {
-            HStack(alignment: .firstTextBaseline) {
-                Text(title).font(.title2.bold())
-                if let count, count > 0 { Text("\(count)").font(.subheadline).foregroundStyle(.secondary) }
+            HStack(alignment: .center, spacing: 8) {
+                Text(title).font(.title3.weight(.heavy))
+                if let count, count > 0 {
+                    Text("\(count)")
+                        .font(.caption.weight(.bold).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .overlay(Capsule().stroke(.primary.opacity(0.14), lineWidth: 0.8))
+                }
                 Spacer()
                 trailing
             }.accessibilityElement(children: .combine).accessibilityAddTraits(.isHeader)
@@ -3094,41 +3113,48 @@ enum LibraryStoreTab: String, CaseIterable, Identifiable {
     func shows(_ section: LibraryStoreTab) -> Bool { self == .all || self == section }
 }
 
-/// The store tabs' control: the system segmented control, or, when its segments do not fit
-/// across, a row of capsules that scrolls sideways.
+/// EmuPC 2.0: SteamOS × visionOS Liquid Glass store filter pill bar (no outer clipped box).
 struct LibraryStoreTabBar: View {
     let tabs: [LibraryStoreTab]
     @Binding var selection: String
+    @ObservedObject private var theme = ThemeSettings.shared
 
     private var picked: Binding<LibraryStoreTab> {
         Binding(get: { LibraryStoreTab.current(selection, in: tabs) },
-                set: { tab in withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .easeInOut(duration: 0.2)) { selection = tab.rawValue } })
+                set: { tab in withAnimation(UIAccessibility.isReduceMotionEnabled ? nil : .spring(response: 0.28, dampingFraction: 0.84)) { selection = tab.rawValue } })
     }
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            Picker("Store", selection: picked) {
-                ForEach(tabs) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .fixedSize()
-            .frame(maxWidth: .infinity)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(tabs) { tab in
-                        let on = picked.wrappedValue == tab
-                        Button { picked.wrappedValue = tab } label: {
-                            Text(tab.title).font(.subheadline.weight(.semibold))
-                                .padding(.horizontal, 14).padding(.vertical, 7)
-                                .foregroundStyle(on ? Color.white : Color.primary)
-                                .background(Capsule().fill(on ? Color.accentColor : Color(uiColor: .tertiarySystemFill)))
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityAddTraits(on ? .isSelected : [])
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(tabs) { tab in
+                    let on = picked.wrappedValue == tab
+                    Button { picked.wrappedValue = tab } label: {
+                        Text(tab.title)
+                            .font(.subheadline.weight(on ? .bold : .semibold))
+                            .lineLimit(1).fixedSize()
+                            .padding(.horizontal, 15).padding(.vertical, 8)
+                            .foregroundStyle(on ? theme.accent.onAccent : Color.primary.opacity(0.88))
+                            .background {
+                                if on {
+                                    Capsule()
+                                        .fill(theme.accent.color)
+                                        .overlay(Capsule().stroke(.white.opacity(0.45), lineWidth: 1))
+                                        .shadow(color: theme.accent.color.opacity(0.4), radius: 8)
+                                } else {
+                                    Capsule()
+                                        .fill(.ultraThinMaterial)
+                                        .overlay(Capsule().stroke(.white.opacity(0.16), lineWidth: 0.9))
+                                }
+                            }
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(on ? .isSelected : [])
                 }
             }
+            .padding(.vertical, 4)
         }
+        .scrollClipDisabled()
         .accessibilityLabel("Store")
     }
 }
@@ -3483,8 +3509,21 @@ struct LibraryView: View {
         // names stay for VoiceOver.
         TabView(selection: Binding(get: { tab }, set: { switchTab(to: $0) })) {
             // The card layouts: the zoomable page or the original one (LibraryGridArm).
+            // EmuPC 2.0: subtle dark ambient canvas behind the library so the animated
+            // cover shine (LibraryGridGlow / AmbientGlowLayer) stands out richly.
             Group { if LibraryGridArm.zoomable(setting: zoomableGrid, layout: layout) { zoomableLibrary } else { library } }
-                .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+                .background {
+                    if colorScheme == .dark {
+                        ZStack {
+                            ThemeBackdrop().opacity(0.55)
+                            LinearGradient(colors: [.black.opacity(0.55), .black.opacity(0.35), .black.opacity(0.65)],
+                                           startPoint: .top, endPoint: .bottom)
+                        }
+                        .ignoresSafeArea()
+                    } else {
+                        Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
+                    }
+                }
                 .tabItem { Image(systemName: "square.grid.2x2.fill").accessibilityLabel("Library") }
                 .tag(0)
             // Download games (DownloadGames.swift): Steam downloads and games from a link or Files.
@@ -3734,6 +3773,17 @@ struct LibraryView: View {
                 SettingsCreditsSection()
             }
         }
+        .scrollContentBackground(colorScheme == .dark ? .hidden : .automatic)
+        .background {
+            if colorScheme == .dark {
+                ZStack {
+                    ThemeBackdrop().opacity(0.55)
+                    LinearGradient(colors: [.black.opacity(0.55), .black.opacity(0.35), .black.opacity(0.65)],
+                                   startPoint: .top, endPoint: .bottom)
+                }
+                .ignoresSafeArea()
+            }
+        }
         .alert("Restart EmuPC", isPresented: $restartNotice) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -3884,8 +3934,10 @@ struct LibraryView: View {
                         .contentShape(Capsule())
                 } else {
                     Label("Desktop", systemImage: "desktopcomputer")
-                        .font(.subheadline.weight(.medium)).padding(.horizontal, 14).frame(minHeight: 44)
-                        .background(Color(uiColor: .secondarySystemGroupedBackground), in: Capsule())
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 16).frame(minHeight: 44)
+                        .homeGlass()
+                        .contentShape(Capsule())
                 }
             }.buttonStyle(.plain)
                 .animation(UIAccessibility.isReduceMotionEnabled ? nil : .easeInOut(duration: 0.4), value: liquidMetal.on)
@@ -3906,8 +3958,10 @@ struct LibraryView: View {
                             .contentShape(Capsule())
                     } else {
                         Label("Big Picture", systemImage: "gamecontroller")
-                            .font(.subheadline.weight(.medium)).padding(.horizontal, 14).frame(minHeight: 44)
-                            .background(Color(uiColor: .secondarySystemGroupedBackground), in: Capsule())
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 16).frame(minHeight: 44)
+                            .homeGlass()
+                            .contentShape(Capsule())
                     }
                 }.buttonStyle(.plain)
                     .animation(UIAccessibility.isReduceMotionEnabled ? nil : .easeInOut(duration: 0.4), value: liquidMetal.on)

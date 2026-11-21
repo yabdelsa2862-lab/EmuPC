@@ -94,6 +94,8 @@ struct SettingsPagesList: View {
     var startDock: (DockGame, Bool) -> Void
     @ObservedObject private var jitState = LibraryJITState.shared
     @ObservedObject private var liquidMetal = LiquidMetalSetting.shared
+    @ObservedObject private var theme = ThemeSettings.shared
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         Form {
@@ -104,18 +106,38 @@ struct SettingsPagesList: View {
                     Section {
                         ForEach(pages, id: \.self) { page in
                             NavigationLink { SettingsPageView(page: page, startDock: startDock) } label: { row(page) }
+                                .listRowBackground(colorScheme == .dark ? Color.white.opacity(0.07) : nil)
                         }
-                    } header: { if let title = group.0 { Text(title) } }
+                    } header: { if let title = group.0 { Text(title).font(.caption.weight(.bold)).foregroundStyle(.secondary) } }
                 }
+            }
+        }
+        .scrollContentBackground(colorScheme == .dark ? .hidden : .automatic)
+        .background {
+            if colorScheme == .dark {
+                ZStack {
+                    ThemeBackdrop().opacity(0.55)
+                    LinearGradient(colors: [.black.opacity(0.55), .black.opacity(0.35), .black.opacity(0.65)],
+                                   startPoint: .top, endPoint: .bottom)
+                }
+                .ignoresSafeArea()
             }
         }
     }
 
     @ViewBuilder private func row(_ page: SettingsPages.Page) -> some View {
+        let icon = Image(systemName: page.symbol)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 28, height: 28)
+            .background(theme.accent.color.opacity(0.28), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(theme.accent.color.opacity(0.55), lineWidth: 0.8))
         if let value = summary(page) {
-            LabeledContent { Text(value).lineLimit(1) } label: { Label(page.title, systemImage: page.symbol) }
+            LabeledContent { Text(value).lineLimit(1) } label: {
+                HStack(spacing: 12) { icon; Text(page.title) }
+            }
         } else {
-            Label(page.title, systemImage: page.symbol)
+            HStack(spacing: 12) { icon; Text(page.title) }
         }
     }
 
