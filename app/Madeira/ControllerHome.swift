@@ -1747,21 +1747,30 @@ struct ControllerHome: View {
                                     if item.music { MusicGuideRow(focused: on) }
                                     else { Label(item.title, systemImage: item.symbol).font(.subheadline.weight(on ? .bold : .semibold)) }
                                 }
-                                .foregroundStyle(on ? theme.accent.onAccent : .white.opacity(0.92))
+                                .foregroundStyle(.white)
                                 .padding(.horizontal, 14).padding(.vertical, 9)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(on ? theme.accent.color : Color.white.opacity(0.05),
-                                            in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                                .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                    .stroke(.white.opacity(on ? 0.72 : 0.08), lineWidth: on ? 1.5 : 0.8))
-                                .shadow(color: on ? theme.accent.color.opacity(0.35) : .clear, radius: 10)
+                                .background {
+                                    if on {
+                                        LiquidFocusLens(accent: theme.accent.color, cornerRadius: 14)
+                                            .matchedGeometryEffect(id: "homeGuideFocusLens", in: cardSpace)
+                                    } else {
+                                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                            .fill(Color.white.opacity(0.05))
+                                            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(.white.opacity(0.08), lineWidth: 0.7))
+                                    }
+                                }
                                 .contentShape(Rectangle())
-                                .onTapGesture { guideFocus = i; if !item.music { guide = false }; item.action() }
+                                .onTapGesture { guideFocus = i; UISound.shared.play(.select); if !item.music { guide = false }; item.action() }
                                 .id(i)
                             }
                         }
+                        .animation(.spring(response: 0.26, dampingFraction: 0.8), value: guideFocus)
                     }
-                    .onChange(of: guideFocus) { _, i in withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(i, anchor: .center) } }
+                    .onChange(of: guideFocus) { _, i in
+                        UISound.shared.play(.move)
+                        withAnimation(.spring(response: 0.26, dampingFraction: 0.82)) { proxy.scrollTo(i, anchor: .center) }
+                    }
                 }
                 HStack(spacing: 18) {
                     ButtonHint(glyph: "a.circle.fill", label: "Select")

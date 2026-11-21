@@ -106,17 +106,39 @@ final class LibraryController: ObservableObject, @unchecked Sendable {
     private let lock = NSLock()
     private var enabled = false
     private var owns = false
+    /// After the in-game guide/menu closes, keep swallowing pad input until the
+    /// user releases the closing button (B / A / Guide) so it never leaks into the game.
+    private var draining = false
+    private var drainUntil: UInt64 = 0
     private var last: UInt16 = 0
     private var announced = false
     private let allowed = MadeiraConfig.flag("MADEIRA_FRONTEND_CONTROLLER")
-    var ownsInput: Bool { lock.lock(); defer { lock.unlock() }; return enabled && owns }
+    var ownsInput: Bool { lock.lock(); defer { lock.unlock() }; return enabled && (owns || draining) }
     func configure(enabled: Bool, ownsInput: Bool) {
-        lock.lock(); self.enabled = enabled && allowed; owns = ownsInput; lock.unlock()
+        lock.lock()
+        let wasOwning = self.enabled && self.owns
+        self.enabled = enabled && allowed
+        self.owns = ownsInput
+        if wasOwning && !ownsInput && self.enabled {
+            draining = true
+            drainUntil = DispatchTime.now().uptimeNanoseconds &+ 350_000_000
+        } else if ownsInput || !self.enabled {
+            draining = false
+        }
+        lock.unlock()
     }
     /// One sample of player 1's pad, in XInput button bits and stick units.
     func sample(buttons raw: UInt16, lx: Int16, ly: Int16) {
         lock.lock()
         guard enabled else { lock.unlock(); return }
+        if draining {
+            let now = DispatchTime.now().uptimeNanoseconds
+            let atRest = raw == 0 && abs(Int(lx)) < 8000 && abs(Int(ly)) < 8000
+            if atRest || now >= drainUntil { draining = false }
+            last = raw
+            lock.unlock()
+            return
+        }
         var buttons = raw
         if owns {
             if lx < -16000 { buttons |= 4 }; if lx > 16000 { buttons |= 8 }
@@ -5855,7 +5877,8 @@ struct LibraryHUD: View {
                 if model.menu && LibraryController.shared.connected && !guide.fullMenu {
                     Color.black.opacity(0.45).ignoresSafeArea().onTapGesture { model.menu = false }.transition(.opacity)
                     HStack(spacing: 0) {
-                        InGameGuideView().padding(.leading, IslandMargins.current().leading - 8)
+                        InGameGuideView()
+                            .padding(.leading, max(IslandMargins.current(tight: true).leading - 18, 10))
                         Spacer(minLength: 0)
                     }
                     .ignoresSafeArea()

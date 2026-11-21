@@ -521,6 +521,7 @@ struct InGameGuideView: View {
     @ObservedObject private var controls = TouchControlsModel.shared
     @ObservedObject private var mic = MicControl.shared
     @State private var now = Date()
+    @Namespace private var focusSpace
 
     var body: some View {
         let items = guide.items(model)
@@ -561,19 +562,28 @@ struct InGameGuideView: View {
                         }
                         }
                         }
-                        .foregroundStyle(on ? theme.accent.onAccent : .white)
+                        .foregroundStyle(.white)
                         .padding(.horizontal, 14).padding(.vertical, 9)
-                        .background(on ? theme.accent.color : Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous)
-                            .stroke(.white.opacity(on ? 0.72 : 0.1), lineWidth: on ? 1.5 : 0.8))
-                        .shadow(color: on ? theme.accent.color.opacity(0.35) : .clear, radius: 10)
+                        .background {
+                            if on {
+                                LiquidFocusLens(accent: theme.accent.color, cornerRadius: 14)
+                                    .matchedGeometryEffect(id: "inGameFocusLens", in: focusSpace)
+                            } else {
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(Color.white.opacity(0.05))
+                                    .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(.white.opacity(0.08), lineWidth: 0.7))
+                            }
+                        }
                         .contentShape(Rectangle())
                         .onTapGesture { guide.focus = i; item.action(0) }
                         .id(i)
                     }
                 }
+                .animation(.spring(response: 0.26, dampingFraction: 0.8), value: guide.focus)
             }
-            .onChange(of: guide.focus) { _, i in withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(i, anchor: .center) } }
+            .onChange(of: guide.focus) { _, i in
+                withAnimation(.spring(response: 0.26, dampingFraction: 0.82)) { proxy.scrollTo(i, anchor: .center) }
+            }
             }
             HStack(spacing: 16) {
                 ButtonHint(glyph: "a.circle.fill", label: "Select")
@@ -584,12 +594,37 @@ struct InGameGuideView: View {
         }
         .foregroundStyle(.white)
         .padding(18)
-        .frame(width: 332)
+        .frame(width: 316)
         .frame(maxHeight: .infinity, alignment: .top)
         .homePanelGlass(cornerRadius: 28)
-        .padding(.leading, max(IslandMargins.current().leading, 14))
         .padding(.vertical, 14)
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { now = $0 }
+    }
+}
+
+/// Real translucent tinted Liquid Glass selection lens (iOS 26+ `.glassEffect(.regular.tint(...))`
+/// with a specular rim, smoothly gliding between rows via `matchedGeometryEffect`).
+struct LiquidFocusLens: View {
+    let accent: Color
+    var cornerRadius: CGFloat = 14
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let rim = LinearGradient(
+            colors: [.white.opacity(0.75), accent.opacity(0.65), .white.opacity(0.22)],
+            startPoint: .topLeading, endPoint: .bottomTrailing
+        )
+        if #available(iOS 26, *) {
+            shape
+                .fill(accent.opacity(0.22))
+                .glassEffect(.regular.tint(accent.opacity(0.45)), in: shape)
+                .overlay(shape.stroke(rim, lineWidth: 1.25))
+        } else {
+            shape
+                .fill(accent.opacity(0.32))
+                .background(.ultraThinMaterial, in: shape)
+                .overlay(shape.stroke(rim, lineWidth: 1.25))
+        }
     }
 }
 
