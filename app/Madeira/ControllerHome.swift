@@ -171,6 +171,7 @@ struct ControllerHome: View {
     @State private var card: LibraryEntry?
     @State private var cardFocus = 0
     @Namespace private var cardSpace
+    @Namespace private var guideSpace
     /// The download page (Y on a game in Download) and its focused row.
     @State private var downloadPage: StoreItem?
     @State private var downloadPageFocus = 0
@@ -433,17 +434,29 @@ struct ControllerHome: View {
     // EmuPC 2.0: SteamOS Big Picture × visionOS Liquid Glass top bar.
     private func topBarContent(compact: Bool) -> some View {
         HStack(spacing: compact ? 6 : 12) {
-            // Floating visionOS profile capsule.
+            // Floating visionOS profile capsule — morphs directly into the Guide panel.
             HStack(spacing: 10) {
                 ProfileAvatar(size: compact ? 28 : 32)
                     .overlay(Circle().stroke(.white.opacity(0.28), lineWidth: 1))
+                    .matchedGeometryEffect(id: "guideAvatar", in: guideSpace, isSource: !guide)
                 if !compact {
-                    Text(ProfileSettings.shared.displayName).font(.subheadline.weight(.semibold)).lineLimit(1).fixedSize()
+                    Text(ProfileSettings.shared.displayName)
+                        .font(.subheadline.weight(.semibold)).lineLimit(1).fixedSize()
+                        .matchedGeometryEffect(id: "guideName", in: guideSpace, isSource: !guide)
                 }
             }
             .padding(.leading, 5).padding(.trailing, compact ? 5 : 14).padding(.vertical, 5)
-            .homeGlass()
-            .onTapGesture { profilePage = true }
+            .background {
+                Capsule().fill(.clear)
+                    .homeGlass()
+                    .matchedGeometryEffect(id: "guideGlassShell", in: guideSpace, isSource: !guide)
+            }
+            .opacity(guide ? 0 : 1)
+            .onTapGesture {
+                UISound.shared.play(.select)
+                guideFocus = 0
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.84)) { guide = true }
+            }
             if showTabs {
                 Spacer(minLength: compact ? 4 : 8)
                 HStack(spacing: 4) {
@@ -1717,16 +1730,23 @@ struct ControllerHome: View {
          GuideItem(title: "Close EmuPC", symbol: "power") { AppRelaunch.close() }]
     }
 
-    /// EmuPC 2.0: floating visionOS Liquid Glass guide panel.
+    private static let guideSpring = Animation.spring(response: 0.38, dampingFraction: 0.84)
+
+    /// EmuPC 2.0: floating visionOS Liquid Glass guide panel, morphing out of the
+    /// top-left Profile pill on Controller Home.
     private var guidePanel: some View {
         ZStack(alignment: .leading) {
-            Color.black.opacity(0.42).ignoresSafeArea().onTapGesture { guide = false }
+            Color.black.opacity(0.42).ignoresSafeArea()
+                .onTapGesture { UISound.shared.play(.back); withAnimation(Self.guideSpring) { guide = false } }
+                .transition(.opacity)
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 12) {
                     ProfileAvatar(size: 42)
                         .overlay(Circle().stroke(.white.opacity(0.32), lineWidth: 1))
+                        .matchedGeometryEffect(id: "guideAvatar", in: guideSpace, isSource: guide)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(ProfileSettings.shared.displayName).font(.headline)
+                            .matchedGeometryEffect(id: "guideName", in: guideSpace, isSource: guide)
                         HStack(spacing: 10) {
                             Text(now.formatted(date: .omitted, time: .shortened)).monospacedDigit()
                             BatteryIndicator(compact: true)
@@ -1782,11 +1802,15 @@ struct ControllerHome: View {
             .padding(18)
             .frame(width: 316)
             .frame(maxHeight: .infinity, alignment: .top)
-            .homePanelGlass(cornerRadius: 28)
+            .background {
+                RoundedRectangle(cornerRadius: 28, style: .continuous).fill(.clear)
+                    .homePanelGlass(cornerRadius: 28)
+                    .matchedGeometryEffect(id: "guideGlassShell", in: guideSpace, isSource: guide)
+            }
             .padding(.leading, max(IslandMargins.current().leading, 14))
             .padding(.vertical, 14)
         }
-        .transition(.move(edge: .leading).combined(with: .opacity))
+        .transition(.opacity)
     }
 
     private func handle(_ command: String) {
@@ -1798,7 +1822,8 @@ struct ControllerHome: View {
         if layoutEditor.open { layoutEditor.command(command); return }
         if command == "guide" {
             pendingLibrary = nil
-            withAnimation(.easeOut(duration: 0.2)) { guide.toggle() }
+            UISound.shared.play(guide ? .back : .select)
+            withAnimation(Self.guideSpring) { guide.toggle() }
             guideFocus = 0
             return
         }
@@ -1815,9 +1840,9 @@ struct ControllerHome: View {
             case "down": guideFocus = min(guideFocus + 1, items.count - 1)
             case "left", "right": if items[guideFocus].music { MusicNow.shared.skip(command == "left" ? -1 : 1) }
             // Music plays or pauses and the guide stays open.
-            case "accept" where items[guideFocus].music: items[guideFocus].action()
-            case "accept": withAnimation { guide = false }; items[guideFocus].action()
-            case "back", "menu": withAnimation { guide = false }
+            case "accept" where items[guideFocus].music: UISound.shared.play(.select); items[guideFocus].action()
+            case "accept": UISound.shared.play(.select); withAnimation(Self.guideSpring) { guide = false }; items[guideFocus].action()
+            case "back", "menu": UISound.shared.play(.back); withAnimation(Self.guideSpring) { guide = false }
             default: break
             }
             return
