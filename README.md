@@ -59,25 +59,32 @@ stores and quality-of-life features on top.
 
 ## What EmuPC adds
 
-### A console home screen
-- **Controller-first home** in the style of a games console: your games as a
-  centred cover carousel over the selected game's blurred art, glass top bar and
-  button hints, smooth spring animations and haptics as you move.
-- **Game card**: press A on a game and its cover opens into a card in place,
-  with the description, developer, last played and install size, and Play or
-  Settings right there.
-- **Guide**: press the **Xbox / Home button** (or View + Menu) for Profile,
-  Home, Store, Settings, Wi-Fi controllers and Restart.
-- **In-game guide**: the same buttons during a game open Resume, **Quit game**,
-  FPS limit, performance overlay and touch controls, all driven by the controller.
+### A console home screen (2.0 Liquid Glass redesign)
+- **SteamOS × visionOS Liquid Glass interface**: a controller-first console home
+  combining SteamOS Big Picture navigation with floating visionOS-style Liquid
+  Glass panels, specular rims, luminous accent focus halos, smooth spring
+  animations and haptics over the selected game's blurred hero art.
+- **Floating top tab bar**: **Home · Store · Settings** pills across the top
+  (switched with **LB / RB**), on by default and optional in Settings.
+- **Game card & metadata pill**: a floating glass metadata capsule under your
+  focused cover; press **A** to expand into a floating Liquid Glass card with
+  description, developer, last played, install size, and accent **Play** /
+  **Settings** buttons.
+- **Floating Guide & In-Game Guide**: press the **Xbox / Home button** (or
+  View + Menu) for a floating rounded Liquid Glass sidebar with Profile, Home,
+  Store, Friends, Settings, Wi-Fi controllers and Restart — or during gameplay
+  for Resume, **Quit game**, **Microphone mute** (also **X** in the guide,
+  **View + D-pad Down** in-game, or tap the live level pill), FPS limit,
+  performance overlay and touch controls.
+- **Two-pane Liquid Glass Store & Settings**: floating glass filter rail and
+  16:9 store tiles with frosted store/compatibility badges, plus a two-pane
+  glass Settings layout and Liquid Glass Onboarding and launch screen.
 - **Controller keyboard**: when a game asks for text, click both sticks (L3 + R3) or open *Keyboard* from the
   in-game guide and type with the controller, symbols and @ included (A types, B deletes, Y space,
   X Shift, Menu Enter). Without a controller the iOS keyboard opens instead.
 - **Battery at a glance**: your iPhone or iPad battery and your controller's,
   next to the clock and in the guides.
 - **Close EmuPC** from the guide, without reaching for the screen.
-- **Optional tab bar** across the top (Home / Store / Settings, switched with LB
-  and RB), off by default.
 - **Themes**: accent colours, animated backgrounds (waves, orbs, aurora,
   particles, glow) or your own photo, and a startup animation.
 - **Profile**: name, a photo or built-in avatar, and a profile page with your

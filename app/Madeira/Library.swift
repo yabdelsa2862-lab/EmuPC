@@ -6095,13 +6095,13 @@ struct LibraryHUD: View {
             }
         }
     }
-    /// A round glyph button for the starting screen's control row.
+    /// A round Liquid Glass glyph button for the starting screen's control row.
     private func launchGlyph(_ label: String, _ symbol: String, on: Bool = false,
                              action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: symbol).font(.system(size: 19, weight: .semibold))
                 .frame(width: 46, height: 46)
-                .background(Circle().fill(Color.white.opacity(on ? 0.32 : 0.16)))
+                .homeGlass(tint: on ? .white : nil)
                 .contentShape(Circle())
         }
         .buttonStyle(.plain).foregroundStyle(.white)

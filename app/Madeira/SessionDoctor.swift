@@ -524,22 +524,23 @@ struct InGameGuideView: View {
 
     var body: some View {
         let items = guide.items(model)
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 12) {
                 ProfileAvatar(size: 40)
+                    .overlay(Circle().stroke(.white.opacity(0.32), lineWidth: 1))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(model.activeEntry?.title ?? "Game").font(.headline).lineLimit(1)
                     HStack(spacing: 10) {
-                        Text(now.formatted(date: .omitted, time: .shortened))
+                        Text(now.formatted(date: .omitted, time: .shortened)).monospacedDigit()
                         BatteryIndicator(compact: true)
                     }
-                    .font(.subheadline).foregroundStyle(.white.opacity(0.7))
+                    .font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.72))
                 }
             }
-            .padding(.bottom, 10)
+            .padding(.bottom, 6)
             ScrollViewReader { proxy in
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(spacing: 4) {
+                VStack(spacing: 5) {
                     ForEach(items.indices, id: \.self) { i in
                         let item = items[i]
                         let on = i == guide.focus
@@ -548,7 +549,7 @@ struct InGameGuideView: View {
                             MusicGuideRow(focused: on)
                         } else {
                         HStack {
-                            Label(item.title, systemImage: item.symbol).font(.headline)
+                            Label(item.title, systemImage: item.symbol).font(.subheadline.weight(on ? .bold : .semibold))
                             Spacer()
                             if let value = item.value {
                                 HStack(spacing: 6) {
@@ -561,8 +562,11 @@ struct InGameGuideView: View {
                         }
                         }
                         .foregroundStyle(on ? theme.accent.onAccent : .white)
-                        .padding(.horizontal, 14).padding(.vertical, 8)
-                        .background(on ? theme.accent.color : Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .padding(.horizontal, 14).padding(.vertical, 9)
+                        .background(on ? theme.accent.color : Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .stroke(.white.opacity(on ? 0.72 : 0.1), lineWidth: on ? 1.5 : 0.8))
+                        .shadow(color: on ? theme.accent.color.opacity(0.35) : .clear, radius: 10)
                         .contentShape(Rectangle())
                         .onTapGesture { guide.focus = i; item.action(0) }
                         .id(i)
@@ -576,14 +580,15 @@ struct InGameGuideView: View {
                 ButtonHint(glyph: "x.circle.fill", label: mic.muted ? "Unmute" : "Mute")
                 ButtonHint(glyph: "b.circle.fill", label: "Resume")
             }
-            .padding(.top, 8)
+            .padding(.top, 6)
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, 18).padding(.vertical, 14)
-        .frame(width: 340)
+        .padding(18)
+        .frame(width: 332)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(.ultraThinMaterial)
-        .background(Color.black.opacity(0.55))
+        .homePanelGlass(cornerRadius: 28)
+        .padding(.leading, max(IslandMargins.current().leading, 14))
+        .padding(.vertical, 14)
         .onReceive(Timer.publish(every: 30, on: .main, in: .common).autoconnect()) { now = $0 }
     }
 }
@@ -596,30 +601,40 @@ struct StopLaunchPrompt: View {
         if model.launching && !model.confirmStop && controller.connected {
             VStack {
                 Spacer()
-                HStack(spacing: 8) {
-                    Image(systemName: "b.circle.fill").font(.title2)
-                    Text("Stop launching").font(.headline)
-                }
-                .foregroundStyle(.white.opacity(0.85))
-                .padding(.bottom, 24)
+                ButtonHint(glyph: "b.circle.fill", label: "Stop launching")
+                    .padding(.horizontal, 18).padding(.vertical, 9)
+                    .homeGlass()
+                    .padding(.bottom, 22)
             }
             .frame(maxWidth: .infinity)
             .allowsHitTesting(false)
         }
         if model.launching && model.confirmStop {
             ZStack {
-                Color.black.opacity(0.7).ignoresSafeArea().onTapGesture { model.confirmStop = false }
+                Color.black.opacity(0.6).ignoresSafeArea().onTapGesture { model.confirmStop = false }
                 VStack(spacing: 14) {
                     Text("Stop launching?").font(.title2.bold())
-                    Text("The game will be closed.").font(.subheadline).foregroundStyle(.secondary)
-                    HStack(spacing: 30) {
-                        Button { model.stopGame(grace: 3) } label: { Label("Stop", systemImage: "a.circle.fill").font(.headline) }.tint(.red)
-                        Button { model.confirmStop = false } label: { Label("Keep waiting", systemImage: "b.circle.fill").font(.headline) }
+                    Text("The game will be closed.").font(.subheadline).foregroundStyle(.white.opacity(0.72))
+                    HStack(spacing: 24) {
+                        Button { model.stopGame(grace: 3) } label: {
+                            Label("Stop", systemImage: "a.circle.fill").font(.headline)
+                                .padding(.horizontal, 16).padding(.vertical, 9)
+                                .background(Color.red.opacity(0.28), in: Capsule())
+                                .overlay(Capsule().stroke(Color.red.opacity(0.7), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                        Button { model.confirmStop = false } label: {
+                            Label("Keep waiting", systemImage: "b.circle.fill").font(.headline)
+                                .padding(.horizontal, 16).padding(.vertical, 9)
+                                .background(Color.white.opacity(0.12), in: Capsule())
+                                .overlay(Capsule().stroke(.white.opacity(0.28), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
                 .padding(28)
                 .frame(maxWidth: 420)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
+                .homePanelGlass(cornerRadius: 28)
                 .foregroundStyle(.white)
             }
         }

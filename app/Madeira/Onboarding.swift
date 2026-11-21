@@ -260,8 +260,11 @@ struct OnboardingView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     if let position = OnboardingRules.position(of: model.step, in: model.steps), position.count > 1 {
-                        Text("Step \(position.number) of \(position.count)")
-                            .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+                        Text("STEP \(position.number) OF \(position.count)")
+                            .font(.caption.weight(.heavy)).kerning(1)
+                            .foregroundStyle(.white.opacity(0.85))
+                            .padding(.horizontal, 12).padding(.vertical, 5)
+                            .homeGlass()
                     }
                     switch model.step {
                     case .welcome: welcome
@@ -276,12 +279,24 @@ struct OnboardingView: View {
                     case .done: donePage
                     }
                 }
-                .padding(24).frame(maxWidth: 560, alignment: .leading).frame(maxWidth: .infinity)
+                .padding(26)
+                .frame(maxWidth: 560, alignment: .leading)
+                .homePanelGlass(cornerRadius: 28)
+                .padding(.horizontal, 20).padding(.vertical, 24)
+                .frame(maxWidth: .infinity)
                 .animation(.default, value: jitPath)
                 .animation(.default, value: pairing.phase)
             }
-            .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+            .scrollContentBackground(.hidden)
+            .background {
+                ZStack {
+                    ThemeBackdrop()
+                    Color.black.opacity(0.45)
+                }
+                .ignoresSafeArea()
+            }
         }
+        .preferredColorScheme(.dark)
         .interactiveDismissDisabled()
         .sheet(isPresented: $showSignIn) { SteamSignInView() }
         .fileImporter(isPresented: $importingPairingFile,

@@ -143,10 +143,9 @@ struct ControllerHome: View {
     @ObservedObject private var epic = EpicLibrary.shared
     @ObservedObject private var theme = ThemeSettings.shared
     @AppStorage(SessionDoctor.thermalKey) private var thermalGuard = true
-    /// EmuPC: the Home / Store / Settings tabs across the top, switched with
-    /// the shoulder buttons. Off by default: the Xbox button's guide moves
-    /// between them instead.
-    @AppStorage("madeiraShowTabs") private var showTabs = false
+    /// EmuPC 2.0: floating SteamOS-style Home / Store / Settings tabs across the
+    /// top, switched with LB/RB. On by default; can be hidden in Settings.
+    @AppStorage("madeiraShowTabs") private var showTabs = true
     /// The game page's Delete game, waiting for A (delete) or B (keep).
     @State private var confirmDelete: LibraryEntry?
     @ObservedObject private var pads = RemotePadServer.shared
@@ -427,29 +426,42 @@ struct ControllerHome: View {
         .foregroundStyle(.white)
     }
 
-    // Console-style chrome: everything sits in one kind of glass pill (HomeGlass).
+    // EmuPC 2.0: SteamOS Big Picture × visionOS Liquid Glass top bar.
     private func topBarContent(compact: Bool) -> some View {
         HStack(spacing: compact ? 6 : 12) {
-            // The profile, as consoles show it.
+            // Floating visionOS profile capsule.
             HStack(spacing: 10) {
                 ProfileAvatar(size: compact ? 28 : 32)
+                    .overlay(Circle().stroke(.white.opacity(0.28), lineWidth: 1))
                 if !compact {
                     Text(ProfileSettings.shared.displayName).font(.subheadline.weight(.semibold)).lineLimit(1).fixedSize()
                 }
             }
-            .padding(.leading, 4).padding(.trailing, compact ? 4 : 14).padding(.vertical, 4)
+            .padding(.leading, 5).padding(.trailing, compact ? 5 : 14).padding(.vertical, 5)
             .homeGlass()
             .onTapGesture { profilePage = true }
             if showTabs {
+                Spacer(minLength: compact ? 4 : 8)
                 HStack(spacing: 4) {
                     if !compact { BumperKey(text: "LB") }
                     ForEach(Section.allCases, id: \.self) { item in
+                        let active = item == section
                         Text(item.title.uppercased())
-                            .font((compact ? Font.caption : .subheadline).weight(.heavy)).kerning(1.2)
+                            .font((compact ? Font.caption : .subheadline).weight(.heavy)).kerning(1.1)
                             .lineLimit(1).fixedSize()
-                            .foregroundStyle(item == section ? .white : .white.opacity(0.5))
-                            .padding(.horizontal, compact ? 10 : 16).padding(.vertical, compact ? 6 : 8)
-                            .background(item == section ? Color.white.opacity(0.18) : Color.clear, in: Capsule())
+                            .foregroundStyle(active ? .white : .white.opacity(0.55))
+                            .padding(.horizontal, compact ? 11 : 16).padding(.vertical, compact ? 6 : 7)
+                            .background {
+                                if active {
+                                    Capsule()
+                                        .fill(theme.accent.color.opacity(0.28))
+                                        .overlay(Capsule().stroke(
+                                            LinearGradient(colors: [.white.opacity(0.65), theme.accent.color.opacity(0.6)],
+                                                           startPoint: .topLeading, endPoint: .bottomTrailing),
+                                            lineWidth: 1.2))
+                                        .shadow(color: theme.accent.color.opacity(0.35), radius: 8)
+                                }
+                            }
                             .onTapGesture { section = item }
                     }
                     if !compact { BumperKey(text: "RB") }
@@ -465,9 +477,9 @@ struct ControllerHome: View {
                 if !pads.players.isEmpty {
                     Label("\(pads.players.count + 1)", systemImage: "person.2.fill").font(.subheadline.weight(.semibold)).lineLimit(1).fixedSize()
                 }
-                Image(systemName: "gamecontroller.fill").font(.subheadline).foregroundStyle(.white.opacity(0.8))
+                Image(systemName: "gamecontroller.fill").font(.subheadline).foregroundStyle(theme.accent.color.opacity(0.9))
                 BatteryIndicator(compact: true)
-                Rectangle().fill(.white.opacity(0.25)).frame(width: 1, height: 16)
+                Rectangle().fill(.white.opacity(0.22)).frame(width: 1, height: 15)
                 Text(now.formatted(date: .omitted, time: .shortened))
                     .font(.subheadline.weight(.semibold).monospacedDigit())
                     .lineLimit(1).fixedSize()
@@ -530,16 +542,29 @@ struct ControllerHome: View {
                   wideID: games.first?.lastPlayed != nil ? games.first.map { AnyHashable($0.id) } : nil) { id in
                 if let game = games.first(where: { AnyHashable($0.id) == id }) {
                     if game.id == games.first?.id, game.lastPlayed != nil {
-                        // "Jump back in": the last game played, wide, with its name.
+                        // "Jump back in": the last game played, wide, with a SteamOS × visionOS glass badge.
                         LibraryArtwork(entry: game, backdrop: true)
+                            .overlay(alignment: .topLeading) {
+                                HStack(spacing: 5) {
+                                    Circle().fill(theme.accent.color).frame(width: 6, height: 6)
+                                    Text("JUMP BACK IN").font(.caption2.weight(.heavy)).kerning(1)
+                                }
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 10).padding(.vertical, 5)
+                                .homeGlass()
+                                .padding(10)
+                            }
                             .overlay(alignment: .bottomLeading) {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text("JUMP BACK IN").font(.caption.weight(.heavy)).foregroundStyle(theme.accent.color)
                                     Text(game.title).font(.headline.weight(.bold)).foregroundStyle(.white).lineLimit(1)
+                                    if let played = game.lastPlayed {
+                                        Text("Played \(played.formatted(.relative(presentation: .named)))")
+                                            .font(.caption.weight(.medium)).foregroundStyle(.white.opacity(0.75))
+                                    }
                                 }
-                                .padding(12)
+                                .padding(14)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(LinearGradient(colors: [.clear, .black.opacity(0.85)], startPoint: .top, endPoint: .bottom))
+                                .background(LinearGradient(colors: [.clear, .black.opacity(0.82)], startPoint: .top, endPoint: .bottom))
                             }
                     } else {
                         LibraryArtwork(entry: game)
@@ -551,20 +576,28 @@ struct ControllerHome: View {
                 guard let uuid = id.base as? UUID else { return }
                 if uuid == current?.id, let game = current { openCard(game) } else { focused = uuid }
             }
-            // The focused game's name and facts, centred under it.
+            // The focused game's name and floating visionOS metadata pill, centred under it.
             VStack(spacing: 8) {
-                Text(game.title).font(.title2.weight(.bold)).lineLimit(1).minimumScaleFactor(0.7)
-                    .foregroundStyle(.white).shadow(color: .black.opacity(0.6), radius: 8)
+                Text(game.title).font(.title2.weight(.heavy)).lineLimit(1).minimumScaleFactor(0.7)
+                    .foregroundStyle(.white).shadow(color: .black.opacity(0.65), radius: 10)
                 HStack(spacing: 10) {
                     Text(game.steamAppID != nil ? "STEAM" : game.gogID != nil ? "GOG" : game.epicAppName != nil ? "EPIC" : "PC")
                         .font(.caption2.weight(.heavy)).kerning(1)
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(theme.accent.color.opacity(0.35), in: Capsule())
-                        .overlay(Capsule().stroke(theme.accent.color.opacity(0.7), lineWidth: 1))
-                    if let played = game.lastPlayed { Text("Played \(played.formatted(.relative(presentation: .named)))") }
-                    if let bytes = game.folderBytes, bytes > 0 { Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)) }
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 9).padding(.vertical, 3)
+                        .background(theme.accent.color.opacity(0.38), in: Capsule())
+                        .overlay(Capsule().stroke(theme.accent.color.opacity(0.75), lineWidth: 1))
+                    if let played = game.lastPlayed {
+                        Text("Played \(played.formatted(.relative(presentation: .named)))")
+                    }
+                    if let bytes = game.folderBytes, bytes > 0 {
+                        Text("·").foregroundStyle(.white.opacity(0.4))
+                        Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)).monospacedDigit()
+                    }
                 }
-                .font(.subheadline).foregroundStyle(.white.opacity(0.75))
+                .font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.85))
+                .padding(.horizontal, 14).padding(.vertical, 6)
+                .homeGlass()
             }
             .frame(maxWidth: .infinity)
             .id(game.id).transition(.opacity)
@@ -595,15 +628,22 @@ struct ControllerHome: View {
                     Color.clear.frame(width: max(side - 22, 0) + firstWidth * 0.05 + 4, height: 1).id(Self.shelfStart)
                     ForEach(ids, id: \.self) { id in
                         let on = id == focusedID
+                        let focusRim = LinearGradient(
+                            colors: [.white.opacity(0.95), theme.accent.color.opacity(0.85), .white.opacity(0.55)],
+                            startPoint: .topLeading, endPoint: .bottomTrailing
+                        )
                         art(id)
                             .frame(width: id == wideID ? height * 16 / 9 : width, height: height)
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(.white.opacity(on ? 0.95 : 0.08), lineWidth: on ? 3 : 1))
-                            .shadow(color: on ? .white.opacity(0.35) : .clear, radius: 16)
+                            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .stroke(on ? AnyShapeStyle(focusRim) : AnyShapeStyle(Color.white.opacity(0.14)), lineWidth: on ? 2.5 : 1)
+                            )
+                            .shadow(color: on ? theme.accent.color.opacity(0.38) : .clear, radius: 18)
                             // Only the focused cover casts a shadow: one per cover was a blur pass each, every frame of a move.
                             .shadow(color: .black.opacity(on ? 0.6 : 0), radius: on ? 22 : 0, y: on ? 10 : 0)
-                            .scaleEffect(on ? 1.1 : 0.86)
-                            .opacity(on ? 1 : 0.6)
+                            .scaleEffect(on ? 1.09 : 0.87)
+                            .opacity(on ? 1 : 0.64)
                             .animation(.spring(response: 0.3, dampingFraction: 0.8), value: on)
                             .id(id)
                             .onTapGesture { tapped(id) }
@@ -724,12 +764,20 @@ struct ControllerHome: View {
     }
 
     private func cardButton(_ title: String, symbol: String, focused: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        let isPrimary = symbol == "play.fill"
+        return Button(action: action) {
             Label(title, systemImage: symbol).font(.headline)
-                .frame(minWidth: 120).padding(.vertical, 12).padding(.horizontal, 18)
-                .background(focused ? Color.white.opacity(0.22) : Color.white.opacity(0.08), in: Capsule())
-                .overlay(Capsule().stroke(.white.opacity(focused ? 0.95 : 0.15), lineWidth: focused ? 2 : 1))
-                .shadow(color: focused ? .white.opacity(0.25) : .clear, radius: 10)
+                .foregroundStyle(focused && isPrimary ? theme.accent.onAccent : .white)
+                .frame(minWidth: 126).padding(.vertical, 12).padding(.horizontal, 18)
+                .background(
+                    focused ? (isPrimary ? theme.accent.color : Color.white.opacity(0.22)) : Color.white.opacity(0.08),
+                    in: Capsule()
+                )
+                .overlay(Capsule().stroke(
+                    LinearGradient(colors: [.white.opacity(focused ? 0.9 : 0.22), .white.opacity(focused ? 0.35 : 0.06)],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing),
+                    lineWidth: focused ? 1.8 : 1))
+                .shadow(color: focused ? (isPrimary ? theme.accent.color.opacity(0.45) : .white.opacity(0.2)) : .clear, radius: 12)
                 .scaleEffect(focused ? 1.04 : 1)
         }
         .buttonStyle(.plain)
@@ -823,7 +871,15 @@ struct ControllerHome: View {
     }
 
     private func optionRow(_ title: String, value: String?, focused: Bool, prominent: Bool = false) -> some View {
-        HStack {
+        let isProminentFocused = focused && prominent
+        let fill: Color = isProminentFocused
+            ? theme.accent.color
+            : (focused ? theme.accent.color.opacity(0.22) : Color.white.opacity(0.06))
+        let rim = LinearGradient(
+            colors: [.white.opacity(focused ? 0.85 : 0.14), theme.accent.color.opacity(focused ? 0.65 : 0.0)],
+            startPoint: .topLeading, endPoint: .bottomTrailing
+        )
+        return HStack {
             Text(title).font(.headline.weight(prominent ? .heavy : .semibold))
             Spacer()
             if let value {
@@ -832,15 +888,14 @@ struct ControllerHome: View {
                     Text(value).font(.headline)
                     if focused { Image(systemName: "chevron.right").font(.caption.weight(.bold)) }
                 }
-                .foregroundStyle(.white.opacity(focused ? 0.95 : 0.7))
+                .foregroundStyle((isProminentFocused ? theme.accent.onAccent : Color.white).opacity(focused ? 0.95 : 0.7))
             }
         }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 18).padding(.vertical, 10)
-        .background(focused ? Color.white.opacity(prominent ? 0.24 : 0.16) : Color.white.opacity(0.06),
-                    in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(.white.opacity(focused ? 0.9 : 0), lineWidth: 2))
-        .shadow(color: focused ? .white.opacity(0.18) : .clear, radius: 10)
+        .foregroundStyle(isProminentFocused ? theme.accent.onAccent : .white)
+        .padding(.horizontal, 18).padding(.vertical, 11)
+        .background(fill, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(rim, lineWidth: focused ? 1.8 : 1))
+        .shadow(color: focused ? theme.accent.color.opacity(prominent ? 0.4 : 0.22) : .clear, radius: 10)
         .animation(.easeOut(duration: 0.15), value: focused)
         .contentShape(Rectangle())
     }
@@ -943,12 +998,13 @@ struct ControllerHome: View {
             } else {
                 HStack(alignment: .top, spacing: 16) {
                     ScrollView(.vertical, showsIndicators: false) {
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: 4) {
                             ForEach(StoreFilter.allCases, id: \.self) { filterRow($0) }
                         }
-                        .padding(.vertical, 4)
+                        .padding(8)
                     }
                     .frame(width: sidebar)
+                    .homePanelGlass(cornerRadius: 22)
                     storeGrid(columns: columns)
                 }
             }
@@ -962,13 +1018,15 @@ struct ControllerHome: View {
         return Label(filter.title, systemImage: filter.symbol)
             .font(.subheadline.weight(selected ? .bold : .medium))
             .lineLimit(1).minimumScaleFactor(0.8)
-            .foregroundStyle(focused ? theme.accent.onAccent : .white.opacity(selected ? 1 : 0.7))
-            .padding(.horizontal, 12).padding(.vertical, 7)
+            .foregroundStyle(focused ? theme.accent.onAccent : .white.opacity(selected ? 1 : 0.72))
+            .padding(.horizontal, 12).padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(focused ? theme.accent.color : (selected ? Color.white.opacity(0.14) : Color.clear),
-                        in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(.white.opacity(focused ? 0.65 : (selected ? 0.22 : 0)), lineWidth: 1))
             .overlay(alignment: .leading) {
-                if selected && !focused { Capsule().fill(theme.accent.color).frame(width: 4, height: 22).offset(x: -2) }
+                if selected && !focused { Capsule().fill(theme.accent.color).frame(width: 3.5, height: 20).offset(x: 2) }
             }
             .contentShape(Rectangle())
             .onTapGesture { storeFilter = filter; downloadFocus = 0; storeInSidebar = false }
@@ -977,9 +1035,10 @@ struct ControllerHome: View {
     private func filterPill(_ filter: StoreFilter) -> some View {
         let selected = filter == storeFilter
         return Text(filter.title).font(.subheadline.weight(.semibold)).lineLimit(1).fixedSize()
-            .foregroundStyle(selected ? theme.accent.onAccent : .white.opacity(0.8))
-            .padding(.horizontal, 12).padding(.vertical, 7)
-            .background(selected ? theme.accent.color : Color.white.opacity(0.12), in: Capsule())
+            .foregroundStyle(selected ? theme.accent.onAccent : .white.opacity(0.85))
+            .padding(.horizontal, 14).padding(.vertical, 7)
+            .background(selected ? theme.accent.color : Color.white.opacity(0.1), in: Capsule())
+            .overlay(Capsule().stroke(.white.opacity(selected ? 0.65 : 0.18), lineWidth: 1))
             .onTapGesture { storeFilter = filter; downloadFocus = 0 }
     }
 
@@ -1023,6 +1082,10 @@ struct ControllerHome: View {
     private func storeTile(_ item: StoreItem, focused: Bool) -> some View {
         let info = storeTileInfo(item)
         let v = verdict(item)
+        let focusRim = LinearGradient(
+            colors: [.white.opacity(0.95), theme.accent.color.opacity(0.9), .white.opacity(0.5)],
+            startPoint: .topLeading, endPoint: .bottomTrailing
+        )
         // A fixed 16:9 box; the art fills it and is cropped to it.
         return Color.clear
             .aspectRatio(16 / 9, contentMode: .fit)
@@ -1031,27 +1094,35 @@ struct ControllerHome: View {
                     ZStack { Color.white.opacity(0.08); Image(systemName: "gamecontroller.fill").font(.title).foregroundStyle(.white.opacity(0.3)) }
                 }
             }
-            .overlay { LinearGradient(colors: [.clear, .black.opacity(0.85)], startPoint: .center, endPoint: .bottom) }
+            .overlay { LinearGradient(colors: [.clear, .black.opacity(0.82)], startPoint: .center, endPoint: .bottom) }
+            .overlay(alignment: .topTrailing) {
+                HStack(spacing: 5) {
+                    Text(info.source).font(.caption2.weight(.heavy)).kerning(0.6)
+                    if let v { Image(systemName: v.symbol).font(.caption2.weight(.bold)).foregroundStyle(v.color) }
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(.ultraThinMaterial, in: Capsule())
+                .overlay(Capsule().stroke(.white.opacity(0.24), lineWidth: 0.8))
+                .padding(8)
+            }
             .overlay(alignment: .bottomLeading) {
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Text(info.source).font(.caption2.weight(.heavy))
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(.black.opacity(0.55), in: Capsule())
-                        if let v { Image(systemName: v.symbol).font(.caption.weight(.bold)).foregroundStyle(v.color) }
-                    }
+                VStack(alignment: .leading, spacing: 4) {
                     Text(info.title).font(.caption.weight(.bold)).lineLimit(2)
                     if let f = info.fraction { ProgressView(value: f).tint(theme.accent.color) }
                 }
                 .foregroundStyle(.white)
-                .padding(8)
+                .padding(10)
             }
             .clipped()
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(focused ? theme.accent.color : .clear, lineWidth: 4))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(focused ? AnyShapeStyle(focusRim) : AnyShapeStyle(Color.white.opacity(0.14)), lineWidth: focused ? 2.5 : 1)
+        )
         .scaleEffect(focused ? 1.04 : 1)
-        .shadow(color: .black.opacity(focused ? 0.6 : 0.2), radius: focused ? 14 : 4, y: 6)
-        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: focused)
+        .shadow(color: focused ? theme.accent.color.opacity(0.35) : .black.opacity(0.2), radius: focused ? 14 : 4, y: 6)
+        .animation(.spring(response: 0.28, dampingFraction: 0.82), value: focused)
     }
 
     private func storeTitle(_ name: String, source: String) -> some View {
@@ -1437,30 +1508,36 @@ struct ControllerHome: View {
         let category = categories[min(settingsCategory, categories.count - 1)]
         let items = category.items
         let focus = min(settingsFocus, max(items.count - 1, 0))
-        return HStack(alignment: .top, spacing: 24) {
-            // Categories.
+        return HStack(alignment: .top, spacing: 18) {
+            // Floating visionOS Liquid Glass category rail.
             ScrollViewReader { reader in
                 ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 6) {
+                    VStack(alignment: .leading, spacing: 5) {
                         ForEach(categories.indices, id: \.self) { i in
                             let on = i == settingsCategory
+                            let catFocused = on && !inOptions
                             Label(categories[i].title, systemImage: categories[i].symbol)
-                                .font(.headline)
-                                .foregroundStyle(on && !inOptions ? .black : .white.opacity(on ? 1 : 0.7))
-                                .padding(.horizontal, 14).padding(.vertical, 9)
+                                .font(.subheadline.weight(on ? .bold : .semibold))
+                                .foregroundStyle(catFocused ? theme.accent.onAccent : .white.opacity(on ? 1 : 0.72))
+                                .padding(.horizontal, 14).padding(.vertical, 10)
                                 .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(on ? (inOptions ? Color.white.opacity(0.15) : .white) : .clear,
-                                            in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                .background(
+                                    catFocused ? theme.accent.color : (on ? Color.white.opacity(0.14) : Color.clear),
+                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                )
+                                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .stroke(.white.opacity(catFocused ? 0.7 : (on ? 0.22 : 0)), lineWidth: 1))
                                 .id(i)
                                 .onTapGesture { settingsCategory = i; settingsFocus = 0; inOptions = true }
                         }
                     }
-                    .padding(.vertical, 4)
+                    .padding(10)
                 }
                 .onChange(of: settingsCategory) { _, i in withAnimation { reader.scrollTo(i, anchor: .center) } }
             }
-            .frame(width: 250)
-            // The category's settings, and the focused one's explanation.
+            .frame(width: 245)
+            .homePanelGlass(cornerRadius: 22)
+            // The category's settings inside a floating glass pane, plus description card.
             VStack(alignment: .leading, spacing: 10) {
                 ScrollViewReader { reader in
                     ScrollView(.vertical, showsIndicators: false) {
@@ -1471,25 +1548,31 @@ struct ControllerHome: View {
                                     .onTapGesture { inOptions = true; settingsFocus = i; items[i].change(1) }
                             }
                         }
-                        .padding(.vertical, 4)
+                        .padding(12)
                     }
                     .onChange(of: settingsFocus) { _, i in withAnimation { reader.scrollTo(i, anchor: .center) } }
                 }
+                .homePanelGlass(cornerRadius: 22)
                 if inOptions, items.indices.contains(focus), !items[focus].note.isEmpty {
-                    Text(items[focus].note).font(.subheadline).foregroundStyle(.white.opacity(0.7))
+                    Text(items[focus].note).font(.subheadline).foregroundStyle(.white.opacity(0.8))
                         .fixedSize(horizontal: false, vertical: true).lineLimit(4)
+                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .homePanelGlass(cornerRadius: 16)
                 }
                 // The Wi-Fi controllers' join code next to its setting.
                 if category.title == "General", inOptions, focus == 1, pads.running,
                    let url = pads.joinURL, let qr = RemotePadServer.qrImage(url.absoluteString) {
                     HStack(spacing: 14) {
                         Image(uiImage: qr).interpolation(.none).resizable().frame(width: 110, height: 110)
-                            .padding(6).background(.white, in: RoundedRectangle(cornerRadius: 10))
+                            .padding(6).background(.white, in: RoundedRectangle(cornerRadius: 12))
                         VStack(alignment: .leading, spacing: 4) {
                             Text("Scan with a phone's Camera to join").font(.headline)
                             ForEach(pads.players) { Text("Player \($0.slot + 1): \($0.name)").foregroundStyle(.secondary) }
                         }
                     }
+                    .padding(12)
+                    .homePanelGlass(cornerRadius: 18)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
@@ -1531,42 +1614,47 @@ struct ControllerHome: View {
          GuideItem(title: "Close EmuPC", symbol: "power") { AppRelaunch.close() }]
     }
 
-    /// The guide, sliding in from the left like a console's.
+    /// EmuPC 2.0: floating visionOS Liquid Glass guide panel.
     private var guidePanel: some View {
         ZStack(alignment: .leading) {
-            Color.black.opacity(0.45).ignoresSafeArea().onTapGesture { guide = false }
-            VStack(alignment: .leading, spacing: 6) {
+            Color.black.opacity(0.42).ignoresSafeArea().onTapGesture { guide = false }
+            VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 12) {
-                    ProfileAvatar(size: 44)
-                    VStack(alignment: .leading) {
+                    ProfileAvatar(size: 42)
+                        .overlay(Circle().stroke(.white.opacity(0.32), lineWidth: 1))
+                    VStack(alignment: .leading, spacing: 2) {
                         Text(ProfileSettings.shared.displayName).font(.headline)
                         HStack(spacing: 10) {
-                            Text(now.formatted(date: .omitted, time: .shortened))
+                            Text(now.formatted(date: .omitted, time: .shortened)).monospacedDigit()
                             BatteryIndicator(compact: true)
                         }
-                        .font(.subheadline).foregroundStyle(.white.opacity(0.7))
+                        .font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.72))
                     }
                 }
-                .padding(.bottom, 8)
+                .padding(.bottom, 6)
                 // The rows scroll (and follow the focus) so the panel fits the
                 // landscape height instead of spilling past the top and bottom.
                 ScrollViewReader { proxy in
                     ScrollView(.vertical, showsIndicators: false) {
-                        VStack(spacing: 2) {
+                        VStack(spacing: 4) {
                             ForEach(guideItems.indices, id: \.self) { i in
                                 let item = guideItems[i]
+                                let on = i == guideFocus
                                 Group {
-                                    if item.music { MusicGuideRow(focused: i == guideFocus) }
-                                    else { Label(item.title, systemImage: item.symbol).font(.headline) }
+                                    if item.music { MusicGuideRow(focused: on) }
+                                    else { Label(item.title, systemImage: item.symbol).font(.subheadline.weight(on ? .bold : .semibold)) }
                                 }
-                                    .foregroundStyle(i == guideFocus ? theme.accent.onAccent : .white)
-                                    .padding(.horizontal, 14).padding(.vertical, 8)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(i == guideFocus ? Color.white.opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(.white.opacity(i == guideFocus ? 0.85 : 0), lineWidth: 1.5))
-                                    .contentShape(Rectangle())
-                                    .onTapGesture { guideFocus = i; if !item.music { guide = false }; item.action() }
-                                    .id(i)
+                                .foregroundStyle(on ? theme.accent.onAccent : .white.opacity(0.92))
+                                .padding(.horizontal, 14).padding(.vertical, 9)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(on ? theme.accent.color : Color.white.opacity(0.05),
+                                            in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                                .overlay(RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                    .stroke(.white.opacity(on ? 0.72 : 0.08), lineWidth: on ? 1.5 : 0.8))
+                                .shadow(color: on ? theme.accent.color.opacity(0.35) : .clear, radius: 10)
+                                .contentShape(Rectangle())
+                                .onTapGesture { guideFocus = i; if !item.music { guide = false }; item.action() }
+                                .id(i)
                             }
                         }
                     }
@@ -1576,15 +1664,15 @@ struct ControllerHome: View {
                     ButtonHint(glyph: "a.circle.fill", label: "Select")
                     ButtonHint(glyph: "b.circle.fill", label: "Close")
                 }
+                .padding(.top, 4)
             }
             .foregroundStyle(.white)
-            .padding(.horizontal, 20).padding(.vertical, 14)
-            .padding(.leading, IslandMargins.current().leading)
-            .frame(width: 320 + IslandMargins.current().leading)
+            .padding(18)
+            .frame(width: 316)
             .frame(maxHeight: .infinity, alignment: .top)
-            .background {
-                ZStack { Color.black.opacity(0.6); Rectangle().fill(.ultraThinMaterial.opacity(0.95)) }.ignoresSafeArea()
-            }
+            .homePanelGlass(cornerRadius: 28)
+            .padding(.leading, max(IslandMargins.current().leading, 14))
+            .padding(.vertical, 14)
         }
         .transition(.move(edge: .leading).combined(with: .opacity))
     }
@@ -1977,32 +2065,50 @@ enum IslandMargins {
 
 // MARK: - Console chrome
 
-/// EmuPC: the controller home's one glass shape (top bar, hint bar): Liquid
-/// Glass on iOS 26, a thin material before it, both with a faint rim.
-private struct HomeGlass<S: Shape>: ViewModifier {
+/// EmuPC 2.0: visionOS Liquid Glass surfaces — real `.glassEffect` on iOS 26+
+/// with a specular top-leading rim and soft ambient shadow, falling back cleanly
+/// to `.ultraThinMaterial` on earlier iOS versions.
+struct HomeGlass<S: Shape>: ViewModifier {
     let shape: S
+    var tint: Color? = nil
     func body(content: Content) -> some View {
+        let rim = LinearGradient(
+            colors: [.white.opacity(0.32), .white.opacity(0.08), .white.opacity(0.03)],
+            startPoint: .topLeading, endPoint: .bottomTrailing
+        )
         if #available(iOS 26, *) {
-            content.glassEffect(.regular, in: shape)
+            content
+                .background(tint?.opacity(0.16) ?? Color.clear, in: shape)
+                .glassEffect(.regular, in: shape)
+                .overlay(shape.stroke(rim, lineWidth: 1))
+                .shadow(color: .black.opacity(0.28), radius: 14, y: 6)
         } else {
-            content.background(.ultraThinMaterial, in: shape)
-                .overlay(shape.stroke(.white.opacity(0.12), lineWidth: 1))
+            content
+                .background(tint?.opacity(0.16) ?? Color.clear, in: shape)
+                .background(.ultraThinMaterial, in: shape)
+                .overlay(shape.stroke(rim, lineWidth: 1))
+                .shadow(color: .black.opacity(0.32), radius: 14, y: 6)
         }
     }
 }
 
 extension View {
-    func homeGlass() -> some View { modifier(HomeGlass(shape: Capsule())) }
+    func homeGlass(tint: Color? = nil) -> some View { modifier(HomeGlass(shape: Capsule(), tint: tint)) }
+    /// Floating visionOS glass panel (guide sidebars, settings rails, game cards).
+    func homePanelGlass(cornerRadius: CGFloat = 28, tint: Color? = nil) -> some View {
+        modifier(HomeGlass(shape: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous), tint: tint))
+    }
     /// The game card's larger rounded glass.
-    func homeCardGlass() -> some View { modifier(HomeGlass(shape: RoundedRectangle(cornerRadius: 30, style: .continuous))) }
+    func homeCardGlass() -> some View { homePanelGlass(cornerRadius: 30) }
 }
 
 /// A bumper's key label in the tab pill.
 private struct BumperKey: View {
     let text: String
     var body: some View {
-        Text(text).font(.caption2.weight(.heavy)).foregroundStyle(.white.opacity(0.75))
-            .padding(.horizontal, 6).padding(.vertical, 3)
-            .overlay(RoundedRectangle(cornerRadius: 5).stroke(.white.opacity(0.4), lineWidth: 1))
+        Text(text).font(.caption2.weight(.heavy)).foregroundStyle(.white.opacity(0.8))
+            .padding(.horizontal, 7).padding(.vertical, 3)
+            .background(Color.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(.white.opacity(0.28), lineWidth: 1))
     }
 }
