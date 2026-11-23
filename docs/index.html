@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>EmuPC — Windows games on iPhone and iPad</title>
+<meta name="description" content="EmuPC is a free, open-source PC emulator for iPhone and iPad. Play Windows games from Steam, GOG, Epic, EA and itch.io with no jailbreak. Official downloads and checksums.">
+<meta property="og:title" content="EmuPC — Windows games on iPhone and iPad">
+<meta property="og:description" content="Free and open source. Steam, GOG, Epic, EA and itch.io in one app, no jailbreak. Built on Madeira.">
+<meta property="og:image" content="https://yabdelsa2862-lab.github.io/EmuPC/screenshots/home.jpg">
+<meta name="theme-color" content="#0b0d12">
+<link rel="icon" href="assets/icon.png">
+<link rel="apple-touch-icon" href="assets/icon.png">
+<style>
+:root{
+  --bg:#0b0d12; --bg2:#12151c; --card:#161a23; --line:rgba(255,255,255,.08);
+  --text:#f2f4f8; --muted:#9aa3b2; --accent:#0a84ff; --accent2:#5ac8fa; --ok:#30d158; --warn:#ffd60a;
+  --radius:20px; --max:1080px;
+  font-synthesis:none;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#f5f6f8; --bg2:#ffffff; --card:#ffffff; --line:rgba(0,0,0,.08);
+    --text:#111318; --muted:#5b6472; --accent:#007aff; --accent2:#0a84ff;
+  }
+}
+:root[data-theme="dark"]{ --bg:#0b0d12; --bg2:#12151c; --card:#161a23; --line:rgba(255,255,255,.08); --text:#f2f4f8; --muted:#9aa3b2; }
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--accent)}
+.wrap{max-width:var(--max);margin:0 auto;padding:0 16px}
+header.nav{position:sticky;top:0;z-index:10;backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);background:color-mix(in srgb,var(--bg) 72%,transparent);border-bottom:1px solid var(--line)}
+.nav .wrap{display:flex;align-items:center;gap:16px;height:56px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:-.01em;color:var(--text);text-decoration:none;font-size:18px}
+.brand img{width:28px;height:28px;border-radius:7px}
+.nav nav{margin-left:auto;display:flex;gap:18px;font-size:14px}
+.nav nav a{color:var(--muted);text-decoration:none}
+.nav nav a:hover{color:var(--text)}
+@media (max-width:640px){.nav nav a.opt{display:none}}
+.hero{padding:72px 0 40px;text-align:center;position:relative;overflow:hidden}
+.hero::before{content:"";position:absolute;inset:-40% -10% auto;height:520px;background:radial-gradient(closest-side,color-mix(in srgb,var(--accent) 35%,transparent),transparent);filter:blur(30px);opacity:.55;pointer-events:none}
+.hero h1{position:relative;font-size:clamp(34px,6vw,60px);line-height:1.05;letter-spacing:-.03em;margin:0 0 16px;font-weight:800}
+.hero p.lead{position:relative;font-size:clamp(17px,2.2vw,21px);color:var(--muted);max-width:680px;margin:0 auto 28px}
+.btns{position:relative;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:13px 22px;border-radius:999px;font-weight:600;text-decoration:none;font-size:16px;border:1px solid transparent;cursor:pointer}
+.btn.primary{background:var(--accent);color:#fff}
+.btn.ghost{background:transparent;color:var(--text);border-color:var(--line)}
+.btn:hover{filter:brightness(1.08)}
+.hero .shot{position:relative;margin:44px auto 0;max-width:960px;border-radius:24px;overflow:hidden;border:1px solid var(--line);box-shadow:0 30px 80px rgba(0,0,0,.45)}
+.hero .shot img{display:block;width:100%;height:auto}
+section{padding:56px 0}
+h2{font-size:clamp(26px,3.6vw,36px);letter-spacing:-.02em;margin:0 0 8px;font-weight:750}
+.sub{color:var(--muted);margin:0 0 28px;max-width:720px}
+.notice{display:flex;gap:14px;align-items:flex-start;background:color-mix(in srgb,var(--ok) 10%,var(--card));border:1px solid color-mix(in srgb,var(--ok) 35%,transparent);border-radius:var(--radius);padding:18px 20px;margin:0 0 24px}
+.notice .ic{font-size:22px;line-height:1}
+.notice b{display:block;margin-bottom:2px}
+.notice p{margin:0;color:var(--muted)}
+.grid{display:grid;gap:16px}
+.g2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px}
+.card h3{margin:0 0 6px;font-size:18px;letter-spacing:-.01em}
+.card p{margin:0;color:var(--muted)}
+.rel .top{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.tag{font-size:12px;font-weight:700;padding:3px 9px;border-radius:999px;background:color-mix(in srgb,var(--accent) 18%,transparent);color:var(--accent)}
+.tag.pre{background:color-mix(in srgb,var(--warn) 20%,transparent);color:#c9a400}
+@media (prefers-color-scheme: dark){.tag.pre{color:var(--warn)}}
+.rel h3{margin:0;font-size:22px}
+.meta{color:var(--muted);font-size:14px;margin:2px 0 14px}
+.hash{display:flex;gap:8px;align-items:center;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:8px 10px;margin:12px 0 16px}
+.hash code{font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;word-break:break-all;color:var(--text);flex:1}
+.hash button{flex:none;border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:8px;padding:5px 10px;font-size:12px;cursor:pointer}
+.rel .row{display:flex;gap:10px;flex-wrap:wrap}
+.muted{color:var(--muted)}
+.small{font-size:14px}
+.gallery{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:14px}
+.gallery figure{margin:0;border-radius:16px;overflow:hidden;border:1px solid var(--line);background:var(--card)}
+.gallery img{display:block;width:100%;height:auto;aspect-ratio:1600/736;object-fit:cover}
+.gallery figcaption{padding:10px 14px;font-size:14px;color:var(--muted)}
+.feat .em{font-size:26px;margin-bottom:10px;display:block}
+ol.steps{counter-reset:s;list-style:none;padding:0;margin:0;display:grid;gap:14px}
+ol.steps li{counter-increment:s;position:relative;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px 18px 64px}
+ol.steps li::before{content:counter(s);position:absolute;left:20px;top:18px;width:30px;height:30px;border-radius:50%;background:var(--accent);color:#fff;font-weight:700;display:grid;place-items:center;font-size:15px}
+ol.steps b{display:block;margin-bottom:2px}
+ol.steps p{margin:0;color:var(--muted)}
+pre.cmd{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px 12px;overflow-x:auto;font:13px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;margin:8px 0 0}
+details{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 20px;margin-bottom:10px}
+details summary{cursor:pointer;font-weight:600}
+details p{color:var(--muted);margin:10px 0 0}
+footer{border-top:1px solid var(--line);padding:32px 0 48px;color:var(--muted);font-size:14px}
+footer p{margin:0 0 8px}
+</style>
+</head>
+<body>
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="#"><img src="assets/icon.png" alt="">EmuPC</a>
+    <nav>
+      <a href="#download">Download</a>
+      <a class="opt" href="#features">Features</a>
+      <a class="opt" href="#setup">Setup</a>
+      <a class="opt" href="#faq">FAQ</a>
+      <a href="https://github.com/yabdelsa2862-lab/EmuPC">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+<section class="hero">
+  <div class="wrap">
+    <h1>Windows PC games<br>on your iPhone and iPad.</h1>
+    <p class="lead">EmuPC is a free, open-source PC emulator for iOS. Play your Steam, GOG, Epic, EA and itch.io games in one app, with a console-style home built for a controller. No jailbreak.</p>
+    <div class="btns">
+      <a class="btn primary" href="#download">Download EmuPC</a>
+      <a class="btn ghost" href="https://github.com/yabdelsa2862-lab/EmuPC">View source on GitHub</a>
+    </div>
+    <div class="shot"><img src="screenshots/home.jpg" alt="EmuPC's home screen on iPhone, with the last played game and the library underneath" width="1600" height="736"></div>
+  </div>
+</section>
+
+<section id="download">
+  <div class="wrap">
+    <h2>Download</h2>
+    <p class="sub">EmuPC is an IPA you sideload. The newest versions show up here automatically.</p>
+    <div class="notice">
+      <span class="ic">✅</span>
+      <div>
+        <b>Get EmuPC only from here or from its GitHub releases.</b>
+        <p>Official builds are published only by <a href="https://github.com/yabdelsa2862-lab/EmuPC/releases">yabdelsa2862-lab/EmuPC</a>. Copies on other pages, forks or mirrors aren't official and may be changed. Check the SHA-256 below before installing (<a href="#verify">how</a>).</p>
+      </div>
+    </div>
+    <div id="releases" class="grid g2">
+      <div class="card rel"><p class="muted">Loading the latest releases…</p></div>
+    </div>
+    <p class="small muted" style="margin-top:14px">All versions: <a href="https://github.com/yabdelsa2862-lab/EmuPC/releases">GitHub releases</a>.</p>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <h2>What you get</h2>
+    <p class="sub">EmuPC keeps Madeira's engine and adds its own interface, stores and quality-of-life features on top.</p>
+    <div class="grid g3">
+      <div class="card feat"><span class="em">🎮</span><h3>A console home</h3><p>Jump back into your last game, browse your library and open the guide with the Xbox button, all from a controller.</p></div>
+      <div class="card feat"><span class="em">🛒</span><h3>Your stores in one place</h3><p>Steam, GOG, Epic Games, EA app and itch.io, with filters and a compatibility estimate for each game.</p></div>
+      <div class="card feat"><span class="em">🏆</span><h3>Steam extras</h3><p>Achievements, owned DLC, Workshop items, beta branches, friends and game invites, even while you play.</p></div>
+      <div class="card feat"><span class="em">🕹️</span><h3>Controllers your way</h3><p>Xbox, PlayStation, MFi and Steam Controller. Remap any button, even to a keyboard key or mouse click.</p></div>
+      <div class="card feat"><span class="em">👆</span><h3>Touch, keyboard and mouse</h3><p>On-screen controls you can arrange, plus hardware keyboards and mice.</p></div>
+      <div class="card feat"><span class="em">📺</span><h3>Play on a TV</h3><p>AirPlay or a cable to a TV or monitor, with the phone as a controller.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="screens">
+  <div class="wrap">
+    <h2>In action</h2>
+    <p class="sub">Real games, running on an iPhone.</p>
+    <div class="gallery">
+      <figure><img loading="lazy" src="screenshots/ets2-gameplay.jpg" alt="Euro Truck Simulator 2 driving in EmuPC on iPhone"><figcaption>Euro Truck Simulator 2</figcaption></figure>
+      <figure><img loading="lazy" src="screenshots/quake2-action.jpg" alt="Quake II played with a controller in EmuPC"><figcaption>Quake II</figcaption></figure>
+      <figure><img loading="lazy" src="screenshots/store.jpg" alt="EmuPC's store with Steam, GOG and Epic games"><figcaption>The store</figcaption></figure>
+      <figure><img loading="lazy" src="screenshots/guide.jpg" alt="EmuPC's guide, opened with the Xbox button"><figcaption>The guide</figcaption></figure>
+      <figure><img loading="lazy" src="screenshots/mecha-chameleon.jpg" alt="Mecha Chameleon from Steam running in EmuPC"><figcaption>Mecha Chameleon</figcaption></figure>
+      <figure><img loading="lazy" src="screenshots/download.jpg" alt="A game's store page while downloading, with its compatibility estimate"><figcaption>A store page while downloading</figcaption></figure>
+    </div>
+  </div>
+</section>
+
+<section id="setup">
+  <div class="wrap">
+    <h2>Get started</h2>
+    <p class="sub">Tested on an iPhone 16 Pro Max (8 GB) and an iPad Air 4 (4 GB) on iOS 27. Other recent iPhones and iPads should work; 4 GB devices get a low-memory profile and run lighter games.</p>
+    <ol class="steps">
+      <li><b>Download the IPA</b><p>From the <a href="#download">Download</a> section above, and check its SHA-256.</p></li>
+      <li><b>Sideload it</b><p>Use SideStore, AltStore or Sideloadly. With a free Apple ID, apps stay signed for 7 days, so refresh EmuPC in SideStore or AltStore before then (an expired copy says it's "no longer available").</p></li>
+      <li><b>Add the memory permissions</b><p>Use GetMoreRam to give EmuPC's App ID the increased memory limit and extended virtual addressing. Bigger games need them; the Memory+ badge turns green when they're on.</p></li>
+      <li><b>Turn on JIT</b><p>EmuPC needs JIT to run games. Use its built-in helper or StikDebug with LocalDevVPN; EmuPC's first-run setup walks you through it. Details: <a href="https://github.com/yabdelsa2862-lab/EmuPC/blob/main/docs/JIT.md">JIT setup</a>.</p></li>
+      <li><b>Sign in and play</b><p>Sign in to your stores, download a game you own, and press Play.</p></li>
+    </ol>
+  </div>
+</section>
+
+<section id="verify">
+  <div class="wrap">
+    <h2>Check your download</h2>
+    <p class="sub">The SHA-256 is a fingerprint of the file. If yours matches the one shown in the Download section, it's the exact file from the official release.</p>
+    <div class="grid g2">
+      <div class="card"><h3>Mac</h3><p>In Terminal:</p><pre class="cmd">shasum -a 256 ~/Downloads/EmuPC-*.ipa</pre></div>
+      <div class="card"><h3>Windows</h3><p>In PowerShell:</p><pre class="cmd">Get-FileHash $HOME\Downloads\EmuPC-*.ipa</pre></div>
+    </div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="wrap">
+    <h2>FAQ</h2>
+    <details><summary>Is it free?</summary><p>Yes. EmuPC is free and open source under the GPL-3.0 license. You only need to own the games you play.</p></details>
+    <details><summary>Will every game run?</summary><p>No. EmuPC is an experimental project. Many games start and some play well, but performance and compatibility vary from game to game, and the store shows an estimate for each one.</p></details>
+    <details><summary>Do online games with anti-cheat work?</summary><p>Usually not. Anti-cheat systems like Easy Anti-Cheat have no iOS version, so their online modes can't connect. EmuPC doesn't try to get around anti-cheat.</p></details>
+    <details><summary>Why isn't it on the App Store?</summary><p>Running PC games needs JIT, which the App Store doesn't allow for apps like this, so EmuPC is sideloaded.</p></details>
+    <details><summary>It says "no longer available" when I open it</summary><p>The app's signature expired. Refresh EmuPC in SideStore or AltStore, or sign and install it again. Your games and settings stay.</p></details>
+    <details><summary>How do I report a problem?</summary><p>Open an issue on <a href="https://github.com/yabdelsa2862-lab/EmuPC/issues">GitHub</a> and attach the files from Settings › Advanced › Get Help from Claude, so the log shows what happened.</p></details>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>EmuPC is built on <a href="https://github.com/willfaust/Madeira">Madeira</a> by Will Faust and its contributors, which uses <a href="https://github.com/FEX-Emu/FEX">FEX-Emu</a>, <a href="https://www.winehq.org/">Wine</a> and <a href="https://github.com/3Shain/dxmt">DXMT</a>.</p>
+    <p>Free software under the <a href="https://github.com/yabdelsa2862-lab/EmuPC/blob/main/LICENSE">GPL-3.0</a>. Not affiliated with Apple, Microsoft, Valve, GOG, Epic Games, Electronic Arts or itch.io.</p>
+    <p><a href="https://github.com/yabdelsa2862-lab/EmuPC">Source</a> · <a href="https://github.com/yabdelsa2862-lab/EmuPC/releases">Releases</a> · <a href="https://github.com/yabdelsa2862-lab/EmuPC/issues">Report a problem</a></p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  var box = document.getElementById('releases');
+  var REPO = 'yabdelsa2862-lab/EmuPC';
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function mb(n) { return (n / 1048576).toFixed(0) + ' MB'; }
+  function card(r, pre) {
+    var ipa = (r.assets || []).find(function (a) { return /\.ipa$/i.test(a.name); });
+    var c = el('div', 'card rel');
+    var top = el('div', 'top');
+    top.appendChild(el('span', pre ? 'tag pre' : 'tag', pre ? 'Test version' : 'Latest stable'));
+    c.appendChild(top);
+    c.appendChild(el('h3', null, r.name || r.tag_name));
+    var date = new Date(r.published_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+    c.appendChild(el('p', 'meta', 'Released ' + date + (ipa ? ' · ' + ipa.name + ' · ' + mb(ipa.size) : '')));
+    if (pre) c.appendChild(el('p', 'small muted', 'A preview with new features. It may have more bugs than the stable version.'));
+    if (ipa && ipa.digest) {
+      var h = el('div', 'hash');
+      var code = el('code', null, 'SHA-256 ' + ipa.digest.replace(/^sha256:/, ''));
+      var b = el('button', null, 'Copy');
+      b.addEventListener('click', function () {
+        try { navigator.clipboard.writeText(ipa.digest.replace(/^sha256:/, '')); b.textContent = 'Copied'; } catch (e) {}
+        setTimeout(function () { b.textContent = 'Copy'; }, 1500);
+      });
+      h.appendChild(code); h.appendChild(b); c.appendChild(h);
+    }
+    var row = el('div', 'row');
+    if (ipa) { var d = el('a', 'btn primary', 'Download IPA'); d.href = ipa.browser_download_url; row.appendChild(d); }
+    var n = el('a', 'btn ghost', 'Release notes'); n.href = r.html_url; row.appendChild(n);
+    c.appendChild(row);
+    return c;
+  }
+  fetch('https://api.github.com/repos/' + REPO + '/releases?per_page=15', { headers: { 'Accept': 'application/vnd.github+json' } })
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function (list) {
+      list = list.filter(function (r) { return !r.draft; });
+      var stable = list.find(function (r) { return !r.prerelease; });
+      var pre = list.find(function (r) { return r.prerelease; });
+      box.textContent = '';
+      if (stable) box.appendChild(card(stable, false));
+      if (pre && (!stable || new Date(pre.published_at) > new Date(stable.published_at))) box.appendChild(card(pre, true));
+      if (!box.children.length) throw new Error('none');
+    })
+    .catch(function () {
+      box.textContent = '';
+      var c = el('div', 'card rel');
+      c.appendChild(el('h3', null, 'Get the latest release'));
+      c.appendChild(el('p', 'meta', 'The release list couldn’t load here. Every version, with its SHA-256, is on GitHub.'));
+      var a = el('a', 'btn primary', 'Open GitHub releases'); a.href = 'https://github.com/' + REPO + '/releases/latest';
+      c.appendChild(a); box.appendChild(c);
+    });
+})();
+</script>
+</body>
+</html>
