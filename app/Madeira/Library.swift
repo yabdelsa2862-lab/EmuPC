@@ -3486,6 +3486,7 @@ struct LibraryView: View {
             Group { if LibraryGridArm.zoomable(setting: zoomableGrid, layout: layout) { zoomableLibrary } else { library } }
                 .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
                 .tabItem { Image(systemName: "square.grid.2x2.fill").accessibilityLabel("Library") }
+                .toolbar(CompactTabs.on ? .hidden : .automatic, for: .tabBar)
                 .tag(0)
             // Download games (DownloadGames.swift): Steam downloads and games from a link or Files.
             DownloadGamesView(search: downloadSearch) { entry in
@@ -3494,11 +3495,20 @@ struct LibraryView: View {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { selected = entry }
             }
                 .tabItem { Image(systemName: "arrow.down.circle.fill").accessibilityLabel("Download games") }
+                .toolbar(CompactTabs.on ? .hidden : .automatic, for: .tabBar)
                 .tag(2)
             settingsTab
                 .tabItem { Image(systemName: "gearshape.fill").accessibilityLabel("Settings") }
+                .toolbar(CompactTabs.on ? .hidden : .automatic, for: .tabBar)
                 .tag(1)
         }
+        // EmuPC issue #4: on a near-square iPhone (iPhone Duo) iOS moves the tab bar
+        // into the navigation bar's side rail, where its buttons don't answer taps.
+        // There, EmuPC draws its own tab buttons at the bottom instead.
+        .overlay(alignment: .bottom) {
+            if CompactTabs.on { CompactTabBar(tab: tab) { switchTab(to: $0) }.padding(.bottom, 8) }
+        }
+        .onAppear { CompactTabs.installTouchLog() }
         // The system search field (Liquid Glass on iOS 26) in the title's place, left
         // of the library's buttons, on both tabs; each tab keeps its own text.
         .background(LibraryNavSearch(text: tab == 0 ? $search : tab == 2 ? $downloadSearch : $settingsSearch,
@@ -7324,5 +7334,89 @@ private struct SmartPunctuationOff: UIViewRepresentable {
 extension View {
     func smartPunctuationOff() -> some View {
         background(SmartPunctuationOff().frame(width: 0, height: 0))
+    }
+}
+
+
+// MARK: - EmuPC issue #4: iPhone Duo tab buttons
+
+/// On near-square iPhone screens (the iPhone Duo, 466x678 points) iOS puts the tab
+/// bar into the navigation bar's side rail, and the reporter's taps there did
+/// nothing. `env.MADEIRA_CUSTOM_TABS = 1/0` forces it either way.
+@MainActor
+enum CompactTabs {
+    static let on: Bool = {
+        if let v = MadeiraConfig.get("env.MADEIRA_CUSTOM_TABS") { return v == "1" }
+        guard UIDevice.current.userInterfaceIdiom == .phone,
+              let size = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.screen.bounds.size }).first
+        else { return false }
+        let ratio = max(size.width, size.height) / max(1, min(size.width, size.height))
+        let on = ratio < 1.75
+        LogStore.shared.log("[tabs] issue4 screen \(Int(size.width))x\(Int(size.height)) ratio \(String(format: "%.2f", ratio)) -> \(on ? "EmuPC tab buttons" : "system tab bar")")
+        return on
+    }()
+
+    /// Logs which view each of the first touches lands on (window coordinates), so a
+    /// log shows what takes taps meant for the side rail.
+    @MainActor static func installTouchLog() {
+        guard on, logger == nil,
+              let window = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+                .flatMap(\.windows).first(where: { $0.isKeyWindow }) else { return }
+        let r = TouchLogRecognizer()
+        window.addGestureRecognizer(r)
+        logger = r
+    }
+    @MainActor private static var logger: TouchLogRecognizer?
+
+    final class TouchLogRecognizer: UIGestureRecognizer, UIGestureRecognizerDelegate {
+        private var logged = 0
+        init() {
+            super.init(target: nil, action: nil)
+            cancelsTouchesInView = false; delaysTouchesBegan = false; delaysTouchesEnded = false
+            delegate = self
+        }
+        override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+            if logged < 80, let t = touches.first, let w = view as? UIWindow {
+                logged += 1
+                let p = t.location(in: w)
+                var chain: [String] = []; var v = t.view
+                while let x = v, chain.count < 5 { chain.append(NSStringFromClass(type(of: x))); v = x.superview }
+                let others = w.windowScene?.windows.filter { $0 !== w && !$0.isHidden && $0.windowLevel > w.windowLevel }
+                    .map { "\(NSStringFromClass(type(of: $0)))@\(Int($0.windowLevel.rawValue))" } ?? []
+                LogStore.shared.log("[tabs] issue4 touch \(Int(p.x)),\(Int(p.y)) in \(Int(w.bounds.width))x\(Int(w.bounds.height)) -> \(chain.joined(separator: " < ")) | windows above: \(others.joined(separator: ", "))")
+            }
+            state = .failed
+        }
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+    }
+}
+
+/// EmuPC's own Library / Download games / Settings buttons, used where the system
+/// tab bar would sit in the side rail (CompactTabs).
+struct CompactTabBar: View {
+    let tab: Int
+    let select: (Int) -> Void
+    private let items: [(tag: Int, symbol: String, name: String)] = [
+        (0, "square.grid.2x2.fill", "Library"), (2, "arrow.down.circle.fill", "Download games"), (1, "gearshape.fill", "Settings")]
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(items, id: \.tag) { item in
+                Button { select(item.tag) } label: {
+                    Image(systemName: item.symbol)
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(tab == item.tag ? Color.accentColor : Color.primary)
+                        .frame(width: 68, height: 46)
+                        .background(tab == item.tag ? Color.primary.opacity(0.1) : .clear, in: Capsule())
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(item.name)
+                .accessibilityAddTraits(tab == item.tag ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(.primary.opacity(0.1), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.2), radius: 8, y: 3)
     }
 }
