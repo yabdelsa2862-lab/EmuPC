@@ -3108,20 +3108,21 @@ struct ContentView: View {
                     logStore.log("DXMT config: \(parts.joined(separator: ";")) via \(source) (\(parts.count) option\(parts.count == 1 ? "" : "s"))")
                 }
             }
-            // EmuPC issue #2: a 6 GB iPad (A16) lets one app use ~4 GB. This GPU
-            // cannot sample BC, so a Unity game's ~1500 BC3 textures were expanded
-            // to RGBA8 (~2.2 GB of graphics memory) and it was killed while loading.
-            // With a limit this small, turn on DXMT's pressure clamp: large BC
-            // textures created within 2 GB of the limit drop two mip levels (1/16
-            // the memory; one level only gets back to the BC size). Each option is
-            // added only if no dxmt option sets it; d3d11.mipClampAuto=0 opts out,
-            // and an explicit d3d11.mipClampBC takes over.
+            // EmuPC automatic BC texture pressure clamp: Apple A-series GPUs cannot
+            // sample BC textures natively, so DXMT expands them to RGBA8 (4x size).
+            // On <= 4.5 GB devices (4-6 GB iPads/iPhones), clamp >= 512 px textures
+            // within 2 GB of the limit; on 8 GB+ devices (e.g. ETS2 streaming 3 GB
+            // of 2K-4K BC3/BC5 textures), keep full crisp quality while headroom is
+            // comfortable and clamp >= 1024 px textures once within 2 GB of Jetsam.
+            // Each option is added only if no dxmt option sets it; d3d11.mipClampAuto=0
+            // opts out, and an explicit d3d11.mipClampBC takes over.
             let limitMB = (Int(os_proc_available_memory()) + Int(MemoryProbe.footprint())) >> 20
-            if limitMB > 0 && limitMB <= 4608,
+            if limitMB > 0,
                !dxmtOptions.contains(where: { $0.hasPrefix("d3d11.mipClampBC") }),
                MadeiraConfig.get("env.MADEIRA_MIP_CLAMP_AUTO") == nil {
+                let minDim = limitMB <= 4608 ? "512" : "1024"
                 var added: [String] = []
-                for (key, value) in [("d3d11.mipClampAuto", "1"), ("d3d11.mipClampAutoBias", "2"), ("d3d11.mipClampAutoMB", "2048"), ("d3d11.mipClampAutoMinDim", "512")]
+                for (key, value) in [("d3d11.mipClampAuto", "1"), ("d3d11.mipClampAutoBias", "2"), ("d3d11.mipClampAutoMB", "2048"), ("d3d11.mipClampAutoMinDim", minDim)]
                 where !dxmtOptions.contains(where: { $0.hasPrefix(key + "=") }) {
                     added.append("\(key)=\(value)")
                 }
