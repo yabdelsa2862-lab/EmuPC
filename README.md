@@ -5,8 +5,8 @@ PC emulator for iOS and iPadOS: it runs real Windows games from **Steam**,
 **GOG** and **Epic Games** inside a single app, with a console-style home
 screen built for a controller.
 
-- **[⬇ Download EmuPC 1.5 (Latest Stable)](https://github.com/yabdelsa2862-lab/EmuPC/releases/tag/v1.5)**
-- **[🧪 Try EmuPC 2.0 (Test Pre-release — new Liquid Glass UI, subtle UI sounds & performance updates)](https://github.com/yabdelsa2862-lab/EmuPC/releases/tag/v2.0)**
+- **[⬇ Download EmuPC 1.5.1 (Latest Stable)](https://github.com/yabdelsa2862-lab/EmuPC/releases/tag/v1.5.1)**
+- **[🧪 Try EmuPC 2.0.1 (Test Pre-release — new Liquid Glass UI, iPhone games in your library & performance updates)](https://github.com/yabdelsa2862-lab/EmuPC/releases/tag/v2.0.1)**
 
 Sideload the IPA and turn on JIT ([how](#faq)).
 
