@@ -3562,7 +3562,25 @@ struct LibraryView: View {
         // into the navigation bar's side rail, where its buttons don't answer taps.
         // There, EmuPC draws its own tab buttons at the bottom instead.
         .overlay(alignment: .bottom) {
-            if CompactTabs.on { CompactTabBar(tab: tab) { switchTab(to: $0) }.padding(.bottom, 8) }
+            // The toolbar's buttons sit in that same rail, so they come down here too.
+            if CompactTabs.on {
+                HStack(spacing: 8) {
+                    if tab == 0 { libraryOptionsMenu.modifier(CompactBarButton()) }
+                    if tab == 1 {
+                        Button(action: enableJIT) { Image(systemName: "bolt.fill") }
+                            .disabled(jitState.enabled)
+                            .accessibilityLabel("Enable JIT")
+                            .modifier(CompactBarButton())
+                    }
+                    CompactTabBar(tab: tab) { switchTab(to: $0) }
+                    if tab == 0 {
+                        Button { browser = true } label: { Image(systemName: "plus") }
+                            .accessibilityLabel("Add executable")
+                            .modifier(CompactBarButton())
+                    }
+                }
+                .padding(.bottom, 8)
+            }
         }
         .onAppear { CompactTabs.installTouchLog() }
         // The system search field (Liquid Glass on iOS 26) in the title's place, left
@@ -3579,7 +3597,8 @@ struct LibraryView: View {
         .navigationTitle("")
         .toolbar {
             LibraryLargeTitle()
-            if tab == 0 { libraryToolbar } else if tab == 1 { settingsToolbar }
+            // EmuPC issue #4: on the iPhone Duo these buttons are in the bottom bar instead.
+            if !CompactTabs.on { if tab == 0 { libraryToolbar } else if tab == 1 { settingsToolbar } }
         }
         // On the tab view, not inside one tab's page: an alert attached to the Library
         // page cannot present while Settings is showing, so an error raised there (its
@@ -3613,45 +3632,47 @@ struct LibraryView: View {
         }
     }
     @ToolbarContentBuilder private var libraryToolbar: some ToolbarContent {
-        ToolbarItem(placement: .topBarTrailing) {
-            Menu {
-                if zoomableGrid {
-                    // The new grid is sized by pinching, so the layout menu has no card sizes: one "Cards" entry
-                    // stands for the grid (either stored size), and the pinched size is kept.
-                    Picker("Library layout", selection: Binding(
-                        get: { layout == "compact" ? "cards" : layout },
-                        set: { picked in
-                            if picked == "cards", layout == "cards" || layout == "compact" { return }
-                            layout = picked
-                        })) {
-                        Label("Cards", systemImage: "square.grid.2x2").tag("cards")
-                        Label("List", systemImage: "list.bullet").tag("list")
-                        Label("Compact list", systemImage: "list.dash").tag("compactList")
-                    }
-                } else {
-                    // Cards and Compact cards also reset the zoomable grid's pinched size.
-                    Picker("Library layout", selection: Binding(get: { layout }, set: { layout = $0; gridPosition = -1 })) {
-                        Label("Cards", systemImage: "square.grid.2x2").tag("cards")
-                        Label("Compact cards", systemImage: "square.grid.3x3").tag("compact")
-                        Label("List", systemImage: "list.bullet").tag("list")
-                        Label("Compact list", systemImage: "list.dash").tag("compactList")
-                    }
-                }
-                Picker("Group by", selection: $group) {
-                    Label("Last played", systemImage: "clock.arrow.circlepath").tag("played")
-                    Label("Installed", systemImage: "arrow.down.circle").tag("installed")
-                    Label("Platform", systemImage: "square.stack").tag("platform")
-                    Label("None", systemImage: "square.grid.2x2").tag("none")
-                }.pickerStyle(.menu)
-                Picker("Sort by", selection: $sort) {
-                    Label("Last played", systemImage: "clock").tag("played")
-                    Label("Name", systemImage: "textformat.abc").tag("name")
-                    Label("Recently added", systemImage: "plus").tag("added")
-                    Label("Folder size", systemImage: "internaldrive").tag("size")
-                }
-            } label: { Label("Library options", systemImage: "line.3.horizontal.decrease") }
-        }
+        ToolbarItem(placement: .topBarTrailing) { libraryOptionsMenu }
         ToolbarItem(placement: .topBarTrailing) { Button { browser = true } label: { Label("Add executable", systemImage: "plus") } }
+    }
+    /// Layout, group and sort: in the toolbar, or in the iPhone Duo's bottom bar (CompactTabs).
+    private var libraryOptionsMenu: some View {
+    Menu {
+        if zoomableGrid {
+            // The new grid is sized by pinching, so the layout menu has no card sizes: one "Cards" entry
+            // stands for the grid (either stored size), and the pinched size is kept.
+            Picker("Library layout", selection: Binding(
+                get: { layout == "compact" ? "cards" : layout },
+                set: { picked in
+                    if picked == "cards", layout == "cards" || layout == "compact" { return }
+                    layout = picked
+                })) {
+                Label("Cards", systemImage: "square.grid.2x2").tag("cards")
+                Label("List", systemImage: "list.bullet").tag("list")
+                Label("Compact list", systemImage: "list.dash").tag("compactList")
+            }
+        } else {
+            // Cards and Compact cards also reset the zoomable grid's pinched size.
+            Picker("Library layout", selection: Binding(get: { layout }, set: { layout = $0; gridPosition = -1 })) {
+                Label("Cards", systemImage: "square.grid.2x2").tag("cards")
+                Label("Compact cards", systemImage: "square.grid.3x3").tag("compact")
+                Label("List", systemImage: "list.bullet").tag("list")
+                Label("Compact list", systemImage: "list.dash").tag("compactList")
+            }
+        }
+        Picker("Group by", selection: $group) {
+            Label("Last played", systemImage: "clock.arrow.circlepath").tag("played")
+            Label("Installed", systemImage: "arrow.down.circle").tag("installed")
+            Label("Platform", systemImage: "square.stack").tag("platform")
+            Label("None", systemImage: "square.grid.2x2").tag("none")
+        }.pickerStyle(.menu)
+        Picker("Sort by", selection: $sort) {
+            Label("Last played", systemImage: "clock").tag("played")
+            Label("Name", systemImage: "textformat.abc").tag("name")
+            Label("Recently added", systemImage: "plus").tag("added")
+            Label("Folder size", systemImage: "internaldrive").tag("size")
+        }
+    } label: { Label("Library options", systemImage: "line.3.horizontal.decrease") }
     }
     @ToolbarContentBuilder private var settingsToolbar: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
@@ -7464,6 +7485,21 @@ enum CompactTabs {
             state = .failed
         }
         func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
+    }
+}
+
+/// A round glass button beside CompactTabBar for what the toolbar holds elsewhere.
+struct CompactBarButton: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .labelStyle(.iconOnly)
+            .font(.system(size: 19, weight: .semibold))
+            .foregroundStyle(Color.primary)
+            .frame(width: 54, height: 54)
+            .background(.ultraThinMaterial, in: Circle())
+            .overlay(Circle().strokeBorder(.primary.opacity(0.1), lineWidth: 0.5))
+            .contentShape(Circle())
+            .shadow(color: .black.opacity(0.2), radius: 8, y: 3)
     }
 }
 
