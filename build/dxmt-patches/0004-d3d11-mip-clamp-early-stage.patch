@@ -1,0 +1,58 @@
+diff -ru a/src/d3d11/d3d11_texture_device.cpp b/src/d3d11/d3d11_texture_device.cpp
+--- a/src/d3d11/d3d11_texture_device.cpp	2026-11-23 22:36:59
++++ b/src/d3d11/d3d11_texture_device.cpp	2026-11-23 22:36:59
+@@ -452,6 +452,7 @@
+   uint32_t threshold_mb;
+   uint32_t bias;      /* EmuPC issue #2: d3d11.mipClampAutoBias, default 1 */
+   uint32_t min_dim;   /* EmuPC issue #2: d3d11.mipClampAutoMinDim, default 1024 */
++  uint32_t early_min_dim; /* EmuPC: d3d11.mipClampEarlyMinDim, default 0 (off) */
+ };
+ 
+ static const MipClampAutoConfig &
+@@ -475,8 +476,15 @@
+     /* EmuPC issue #2: the same game also creates ~1400 BC3 textures smaller
+      * than 1024 (sprites); unclamped they still held ~1.2 GB as RGBA8. */
+     c.min_dim = (uint32_t)std::min(4096, std::max(64, Config::getInstance().getOption<int>("d3d11.mipClampAutoMinDim", (int)mip_clamp::kAutoMinDimension)));
++    /* EmuPC: before any pressure, textures this large or larger drop one level
++     * from the start. ETS2 loaded ~1.2 GB of textures in its first minute, at
++     * full size, long before the pressure clamp began. 0 keeps that off. */
++    {
++      const int early = Config::getInstance().getOption<int>("d3d11.mipClampEarlyMinDim", 0);
++      c.early_min_dim = early <= 0 ? 0 : (uint32_t)std::min(16384, std::max(256, early));
++    }
+     if (c.enabled)
+-      ERR("[mip-clamp] ml2000 auto on bias=", c.bias, " min-dim=", c.min_dim, " threshold=", c.threshold_mb,
++      ERR("[mip-clamp] ml2000 auto on bias=", c.bias, " min-dim=", c.min_dim, " early-min-dim=", c.early_min_dim, " threshold=", c.threshold_mb,
+           " MB (d3d11.mipClampAuto=0 or MADEIRA_MIP_CLAMP_AUTO=0 disables; d3d11.mipClampAutoMB sets the threshold)");
+     return c;
+   }();
+@@ -502,6 +510,7 @@
+ static std::atomic<int64_t> g_auto_footprint_mb{0};
+ static std::atomic<bool> g_auto_pressure_logged{false};
+ static std::atomic<uint64_t> g_auto_skipped_small{0};
++static std::atomic<uint64_t> g_auto_early{0};
+ static std::atomic<uint64_t> g_auto_skipped_onelevel{0};
+ static std::atomic<uint64_t> g_auto_skipped_bytes{0};
+ 
+@@ -568,8 +577,19 @@
+         g_auto_footprint_mb.load(std::memory_order_relaxed), " MB -> ", pressure ? "clamping" : "not clamping",
+         " large BC textures (threshold ", cfg.threshold_mb, " MB) clamped=",
+         g_auto_clamped.load(std::memory_order_relaxed));
+-  if (!pressure)
+-    return 0;
++  if (!pressure) {
++    /* EmuPC: the early stage: one level off the largest textures only. */
++    if (!cfg.early_min_dim || !mip_clamp::AutoSizeEligible(width, height, cfg.early_min_dim))
++      return 0;
++    const uint32_t early = mip_clamp::ClampBias(1, width, height, mip_levels, true);
++    if (!early)
++      return 0;
++    const uint64_t n_early = g_auto_early.fetch_add(1, std::memory_order_relaxed) + 1;
++    if (n_early == 1 || n_early % 256 == 0)
++      ERR("[mip-clamp] early clamped=", n_early, " (", width, "x", height, " mips ", mip_levels,
++          " -> ", width >> 1, "x", height >> 1, ") headroom=", headroom, " MB");
++    return early;
++  }
+ 
+   const uint64_t clamped = g_auto_clamped.fetch_add(1, std::memory_order_relaxed) + 1;
+   if (mip_clamp::ShouldLogClamp(clamped))
