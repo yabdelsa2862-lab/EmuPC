@@ -3122,7 +3122,13 @@ struct ContentView: View {
                MadeiraConfig.get("env.MADEIRA_MIP_CLAMP_AUTO") == nil {
                 let thresholdMB = limitMB <= 4608 ? "2048" : "2560"
                 var added: [String] = []
-                for (key, value) in [("d3d11.mipClampAuto", "1"), ("d3d11.mipClampAutoBias", "2"), ("d3d11.mipClampAutoMB", thresholdMB), ("d3d11.mipClampAutoMinDim", "512")]
+                // The early stage (DXMT d3d11.mipClampEarlyMinDim): textures 1024 px and up
+                // load one level smaller from the start, before any pressure. ETS2 on an
+                // 8 GB iPhone loaded ~1.2 GB of textures at full size in its first minute,
+                // before the pressure clamp began, and was killed after 11 minutes.
+                var options = [("d3d11.mipClampAuto", "1"), ("d3d11.mipClampAutoBias", "2"), ("d3d11.mipClampAutoMB", thresholdMB), ("d3d11.mipClampAutoMinDim", "512")]
+                if limitMB <= 8192 { options.append(("d3d11.mipClampEarlyMinDim", "1024")) }
+                for (key, value) in options
                 where !dxmtOptions.contains(where: { $0.hasPrefix(key + "=") }) {
                     added.append("\(key)=\(value)")
                 }

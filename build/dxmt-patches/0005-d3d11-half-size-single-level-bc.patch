@@ -1,0 +1,267 @@
+--- a/src/dxmt/dxmt_texture.hpp
++++ b/src/dxmt/dxmt_texture.hpp
+@@ -187,6 +187,12 @@
+    * correct. */
+   uint32_t mipBias() const { return mip_bias_; }
+   void setMipBias(uint32_t bias) { mip_bias_ = bias; }
++  /* EmuPC issue #2: a single-level BC texture stored at half width and height
++   * (d3d11.mipClampAutoHalfOneLevel). The D3D descriptor stays full size; only
++   * the creation-time upload knows how to fill it (decode at half), so later
++   * updates and copies into it are dropped. */
++  bool halfScale() const { return half_scale_; }
++  void setHalfScale(bool v) { half_scale_ = v; }
+   /* ml1252: PHYSICAL levels a mipClampBC copy could not fill (its source level
+    * was clamped away). Bit n = level n, any slice. Sampling skips a lost level
+    * at the top (see TextureMetadata's caller) and UpdateTexture refills it from
+@@ -308,6 +314,7 @@
+   void prepareAllocationViews(TextureAllocation* allocation);
+ 
+   WMTTextureInfo info_;
++  bool half_scale_ = false;        /* EmuPC issue #2, see halfScale() */
+   uint32_t mip_bias_ = 0;          /* ml745, see mipBias() */
+   std::atomic<uint32_t> lost_levels_{0}; /* ml1252, see lostLevels() */
+   std::atomic<uint32_t> level_gen_[16] = {}; /* ml1256, see levelGen() */
+--- a/src/dxmt/dxmt_resource_initializer.cpp
++++ b/src/dxmt/dxmt_resource_initializer.cpp
+@@ -567,7 +567,12 @@
+     const size_t out_bytes = (size_t)width_sub * height_sub * out_texel;
+     decoded.reset(new (std::nothrow) uint8_t[out_bytes]);
+     if (decoded) {
+-      bc_decode_image((const uint8_t *)data, row_pitch, decoded.get(), width_sub, height_sub, bc_kind);
++      /* EmuPC issue #2: a half-scale texture (d3d11.mipClampAutoHalfOneLevel)
++       * gets the full-size BC data and is filled with its 2x2 box average. */
++      if (texture->halfScale())
++        bc_decode_image_half((const uint8_t *)data, row_pitch, decoded.get(), width_sub * 2, height_sub * 2, bc_kind);
++      else
++        bc_decode_image((const uint8_t *)data, row_pitch, decoded.get(), width_sub, height_sub, bc_kind);
+       data = decoded.get();
+       block_size = 1u;                 /* decoded output is not block-compressed */
+       texel_size = out_texel;
+--- a/src/d3d11/d3d11_context_impl.cpp
++++ b/src/d3d11/d3d11_context_impl.cpp
+@@ -599,6 +599,16 @@
+   }
+ };
+ 
++/* EmuPC issue #2: updates and copies dropped because they touch a half-scale
++ * texture (d3d11.mipClampAutoHalfOneLevel). Logged so a log shows whether a
++ * game writes to its textures after creating them. */
++static std::atomic<uint64_t> g_half_scale_dropped{0};
++static void HalfScaleDropped(const char *what) {
++  const uint64_t n = g_half_scale_dropped.fetch_add(1, std::memory_order_relaxed) + 1;
++  if (n <= 4 || n % 256 == 0)
++    ERR("[mip-clamp] half one-level: ", what, " into/out of a half-size texture dropped (", n, " so far)");
++}
++
+ /* ml744: aggregate outcome of the streamed BC decode. Per-call logging only ever
+  * showed the first handful of tiny mips, which cannot answer "did the texture I
+  * am looking at decode?" -- counts by format plus a failure tally can. */
+@@ -3934,7 +3944,16 @@
+      * Staging resources are never clamped; GetTexture() returns null for them,
+      * so they take bias 0, which is what we want. Drop only when a requested
+      * logical level sits below its own texture's bias -- it does not exist. */
++    /* EmuPC issue #2: a half-scale texture holds no data at the logical size,
++     * so a copy into or out of it would read or write the wrong texels. */
+     {
++      auto hs = GetTexture(cmd.pSrc), hd = GetTexture(cmd.pDst);
++      if ((hs && hs->halfScale()) || (hd && hd->halfScale())) {
++        HalfScaleDropped("copy");
++        return;
++      }
++    }
++    {
+       uint32_t src_bias = 0, dst_bias = 0;
+       if (auto t = GetTexture(cmd.pSrc)) src_bias = t->mipBias();
+       if (auto t = GetTexture(cmd.pDst)) dst_bias = t->mipBias();
+@@ -4458,6 +4477,10 @@
+        *
+        * Without this every streamed update would land on the wrong mip, which is
+        * worse than not clamping at all. */
++      if (dst->halfScale()) {   /* EmuPC issue #2: filled only at creation */
++        HalfScaleDropped("update");
++        return;
++      }
+       const uint32_t mip_bias = dst->mipBias();
+       if (mip_bias) {
+         if (cmd.Dst.MipLevel < mip_bias) {
+@@ -4652,6 +4675,10 @@
+        *
+        * Without this every streamed update would land on the wrong mip, which is
+        * worse than not clamping at all. */
++      if (dst->halfScale()) {   /* EmuPC issue #2: filled only at creation */
++        HalfScaleDropped("update");
++        return;
++      }
+       const uint32_t mip_bias = dst->mipBias();
+       if (mip_bias) {
+         if (cmd.Dst.MipLevel < mip_bias) {
+--- a/src/d3d11/d3d11_texture_device.cpp
++++ b/src/d3d11/d3d11_texture_device.cpp
+@@ -8,6 +8,7 @@
+ #include "d3d11_resource.hpp"
+ #include "util_win32_compat.h"
+ #include "config/config.hpp"   /* ml675: d3d11.mipClampBC */
++#include "dxmt_resource_initializer.hpp"   /* EmuPC issue #2: bc_decode_kind */
+ #include "d3d11_mip_clamp_policy.hpp"   /* ml2000: d3d11.mipClampAuto */
+ #include "util_env.hpp"
+ #include "util_madeira_switch.hpp"
+@@ -452,6 +453,7 @@
+   uint32_t threshold_mb;
+   uint32_t bias;      /* EmuPC issue #2: d3d11.mipClampAutoBias, default 1 */
+   uint32_t min_dim;   /* EmuPC issue #2: d3d11.mipClampAutoMinDim, default 1024 */
++  uint32_t half_one_level_min_dim; /* EmuPC issue #2: d3d11.mipClampAutoHalfOneLevel, 0 = off */
+   uint32_t early_min_dim; /* EmuPC: d3d11.mipClampEarlyMinDim, default 0 (off) */
+ };
+ 
+@@ -476,6 +478,15 @@
+     /* EmuPC issue #2: the same game also creates ~1400 BC3 textures smaller
+      * than 1024 (sprites); unclamped they still held ~1.2 GB as RGBA8. */
+     c.min_dim = (uint32_t)std::min(4096, std::max(64, Config::getInstance().getOption<int>("d3d11.mipClampAutoMinDim", (int)mip_clamp::kAutoMinDimension)));
++    /* EmuPC issue #2: Unity 2D games ship their sprites as single-level BC3
++     * (PvZ Fusion: ~1300 of ~2100), which the mip clamp cannot touch. With
++     * d3d11.mipClampAutoHalfOneLevel=N > 0, under pressure a single-level BC
++     * texture of N px or more is decoded at half size into a half-size
++     * texture (CreateDeviceTextureInternal, ResourceInitializer::initWithData). */
++    {
++      const int half = Config::getInstance().getOption<int>("d3d11.mipClampAutoHalfOneLevel", 0);
++      c.half_one_level_min_dim = half <= 0 ? 0 : (uint32_t)std::min(8192, std::max(16, half));
++    }
+     /* EmuPC: before any pressure, textures this large or larger drop one level
+      * from the start. ETS2 loaded ~1.2 GB of textures in its first minute, at
+      * full size, long before the pressure clamp began. 0 keeps that off. */
+@@ -484,7 +495,7 @@
+       c.early_min_dim = early <= 0 ? 0 : (uint32_t)std::min(16384, std::max(256, early));
+     }
+     if (c.enabled)
+-      ERR("[mip-clamp] ml2000 auto on bias=", c.bias, " min-dim=", c.min_dim, " early-min-dim=", c.early_min_dim, " threshold=", c.threshold_mb,
++      ERR("[mip-clamp] ml2000 auto on bias=", c.bias, " min-dim=", c.min_dim, " early-min-dim=", c.early_min_dim, " half-one-level=", c.half_one_level_min_dim, " threshold=", c.threshold_mb,
+           " MB (d3d11.mipClampAuto=0 or MADEIRA_MIP_CLAMP_AUTO=0 disables; d3d11.mipClampAutoMB sets the threshold)");
+     return c;
+   }();
+@@ -532,24 +543,11 @@
+         " MB as RGBA8 (last ", width, "x", height, " mips ", mip_levels, ")");
+ }
+ 
+-/* Bias for an auto candidate already known to pass the mipClampBC filter. */
+-static uint32_t
+-MipClampAutoBias(uint32_t width, uint32_t height, uint32_t mip_levels) {
++/* Re-reads the headroom when due and says whether the auto clamp is under
++ * pressure (each entry into and exit from it is logged once). */
++static bool
++AutoPressureNow(int64_t *headroom_out) {
+   const MipClampAutoConfig &cfg = GetMipClampAutoConfig();
+-  if (!cfg.enabled || !cfg.threshold_mb)
+-    return 0;
+-  if (!mip_clamp::AutoSizeEligible(width, height, cfg.min_dim)) {
+-    NoteAutoSkipped(true, width, height, mip_levels);
+-    return 0;
+-  }
+-  const bool large = mip_clamp::AutoSizeEligible(width, height);
+-  const uint32_t bias = mip_clamp::ClampBias(large ? cfg.bias : mip_clamp::SmallTextureBias(cfg.bias),
+-                                             width, height, mip_levels, true);
+-  if (!bias) {
+-    NoteAutoSkipped(false, width, height, mip_levels);
+-    return 0;
+-  }
+-
+   const uint64_t n = g_auto_candidates.fetch_add(1, std::memory_order_relaxed) + 1;
+   int64_t headroom = g_auto_headroom_mb.load(std::memory_order_relaxed);
+   if (mip_clamp::ShouldRequery(n, headroom, cfg.threshold_mb)) {
+@@ -577,6 +575,30 @@
+         g_auto_footprint_mb.load(std::memory_order_relaxed), " MB -> ", pressure ? "clamping" : "not clamping",
+         " large BC textures (threshold ", cfg.threshold_mb, " MB) clamped=",
+         g_auto_clamped.load(std::memory_order_relaxed));
++  *headroom_out = headroom;
++  return pressure;
++}
++
++/* Bias for an auto candidate already known to pass the mipClampBC filter. */
++static uint32_t
++MipClampAutoBias(uint32_t width, uint32_t height, uint32_t mip_levels) {
++  const MipClampAutoConfig &cfg = GetMipClampAutoConfig();
++  if (!cfg.enabled || !cfg.threshold_mb)
++    return 0;
++  if (!mip_clamp::AutoSizeEligible(width, height, cfg.min_dim)) {
++    NoteAutoSkipped(true, width, height, mip_levels);
++    return 0;
++  }
++  const bool large = mip_clamp::AutoSizeEligible(width, height);
++  const uint32_t bias = mip_clamp::ClampBias(large ? cfg.bias : mip_clamp::SmallTextureBias(cfg.bias),
++                                             width, height, mip_levels, true);
++  if (!bias) {
++    NoteAutoSkipped(false, width, height, mip_levels);
++    return 0;
++  }
++
++  int64_t headroom = 0;
++  const bool pressure = AutoPressureNow(&headroom);
+   if (!pressure) {
+     /* EmuPC: the early stage: one level off the largest textures only. */
+     if (!cfg.early_min_dim || !mip_clamp::AutoSizeEligible(width, height, cfg.early_min_dim))
+@@ -596,6 +618,28 @@
+     ERR("[mip-clamp] ml2000 auto headroom=", headroom, " MB clamped=", clamped, " (", width, "x", height,
+         " mips ", mip_levels, " -> ", width >> bias, "x", height >> bias, " mips ", mip_levels - bias, ")");
+   return bias;
++}
++
++/* EmuPC issue #2: should this single-level BC texture be stored at half size?
++ * Caller has checked the format, usage, bind flags and misc flags. */
++static std::atomic<uint64_t> g_auto_half{0};
++static bool
++MipClampAutoHalfOneLevel(uint32_t width, uint32_t height) {
++  const MipClampAutoConfig &cfg = GetMipClampAutoConfig();
++  if (!cfg.enabled || !cfg.threshold_mb || !cfg.half_one_level_min_dim)
++    return false;
++  /* Whole 4x4 blocks on both axes after halving, so the half decode covers
++   * every texel; and big enough to be worth it. */
++  if ((width & 7) || (height & 7) || !mip_clamp::AutoSizeEligible(width, height, cfg.half_one_level_min_dim))
++    return false;
++  int64_t headroom = 0;
++  if (!AutoPressureNow(&headroom))
++    return false;
++  const uint64_t n = g_auto_half.fetch_add(1, std::memory_order_relaxed) + 1;
++  if (n <= 4 || n % 256 == 0)
++    ERR("[mip-clamp] half one-level n=", n, " (", width, "x", height, " -> ", width / 2, "x", height / 2,
++        ") headroom=", headroom, " MB");
++  return true;
+ }
+ 
+ template <typename tag>
+@@ -622,6 +666,7 @@
+    * Eligibility and the clamp amount are computed from the normalised LOGICAL
+    * descriptor; only `info` and the upload loop see reduced numbers. */
+   uint32_t mip_bias = 0;
++  bool half_scale = false;   /* EmuPC issue #2 */
+   typename tag::DESC1 physDesc = finalDesc;
+   if constexpr (std::is_same_v<typename tag::DESC1, D3D11_TEXTURE2D_DESC1>) {
+     static int cached_clamp = -1;
+@@ -661,6 +706,21 @@
+        * is never clamped; arrays and cubes need nothing extra (see the
+        * per-slice initial-data remap below and TranslateSubresource). */
+       mip_bias = MipClampAutoBias(finalDesc.Width, finalDesc.Height, finalDesc.MipLevels);
++    } else if (!cached_clamp && auto_misc_ok && finalDesc.MipLevels == 1 && finalDesc.ArraySize == 1 &&
++               !(finalDesc.MiscFlags & D3D11_RESOURCE_MISC_TEXTURECUBE) && pInitialData &&
++               IsBCFormatForClamp((uint32_t)finalDesc.Format) &&
++               (finalDesc.Usage == D3D11_USAGE_DEFAULT || finalDesc.Usage == D3D11_USAGE_IMMUTABLE) &&
++               finalDesc.BindFlags == D3D11_BIND_SHADER_RESOURCE && !finalDesc.CPUAccessFlags &&
++               finalDesc.SampleDesc.Count <= 1 && !pDevice->GetMTLDevice().supportsBCTextureCompression() &&
++               bc_decode_kind(info.pixel_format) &&
++               MipClampAutoHalfOneLevel(finalDesc.Width, finalDesc.Height)) {
++      /* EmuPC issue #2: only the creation-time upload can fill it (it needs
++       * the initial data), so only textures created with data qualify. */
++      half_scale = true;
++      physDesc.Width  = finalDesc.Width / 2;
++      physDesc.Height = finalDesc.Height / 2;
++      info.width  = physDesc.Width;
++      info.height = physDesc.Height;
+     }
+     if (mip_bias) {
+       physDesc.Width     = std::max(1u, finalDesc.Width  >> mip_bias);
+@@ -677,6 +737,7 @@
+   /* ml745: the immediate context resolves streamed uploads through the dxmt
+    * Texture, not the D3D wrapper, so the bias must be visible there too. */
+   texture->setMipBias(mip_bias);
++  texture->setHalfScale(half_scale);
+ 
+   auto &initializer = pDevice->GetDXMTDevice().queue().initializer;
+ 
