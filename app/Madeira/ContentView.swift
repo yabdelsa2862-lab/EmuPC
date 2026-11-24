@@ -3110,19 +3110,19 @@ struct ContentView: View {
             }
             // EmuPC automatic BC texture pressure clamp: Apple A-series GPUs cannot
             // sample BC textures natively, so DXMT expands them to RGBA8 (4x size).
-            // On <= 4.5 GB devices (4-6 GB iPads/iPhones), clamp >= 512 px textures
-            // within 2 GB of the limit; on 8 GB+ devices (e.g. ETS2 streaming 3 GB
-            // of 2K-4K BC3/BC5 textures), keep full crisp quality while headroom is
-            // comfortable and clamp >= 1024 px textures once within 2 GB of Jetsam.
-            // Each option is added only if no dxmt option sets it; d3d11.mipClampAuto=0
-            // opts out, and an explicit d3d11.mipClampBC takes over.
+            // Clamping >= 512 px BC textures once within 2-2.5 GB of the Jetsam
+            // limit prevents sudden loading bursts (e.g. ETS2 streaming 3 GB of
+            // BC3/BC5 textures, including 1.7 GB of 512 px textures) from killing
+            // the app on both 4-6 GB iPads and 8 GB+ iPhones. Each option is added
+            // only if no dxmt option sets it; d3d11.mipClampAuto=0 opts out, and an
+            // explicit d3d11.mipClampBC takes over.
             let limitMB = (Int(os_proc_available_memory()) + Int(MemoryProbe.footprint())) >> 20
             if limitMB > 0,
                !dxmtOptions.contains(where: { $0.hasPrefix("d3d11.mipClampBC") }),
                MadeiraConfig.get("env.MADEIRA_MIP_CLAMP_AUTO") == nil {
-                let minDim = limitMB <= 4608 ? "512" : "1024"
+                let thresholdMB = limitMB <= 4608 ? "2048" : "2560"
                 var added: [String] = []
-                for (key, value) in [("d3d11.mipClampAuto", "1"), ("d3d11.mipClampAutoBias", "2"), ("d3d11.mipClampAutoMB", "2048"), ("d3d11.mipClampAutoMinDim", minDim)]
+                for (key, value) in [("d3d11.mipClampAuto", "1"), ("d3d11.mipClampAutoBias", "2"), ("d3d11.mipClampAutoMB", thresholdMB), ("d3d11.mipClampAutoMinDim", "512")]
                 where !dxmtOptions.contains(where: { $0.hasPrefix(key + "=") }) {
                     added.append("\(key)=\(value)")
                 }
