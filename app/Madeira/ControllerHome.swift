@@ -142,6 +142,8 @@ struct ControllerHome: View {
     @ObservedObject private var gog = GOGLibrary.shared
     @ObservedObject private var epic = EpicLibrary.shared
     @ObservedObject private var theme = ThemeSettings.shared
+    /// Games installed on this iPhone as their own apps (PhoneGames.swift).
+    @ObservedObject private var phone = PhoneGames.shared
     @AppStorage(SessionDoctor.thermalKey) private var thermalGuard = true
     /// Optional top tab bar (Home / Store / Settings via LB/RB). Off by default:
     /// Store and Settings live right on the Home shelf as console app tiles (like Xbox / PS5).
@@ -227,7 +229,8 @@ struct ControllerHome: View {
 
     private static let storeTileID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
     private static let settingsTileID = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
-    private var homeShelfIDs: [UUID] { games.map(\.id) + [Self.storeTileID, Self.settingsTileID] }
+    private var homeShelfIDs: [UUID] { games.map(\.id) + phone.sorted.map(\.id) + [Self.storeTileID, Self.settingsTileID] }
+    private var currentPhone: PhoneGame? { phone.games.first { $0.id == focusedHomeID } }
     private var focusedHomeID: UUID { focused ?? homeShelfIDs.first ?? Self.storeTileID }
     private var current: LibraryEntry? { games.first { $0.id == focusedHomeID } }
 
@@ -571,6 +574,8 @@ struct ControllerHome: View {
             } else if id == AnyHashable(Self.settingsTileID) {
                 homeAppTile(title: "Settings", subtitle: "Controls · Theme · System", symbol: "gearshape.fill",
                             colors: [Color(red: 0.24, green: 0.27, blue: 0.34), Color(red: 0.09, green: 0.1, blue: 0.14)])
+            } else if let phoneGame = phone.games.first(where: { AnyHashable($0.id) == id }) {
+                PhoneGameTile(game: phoneGame)
             } else if let game = games.first(where: { AnyHashable($0.id) == id }) {
                 if game.id == games.first?.id, game.lastPlayed != nil {
                     // "Jump back in": the last game played, wide, with a SteamOS × visionOS glass badge.
@@ -631,6 +636,24 @@ struct ControllerHome: View {
                 .font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.85))
                 .padding(.horizontal, 14).padding(.vertical, 6)
                 .homeGlass()
+            } else if let phoneGame = currentPhone {
+                Text(phoneGame.title).font(.title2.weight(.heavy)).lineLimit(1).minimumScaleFactor(0.7)
+                    .foregroundStyle(.white).shadow(color: .black.opacity(0.65), radius: 10)
+                HStack(spacing: 8) {
+                    Text("IPHONE").font(.caption2.weight(.heavy)).kerning(1)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 9).padding(.vertical, 3)
+                        .background(Color.white.opacity(0.18), in: Capsule())
+                        .overlay(Capsule().stroke(.white.opacity(0.4), lineWidth: 1))
+                    Text("Opens the app")
+                    if let played = phoneGame.lastPlayed {
+                        Text("·").foregroundStyle(.white.opacity(0.4))
+                        Text("Played \(played.formatted(.relative(presentation: .named)))")
+                    }
+                }
+                .font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.85))
+                .padding(.horizontal, 14).padding(.vertical, 6)
+                .homeGlass()
             } else if focusedHomeID == Self.storeTileID {
                 Text("Store").font(.title2.weight(.heavy))
                     .foregroundStyle(.white).shadow(color: .black.opacity(0.65), radius: 10)
@@ -664,6 +687,9 @@ struct ControllerHome: View {
         .frame(maxWidth: .infinity)
         .id(focusedHomeID).transition(.opacity)
         .animation(.easeInOut(duration: 0.2), value: focusedHomeID)
+        .alert("Couldn't open the game", isPresented: Binding(get: { phone.failure != nil && section == .games }, set: { if !$0 { phone.failure = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(phone.failure ?? "") }
         Spacer(minLength: 8)
     }
 
@@ -676,6 +702,9 @@ struct ControllerHome: View {
             UISound.shared.play(.select)
             inOptions = false
             withAnimation(.easeInOut(duration: 0.2)) { section = .settings }
+        } else if let phoneGame = currentPhone {
+            UISound.shared.play(.launch)
+            phone.open(phoneGame)
         } else if let game = current {
             openCard(game)
         }

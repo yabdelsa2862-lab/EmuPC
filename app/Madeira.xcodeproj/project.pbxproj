@@ -23,6 +23,7 @@
 		A1007B04 /* ItchLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2007B04 /* ItchLibrary.swift */; };
 		A1007B05 /* ItchGames.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2007B05 /* ItchGames.swift */; };
 		A1006A01 /* GOGLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2006A01 /* GOGLibrary.swift */; };
+		A1009F51 /* PhoneGames.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2009F51 /* PhoneGames.swift */; };
 		A1006A02 /* GOGGames.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2006A02 /* GOGGames.swift */; };
 		A1006A03 /* SwiftGOG/GOGAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2006A03 /* GOGAPI.swift */; };
 		A1006A04 /* SwiftGOG/GOGDownloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2006A04 /* GOGDownloader.swift */; };
@@ -322,6 +323,7 @@
 		A2007B04 /* ItchLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ItchLibrary.swift"; sourceTree = "<group>"; };
 		A2007B05 /* ItchGames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "ItchGames.swift"; sourceTree = "<group>"; };
 		A2006A01 /* GOGLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GOGLibrary.swift"; sourceTree = "<group>"; };
+		A2009F51 /* PhoneGames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PhoneGames.swift"; sourceTree = "<group>"; };
 		A2006A02 /* GOGGames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "GOGGames.swift"; sourceTree = "<group>"; };
 		A2006A03 /* GOGAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SwiftGOG/GOGAPI.swift"; sourceTree = "<group>"; };
 		A2006A04 /* GOGDownloader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "SwiftGOG/GOGDownloader.swift"; sourceTree = "<group>"; };
@@ -669,6 +671,7 @@
 				A2007B04 /* ItchLibrary.swift */,
 				A2007B05 /* ItchGames.swift */,
 				A2006A01 /* GOGLibrary.swift */,
+				A2009F51 /* PhoneGames.swift */,
 				A2006A02 /* GOGGames.swift */,
 				A2006A03 /* GOGAPI.swift */,
 				A2006A04 /* GOGDownloader.swift */,
@@ -1160,6 +1163,7 @@
 				A1007B04 /* ItchLibrary.swift in Sources */,
 				A1007B05 /* ItchGames.swift in Sources */,
 				A1006A01 /* GOGLibrary.swift in Sources */,
+				A1009F51 /* PhoneGames.swift in Sources */,
 				A1006A02 /* GOGGames.swift in Sources */,
 				A1006A03 /* SwiftGOG/GOGAPI.swift in Sources */,
 				A1006A04 /* SwiftGOG/GOGDownloader.swift in Sources */,

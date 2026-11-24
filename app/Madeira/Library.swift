@@ -3831,6 +3831,8 @@ struct LibraryView: View {
             VStack(alignment: .leading, spacing: 24) {
                 if !storeTabs.isEmpty { LibraryStoreTabBar(tabs: storeTabs, selection: $storeTab) }
                 desktopButton
+                // Games installed on this iPhone as their own apps (PhoneGames.swift).
+                if search.isEmpty { PhoneGamesRow() }
                 // The library's sections, as in the fork: Steam (installed and downloading
                 // Steam games, then Not installed), then Other games, the games you added.
                 // Steam games start through Madeira Dock (SteamGames.swift); an installed one
@@ -3996,7 +3998,7 @@ struct LibraryView: View {
         LibraryGridPage(search: search, sort: sort, group: group, layout: $layout, others: entries,
                         hideOthers: $hideOthers, focused: controller.connected ? focused : nil,
                         open: { selected = $0 },
-                        desktop: { AnyView(desktopButton) })
+                        desktop: { AnyView(VStack(alignment: .leading, spacing: 16) { desktopButton; PhoneGamesRow() }) })
         .onReceive(controller.commands) { command in
             guard tab == 0, selected == nil, !browser, !onboarding.presented else { return }
             let items = focusOrder
